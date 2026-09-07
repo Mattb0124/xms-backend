@@ -133,10 +133,13 @@ export class TimeRepository extends RepositoryBase {
     personId: string,
     from: string,
     to: string,
-  ): Promise<(TimeEntryRow & { ticket_number: string | null; bucket_label: string | null })[]> {
+  ): Promise<
+    (TimeEntryRow & { ticket_number: string | null; bucket_label: string | null; adjusted_minutes: number })[]
+  > {
     return this.many(
       tx,
-      `select e.*, t.number::text as ticket_number, b.label as bucket_label
+      `select e.*, t.number::text as ticket_number, b.label as bucket_label,
+              e.minutes + coalesce((select sum(a.delta_minutes) from acct.time_adjustments a where a.entry_id = e.id), 0)::int as adjusted_minutes
          from acct.time_entries e
          left join acct.tickets t on t.id = e.ticket_id
          left join acct.non_ticket_buckets b on b.id = e.bucket_id
@@ -144,6 +147,35 @@ export class TimeRepository extends RepositoryBase {
         order by e.performed_on, e.created_at`,
       [personId, from, to],
     );
+  }
+
+  /** The person's working calendar and holiday dates for the unlogged computation; undefined without a roster row. */
+  async personCalendarOfUser(
+    tx: Tx,
+    userId: string,
+  ): Promise<{ workingDays: number[]; hoursPerDay: number; holidays: string[] } | undefined> {
+    const row = await this.maybeOne<{
+      working_days: number[];
+      hours_per_day: string;
+      holiday_calendar_id: string | null;
+    }>(
+      tx,
+      `select c.working_days, c.hours_per_day, p.holiday_calendar_id
+         from op.people p left join op.person_calendars c on c.person_id = p.id
+        where p.user_id = $1 and p.is_active`,
+      [userId],
+    );
+    if (!row || !row.working_days) return undefined;
+    const holidays = row.holiday_calendar_id
+      ? await this.many<{ date: string }>(tx, 'select date::text as date from op.holidays where calendar_id = $1', [
+          row.holiday_calendar_id,
+        ])
+      : [];
+    return {
+      workingDays: row.working_days,
+      hoursPerDay: Number(row.hours_per_day),
+      holidays: holidays.map((h) => h.date),
+    };
   }
 
   entriesOfAccount(

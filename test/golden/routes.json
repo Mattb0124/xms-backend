@@ -1871,6 +1871,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/timesheets/me",
+    "controller": "TimeController",
+    "handler": "myWeek",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/timesheets/me/unlogged",
+    "controller": "TimeController",
+    "handler": "unlogged",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/users",
     "controller": "DirectoryController",
     "handler": "assignable",

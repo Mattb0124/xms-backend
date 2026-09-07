@@ -34,6 +34,7 @@ import { OutboxService } from '../../common/outbox/outbox.service.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { position, type BillableClassSpec, type ContractPosition } from '../../domain/time/burn.js';
+import { unloggedByDay, weekBounds } from '../../domain/time/unlogged.js';
 import { ConfigService } from '../admin/config/config.service.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
@@ -214,6 +215,53 @@ export class TimeService {
 
   mine(principal: Principal, from: string, to: string) {
     return this.uow.run(principal, (tx) => this.time.entriesOfPerson(tx, principal.userId, from, to));
+  }
+
+  /** My week: entries grouped by day with totals and the unlogged minutes per day (P2.18.3). */
+  myWeek(principal: Principal, week: string | undefined) {
+    const bounds = weekBounds(week ?? new Date().toISOString().slice(0, 10));
+    return this.uow.run(principal, async (tx) => {
+      const entries = await this.time.entriesOfPerson(tx, principal.userId, bounds.from, bounds.to);
+      const days = await this.unloggedDays(tx, principal, bounds.from, bounds.to, entries);
+      return {
+        ...bounds,
+        days: days.map((day) => ({ ...day, entries: entries.filter((entry) => entry.performed_on === day.date) })),
+        total_minutes: entries.reduce((sum, entry) => sum + Number(entry.adjusted_minutes ?? entry.minutes), 0),
+        unlogged_minutes: days.reduce((sum, day) => sum + day.unlogged_minutes, 0),
+      };
+    });
+  }
+
+  /** Per day, calendar minutes minus logged minutes (the data behind the nudges). */
+  unlogged(principal: Principal, from: string, to: string) {
+    return this.uow.run(principal, async (tx) => {
+      const entries = await this.time.entriesOfPerson(tx, principal.userId, from, to);
+      const days = await this.unloggedDays(tx, principal, from, to, entries);
+      return { from, to, days, unlogged_minutes: days.reduce((sum, day) => sum + day.unlogged_minutes, 0) };
+    });
+  }
+
+  private async unloggedDays(
+    tx: Tx,
+    principal: Principal,
+    from: string,
+    to: string,
+    entries: (TimeEntryRow & { adjusted_minutes?: number })[],
+  ) {
+    const calendar = await this.time.personCalendarOfUser(tx, principal.userId);
+    const logged = new Map<string, number>();
+    for (const entry of entries)
+      logged.set(
+        entry.performed_on,
+        (logged.get(entry.performed_on) ?? 0) + Number(entry.adjusted_minutes ?? entry.minutes),
+      );
+    return unloggedByDay({
+      from,
+      to,
+      calendar: calendar ? { workingDays: calendar.workingDays, hoursPerDay: calendar.hoursPerDay } : null,
+      holidays: new Set(calendar?.holidays ?? []),
+      logged,
+    });
   }
 
   ofAccount(principal: Principal, accountId: string, from: string, to: string) {
@@ -460,6 +508,18 @@ export class TimeController {
   @RequirePermission('time:log')
   mine(@CurrentPrincipal() principal: Principal, @Query('from') from: string, @Query('to') to: string) {
     return this.time.mine(principal, dateOr(from, -6), dateOr(to, 0));
+  }
+
+  @Get('timesheets/me')
+  @RequirePermission('time:log')
+  myWeek(@CurrentPrincipal() principal: Principal, @Query('week') week?: string) {
+    return this.time.myWeek(principal, week);
+  }
+
+  @Get('timesheets/me/unlogged')
+  @RequirePermission('time:log')
+  unlogged(@CurrentPrincipal() principal: Principal, @Query('from') from: string, @Query('to') to: string) {
+    return this.time.unlogged(principal, dateOr(from, -6), dateOr(to, 0));
   }
 
   @Post('time/adjustments')
