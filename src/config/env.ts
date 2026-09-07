@@ -70,6 +70,10 @@ const envSchema = z
     HARNESS_ORIGIN: z.string().url().default('http://localhost:3000'),
     HARNESS_TENANT_SLUG: z.string().optional(),
     AI_SERVICE_USER_EMAIL: z.string().email().default('axel-service@xms.local'),
+    // Rate limits per caller per minute on the outward-facing routes (Security section 9); 0 disables a policy.
+    RATE_LIMIT_PORTAL_PER_MINUTE: z.coerce.number().int().min(0).default(300),
+    RATE_LIMIT_WEBHOOK_PER_MINUTE: z.coerce.number().int().min(0).default(120),
+    RATE_LIMIT_PUBLIC_PER_MINUTE: z.coerce.number().int().min(0).default(60),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production') {
