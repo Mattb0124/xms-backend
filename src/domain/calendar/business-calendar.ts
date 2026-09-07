@@ -17,6 +17,9 @@ export interface CalendarHours {
   readonly endMinute: number;
 }
 
+/** After-hours class of a moment (Time, Contracts & Budget TB-13). */
+export type AfterHoursClass = 'standard' | 'after_hours' | 'weekend' | 'holiday';
+
 export interface BusinessCalendarSpec {
   readonly id: string;
   readonly timeZone: string;
@@ -128,6 +131,23 @@ export class BusinessCalendar implements Calendar {
   isWorkingTime(at: Date): boolean {
     const parts = localParts(at, this.timeZone);
     return this.intervals(parts).some((hours) => parts.minute >= hours.startMinute && parts.minute < hours.endMinute);
+  }
+
+  /**
+   * The after-hours class of a local date (YYYY-MM-DD in this calendar's
+   * zone), or of a minute within it: a holiday, a day with no hours
+   * (weekend on Saturday and Sunday, after hours on a non-working weekday),
+   * a minute outside the hours, or standard.
+   */
+  classify(date: string, minuteOfDay?: number): AfterHoursClass {
+    if (this.holidays.has(date)) return 'holiday';
+    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+    const intervals = this.byWeekday.get(weekday) ?? [];
+    if (intervals.length === 0) return weekday === 0 || weekday === 6 ? 'weekend' : 'after_hours';
+    if (minuteOfDay === undefined) return 'standard';
+    return intervals.some((hours) => minuteOfDay >= hours.startMinute && minuteOfDay < hours.endMinute)
+      ? 'standard'
+      : 'after_hours';
   }
 
   nextWorkingInstant(at: Date): Date {

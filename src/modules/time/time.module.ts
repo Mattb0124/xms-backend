@@ -35,6 +35,8 @@ import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { position, type BillableClassSpec, type ContractPosition } from '../../domain/time/burn.js';
 import { DEFAULT_PERSON_CALENDAR, unloggedByDay, weekBounds } from '../../domain/time/unlogged.js';
+import { classifyPerformed, multiplierFor } from '../../domain/calendar/after-hours.js';
+import { CalendarsCoreModule, CalendarService } from '../calendars/calendars.module.js';
 import { ConfigService } from '../admin/config/config.service.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
@@ -77,9 +79,15 @@ export class LogTimeDto {
   @MaxLength(2000)
   description?: string;
 
+  /** The person's own word that the work was after hours; the calendar wins when a start time lets it judge. */
   @IsOptional()
   @IsBoolean()
   after_hours?: boolean;
+
+  /** Local start time (HH:MM in the account calendar's zone) for a finer after-hours class (TB-13). */
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  performed_start?: string;
 
   /** Log on behalf of another person (needs time:adjust). */
   @IsOptional()
@@ -158,6 +166,7 @@ export class TimeService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly calendars: CalendarService,
   ) {}
 
   async logOnTicket(principal: Principal, ctx: RequestContext, key: string, dto: LogTimeDto): Promise<TimeEntryRow> {
@@ -273,6 +282,32 @@ export class TimeService {
 
   ofAccount(principal: Principal, accountId: string, from: string, to: string) {
     return this.uow.run(principal, (tx) => this.time.entriesOfAccount(tx, accountId, from, to));
+  }
+
+  /** The comp-time report: non-standard entries on comp-time contracts, per person (TB-13). */
+  compTime(principal: Principal, accountId: string, from: string, to: string) {
+    return this.uow.run(principal, async (tx) => {
+      const entries = await this.time.compTimeOfAccount(tx, accountId, from, to);
+      const byPerson = new Map<string, { person_id: string; person_name: string; minutes: number; entries: number }>();
+      for (const entry of entries) {
+        const row = byPerson.get(entry.person_id) ?? {
+          person_id: entry.person_id,
+          person_name: entry.person_name,
+          minutes: 0,
+          entries: 0,
+        };
+        row.minutes += entry.minutes;
+        row.entries += 1;
+        byPerson.set(entry.person_id, row);
+      }
+      return {
+        from,
+        to,
+        entries,
+        total_minutes: entries.reduce((sum, entry) => sum + entry.minutes, 0),
+        by_person: [...byPerson.values()].sort((a, b) => b.minutes - a.minutes),
+      };
+    });
   }
 
   async adjust(principal: Principal, ctx: RequestContext, dto: AdjustTimeDto) {
@@ -439,6 +474,15 @@ export class TimeService {
     const billing = await this.time.billingPeriodFor(tx, target.accountId, dto.performed_on);
     if (billing && (billing.status === 'locked' || billing.status === 'exported'))
       throw new ConflictException({ code: 'billing_period_locked' });
+    // After-hours class from the account calendar, handling from the contract (TB-13); both frozen on the row.
+    const contract = await this.contracts.byId(tx, target.contractId);
+    const calendar = await this.calendars.forAccount(tx, target.accountId);
+    const afterHoursClass = classifyPerformed(calendar, dto.performed_on, dto.performed_start, dto.after_hours);
+    const rateMultiplier = multiplierFor(
+      contract.after_hours_handling,
+      contract.after_hours_multiplier === null ? null : Number(contract.after_hours_multiplier),
+      afterHoursClass,
+    );
     const entry = await this.time.insertEntry(tx, {
       accountId: target.accountId,
       ticketId: target.ticketId,
@@ -451,7 +495,10 @@ export class TimeService {
       activityType: dto.activity_type,
       billableClass,
       description: dto.description ?? '',
-      afterHours: Boolean(dto.after_hours),
+      afterHours: afterHoursClass !== 'standard',
+      performedStart: dto.performed_start ?? null,
+      afterHoursClass,
+      rateMultiplier,
       createdBy: principal.userId,
     });
     await this.audit.account(tx, target.accountId, actorOf(principal), ctx, [
@@ -465,6 +512,8 @@ export class TimeService {
           activity_type: entry.activity_type,
           billable_class: entry.billable_class,
           performed_on: entry.performed_on,
+          after_hours_class: entry.after_hours_class,
+          rate_multiplier: entry.rate_multiplier,
         },
       },
     ]);
@@ -544,6 +593,17 @@ export class TimeController {
     @Query('to') to: string,
   ) {
     return this.time.ofAccount(principal, accountId, dateOr(from, -30), dateOr(to, 0));
+  }
+
+  @Get('accounts/:accountId/time/comp-time')
+  @RequirePermission('tickets:view')
+  compTime(
+    @CurrentPrincipal() principal: Principal,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.time.compTime(principal, accountId, dateOr(from, -30), dateOr(to, 0));
   }
 
   @Get('accounts/:accountId/contracts/:contractId/position')
@@ -635,7 +695,7 @@ function dateOr(value: string | undefined, offsetDays: number): string {
 }
 
 @Module({
-  imports: [TicketsCoreModule],
+  imports: [TicketsCoreModule, CalendarsCoreModule],
   controllers: [TimeController],
   providers: [TimeService, TimeRepository],
   exports: [TimeService],

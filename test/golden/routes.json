@@ -100,6 +100,16 @@
     "axel": false
   },
   {
+    "method": "PATCH",
+    "path": "/v1/accounts/:accountId/contracts/:contractId",
+    "controller": "ContractsController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/accounts/:accountId/contracts/:contractId/periods",
     "controller": "TimeController",
@@ -134,6 +144,16 @@
     "path": "/v1/accounts/:accountId/time",
     "controller": "TimeController",
     "handler": "ofAccount",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/time/comp-time",
+    "controller": "TimeController",
+    "handler": "compTime",
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,

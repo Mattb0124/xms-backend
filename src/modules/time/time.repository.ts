@@ -15,6 +15,10 @@ export interface TimeEntryRow {
   billable_class: string;
   description: string;
   after_hours: boolean;
+  performed_start: string | null;
+  after_hours_class: 'standard' | 'after_hours' | 'weekend' | 'holiday';
+  /** numeric(5,3) comes back as a string. */
+  rate_multiplier: string;
   source: string;
   created_by: string;
   created_at: string;
@@ -75,6 +79,9 @@ export class TimeRepository extends RepositoryBase {
       billableClass: string;
       description: string;
       afterHours: boolean;
+      performedStart?: string | null;
+      afterHoursClass?: string;
+      rateMultiplier?: number;
       source?: string;
       createdBy: string;
     },
@@ -83,8 +90,10 @@ export class TimeRepository extends RepositoryBase {
       tx,
       'time_entry',
       `insert into acct.time_entries (account_id, ticket_id, bucket_id, contract_id, person_id, person_name, performed_on, minutes,
-                                      activity_type, billable_class, description, after_hours, source, created_by)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, coalesce($13, 'manual'), $14) returning *`,
+                                      activity_type, billable_class, description, after_hours, source, created_by,
+                                      performed_start, after_hours_class, rate_multiplier)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, coalesce($13, 'manual'), $14,
+               $15, coalesce($16, 'standard'), coalesce($17::numeric, 1.0)) returning *`,
       [
         input.accountId,
         input.ticketId ?? null,
@@ -100,7 +109,30 @@ export class TimeRepository extends RepositoryBase {
         input.afterHours,
         input.source,
         input.createdBy,
+        input.performedStart ?? null,
+        input.afterHoursClass ?? null,
+        input.rateMultiplier ?? null,
       ],
+    );
+  }
+
+  /** The comp-time report (TB-13): non-standard entries on comp-time contracts that carried no premium when logged. */
+  compTimeOfAccount(
+    tx: Tx,
+    accountId: string,
+    from: string,
+    to: string,
+  ): Promise<(TimeEntryRow & { contract_key: string; ticket_number: string | null })[]> {
+    return this.many(
+      tx,
+      `select e.*, c.key as contract_key, t.number::text as ticket_number
+         from acct.time_entries e
+         join acct.contracts c on c.id = e.contract_id
+         left join acct.tickets t on t.id = e.ticket_id
+        where e.account_id = $1 and e.performed_on between $2 and $3
+          and e.after_hours_class <> 'standard' and e.rate_multiplier = 1 and c.after_hours_handling = 'comp_time'
+        order by e.performed_on, e.created_at`,
+      [accountId, from, to],
     );
   }
 
