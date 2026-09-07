@@ -8,6 +8,7 @@ import { expandPermissions, OPERATOR_PERMISSIONS, type Permission } from '../con
 import { UnitOfWork } from '../db/unit-of-work.js';
 import { AiSettingsService } from '../modules/ai/ai-settings.service.js';
 import { ConnectorsService } from '../modules/connectors/connectors.service.js';
+import { RosterService } from '../modules/roster/roster.module.js';
 import { AccountsRepository } from '../modules/admin/accounts/accounts.repository.js';
 import { BootstrapService } from '../modules/admin/bootstrap.service.js';
 import { ConfigService } from '../modules/admin/config/config.service.js';
@@ -529,6 +530,11 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
       ]);
     });
   }
+
+  // Roster from the directory: every internal user becomes a person with a default calendar --------
+  const roster = app.get(RosterService);
+  const imported = await roster.importFromDirectory(principal, ctx);
+  if (imported.created > 0) log(`roster: ${imported.created} people imported from the directory`);
 
   // A ServiceNow instance against the local stand-in, when one is reachable ------
   let connectorsCreated = 0;

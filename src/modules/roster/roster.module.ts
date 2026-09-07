@@ -151,9 +151,7 @@ export class RosterRepository extends RepositoryBase {
   }
 
   /** Internal users without a person row, with their highest system role name. */
-  importable(
-    tx: Tx,
-  ): Promise<
+  importable(tx: Tx): Promise<
     {
       id: string;
       email: string;
