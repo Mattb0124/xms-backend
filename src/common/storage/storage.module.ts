@@ -91,7 +91,7 @@ export class LocalStorageController {
 }
 
 /** Express parses JSON and form bodies only; every other content type is still on the stream. */
-async function readRawBody(request: Request, parsed: unknown, maxBytes: number): Promise<Buffer> {
+export async function readRawBody(request: Request, parsed: unknown, maxBytes: number): Promise<Buffer> {
   if (Buffer.isBuffer(parsed)) return parsed;
   if (request.readable && !request.complete) {
     const chunks: Buffer[] = [];

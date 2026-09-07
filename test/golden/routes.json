@@ -860,6 +860,16 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/csp-report",
+    "controller": "CspReportController",
+    "handler": "report",
+    "realm": "any",
+    "permission": null,
+    "public": "csp-report",
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/dashboards/accounts/:id",
     "controller": "ReportingController",

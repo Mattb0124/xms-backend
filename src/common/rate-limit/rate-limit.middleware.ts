@@ -45,7 +45,7 @@ export function policiesFromEnv(env = loadEnv()): RatePolicy[] {
     },
     {
       name: 'public',
-      matches: (path) => /^\/v\d+\/(bootstrap|telemetry|storage|dev)(\/|$)/.test(path),
+      matches: (path) => /^\/v\d+\/(bootstrap|telemetry|storage|dev|csp-report)(\/|$)/.test(path),
       perMinute: env.RATE_LIMIT_PUBLIC_PER_MINUTE,
     },
   ];

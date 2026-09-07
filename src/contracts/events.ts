@@ -57,6 +57,7 @@ export const SECURITY_EVENT_TYPES = [
   'abuse.webhook.bad_signature',
   'abuse.email.loop_suspected',
   'abuse.upload.rejected',
+  'abuse.csp_violation',
   'integrity.digest.written',
   'integrity.digest.mismatch',
   // AI
