@@ -51,6 +51,18 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
       Promise.resolve(new Date(Date.UTC(2020, 0, 1) + nextFixtureDay++ * 86_400_000).toISOString().slice(0, 10)),
   },
   'acct.threshold_alert_events': { percent: 50, consumed_minutes_at_fire: 0, available_minutes: 0 },
+  // A roster person referenced by capacity rows needs a role code and a unique email.
+  'op.people': {
+    role: 'consultant',
+    email: (): Promise<unknown> => Promise.resolve(`fixture-${randomUUID()}@example.test`),
+  },
+  // One capacity actual per (person, account, month): each fixture row takes its own month.
+  'rpt.capacity_actuals': {
+    period_month: (): Promise<unknown> =>
+      Promise.resolve(
+        new Date(Date.UTC(1990 + Math.floor(nextFixtureDay / 12), nextFixtureDay++ % 12, 1)).toISOString().slice(0, 10),
+      ),
+  },
   // Billing periods never overlap per account: each fixture row takes its own month.
   // Both columns of one row share a month whichever is asked first: two calls per row, one month per pair.
   'acct.billing_periods': {

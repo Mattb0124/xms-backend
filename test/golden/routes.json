@@ -771,6 +771,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/allocations",
+    "controller": "CapacityController",
+    "handler": "allocations",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/allocations",
+    "controller": "CapacityController",
+    "handler": "putAllocations",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/articles",
     "controller": "KnowledgeController",
     "handler": "list",
@@ -1056,6 +1076,36 @@
     "handler": "preview",
     "realm": "internal",
     "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/capacity",
+    "controller": "CapacityController",
+    "handler": "view",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/capacity/check",
+    "controller": "CapacityController",
+    "handler": "check",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/capacity/variance",
+    "controller": "CapacityController",
+    "handler": "variance",
+    "realm": "internal",
+    "permission": "capacity:view",
     "public": null,
     "axel": false
   },
@@ -1756,6 +1806,36 @@
     "handler": "removeCertification",
     "realm": "internal",
     "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/people/:id/pto",
+    "controller": "PtoController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/roster/people/:id/pto",
+    "controller": "PtoController",
+    "handler": "add",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/roster/people/:id/pto/:ptoId",
+    "controller": "PtoController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "time:log",
     "public": null,
     "axel": false
   },

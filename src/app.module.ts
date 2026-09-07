@@ -6,6 +6,7 @@ import { ConnectorsModule } from './modules/connectors/connectors.module.js';
 import { CalendarsModule } from './modules/calendars/calendars.module.js';
 import { MigrationModule } from './modules/migration/migration.module.js';
 import { RosterModule } from './modules/roster/roster.module.js';
+import { CapacityModule } from './modules/capacity/capacity.module.js';
 import { CspModule } from './modules/security/csp.module.js';
 import { StorageModule } from './common/storage/storage.module.js';
 import { DbModule } from './db/db.module.js';
@@ -52,6 +53,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     CspModule,
     ConnectorsModule,
     RosterModule,
+    CapacityModule,
     CalendarsModule,
     MigrationModule,
   ],
