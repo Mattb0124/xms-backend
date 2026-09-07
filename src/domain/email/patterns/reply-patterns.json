@@ -1,0 +1,33 @@
+{
+  "quote_headers": [
+    "^On .{3,160} wrote:\\s*$",
+    "^-{2,}\\s*Original Message\\s*-{2,}\\s*$",
+    "^-{2,}\\s*Forwarded message\\s*-{2,}\\s*$",
+    "^From:\\s.+\\n(?:Sent|Date):\\s.+\\n(?:To|Cc):\\s.+",
+    "^_{10,}\\s*$",
+    "^Le .{3,160} a écrit\\s*:\\s*$",
+    "^Am .{3,160} schrieb .{0,80}:\\s*$",
+    "^El .{3,160} escribió:\\s*$",
+    "^\\d{1,2}/\\d{1,2}/\\d{2,4}.{0,60}<[^>]+@[^>]+>:\\s*$"
+  ],
+  "signature_markers": [
+    "^-- \\s*$",
+    "^Sent from my (?:iPhone|iPad|Galaxy|Android|BlackBerry|mobile device)",
+    "^Get Outlook for (?:iOS|Android)",
+    "^(?:Kind|Best|Warm) regards,?\\s*$",
+    "^Regards,?\\s*$",
+    "^Thanks(?:,| and regards,?)\\s*$",
+    "^Cheers,?\\s*$",
+    "^Cordialement,?\\s*$",
+    "^Mit freundlichen Grüßen,?\\s*$"
+  ],
+  "disclaimer_lexicon": [
+    "confidential",
+    "intended solely for",
+    "intended recipient",
+    "privileged",
+    "if you have received this (?:e-?mail|message) in error",
+    "unauthori[sz]ed use",
+    "may contain proprietary"
+  ]
+}

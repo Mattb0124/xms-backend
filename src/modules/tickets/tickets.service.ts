@@ -322,7 +322,12 @@ export class TicketsService {
         urgency: dto.urgency ?? null,
         priority,
         matrix_version_id: matrixVersionId,
-        source: principal.kind === 'portal' ? 'portal' : (dto.source ?? 'internal'),
+        source:
+          (dto.source as string) === 'email'
+            ? 'email'
+            : principal.kind === 'portal'
+              ? 'portal'
+              : (dto.source ?? 'internal'),
         requester_contact_id: requester?.id ?? null,
         group_id: dto.group_id ?? null,
         assignee_id: assignee?.id ?? null,

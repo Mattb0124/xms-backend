@@ -33,6 +33,10 @@ describe('loadEnv production guard rails', () => {
     CLERK_ISSUER: 'https://clerk.example.test',
     CLERK_AUTHORIZED_PARTIES: 'https://xms.example.test',
     IP_HASH_SALT: 'rotated-salt',
+    STORAGE_KIND: 's3',
+    S3_BUCKET: 'xms-prod',
+    MAIL_TRANSPORT: 'ses',
+    STORAGE_SIGNING_SECRET: 'rotated-storage-signing-secret',
   };
 
   it('accepts a complete production environment', () => {
@@ -46,6 +50,11 @@ describe('loadEnv production guard rails', () => {
   it('requires the Clerk issuer and authorised parties in production', () => {
     expect(() => loadEnv({ NODE_ENV: 'production', IP_HASH_SALT: 'x' })).toThrow(/CLERK_ISSUER/);
     expect(() => loadEnv({ ...production, CLERK_AUTHORIZED_PARTIES: '' })).toThrow(/CLERK_AUTHORIZED_PARTIES/);
+  });
+
+  it('refuses the local store and the file mail transport in production', () => {
+    expect(() => loadEnv({ ...production, STORAGE_KIND: 'local' })).toThrow(/STORAGE_KIND/);
+    expect(() => loadEnv({ ...production, MAIL_TRANSPORT: 'file' })).toThrow(/MAIL_TRANSPORT/);
   });
 
   it('splits bootstrap administrator emails', () => {

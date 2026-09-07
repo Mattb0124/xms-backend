@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from './common/auth/auth.module.js';
 import { CommonModule } from './common/common.module.js';
+import { StorageModule } from './common/storage/storage.module.js';
 import { DbModule } from './db/db.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
+import { AttachmentsModule } from './modules/attachments/attachments.module.js';
+import { EmailModule } from './modules/email/email.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { PortalModule } from './modules/portal/portal.module.js';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
@@ -21,6 +24,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
   imports: [
     DbModule,
     CommonModule,
+    StorageModule,
     AuthModule,
     HealthModule,
     TelemetryModule,
@@ -30,6 +34,8 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     PortalModule,
     TimeModule,
     KnowledgeModule,
+    AttachmentsModule,
+    EmailModule,
   ],
 })
 export class AppModule {}

@@ -40,6 +40,7 @@ export interface TicketRow {
   cancelled_at: string | null;
   sla_response_breached: boolean;
   sla_resolution_breached: boolean;
+  email_token: string | null;
   created_by: string;
   created_by_name: string;
   created_at: string;

@@ -191,6 +191,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/admin/accounts/:id/aliases",
+    "controller": "EmailController",
+    "handler": "aliases",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts/:id/aliases",
+    "controller": "EmailController",
+    "handler": "createAlias",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/accounts/:id/grants",
     "controller": "AdminUsersController",
     "handler": "grantees",
@@ -264,6 +284,26 @@
     "path": "/v1/admin/accounts/:id/suspend",
     "controller": "AdminAccountsController",
     "handler": "suspend",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/aliases/:id/disable",
+    "controller": "EmailController",
+    "handler": "disableAlias",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/aliases/:id/enable",
+    "controller": "EmailController",
+    "handler": "enableAlias",
     "realm": "internal",
     "permission": "admin:accounts",
     "public": null,
@@ -570,6 +610,26 @@
     "axel": false
   },
   {
+    "method": "DELETE",
+    "path": "/v1/attachments/:id",
+    "controller": "AttachmentsController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/attachments/:id/download",
+    "controller": "AttachmentsController",
+    "handler": "download",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/bootstrap",
     "controller": "BootstrapController",
@@ -594,6 +654,26 @@
     "path": "/v1/catalogs/state-machine",
     "controller": "CatalogsController",
     "handler": "stateMachine",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/dev/email/inbound",
+    "controller": "EmailController",
+    "handler": "ingest",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/email/inbound/:id/raw",
+    "controller": "EmailController",
+    "handler": "raw",
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,
@@ -646,6 +726,16 @@
     "handler": "unreadCount",
     "realm": "any",
     "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/attachments/:id/download",
+    "controller": "PortalAttachmentsController",
+    "handler": "download",
+    "realm": "portal",
+    "permission": "portal:submit",
     "public": null,
     "axel": false
   },
@@ -720,6 +810,36 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/portal/tickets/:key/attachments",
+    "controller": "PortalAttachmentsController",
+    "handler": "list",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/tickets/:key/attachments/:id/confirm",
+    "controller": "PortalAttachmentsController",
+    "handler": "confirm",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/tickets/:key/attachments/presign",
+    "controller": "PortalAttachmentsController",
+    "handler": "presign",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/portal/tickets/:key/comments",
     "controller": "PortalController",
@@ -761,12 +881,52 @@
   },
   {
     "method": "GET",
+    "path": "/v1/quarantine",
+    "controller": "EmailController",
+    "handler": "quarantine",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/quarantine/:id/decide",
+    "controller": "EmailController",
+    "handler": "decide",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/search/solutions",
     "controller": "KnowledgeController",
     "handler": "search",
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/storage/download",
+    "controller": "LocalStorageController",
+    "handler": "download",
+    "realm": "internal",
+    "permission": null,
+    "public": "local object store: the HMAC signature in the URL is the credential (development only)",
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/storage/upload",
+    "controller": "LocalStorageController",
+    "handler": "upload",
+    "realm": "internal",
+    "permission": null,
+    "public": "local object store: the HMAC signature in the URL is the credential (development only)",
     "axel": false
   },
   {
@@ -831,6 +991,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/tickets/:key/attachments",
+    "controller": "AttachmentsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/attachments/:id/confirm",
+    "controller": "AttachmentsController",
+    "handler": "confirm",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/attachments/presign",
+    "controller": "AttachmentsController",
+    "handler": "presign",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/tickets/:key/comments",
     "controller": "TicketsController",
     "handler": "comments",
@@ -846,6 +1036,16 @@
     "handler": "addComment",
     "realm": "internal",
     "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/email",
+    "controller": "EmailController",
+    "handler": "thread",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },
@@ -1057,6 +1257,16 @@
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/webhooks/ses",
+    "controller": "SesWebhookController",
+    "handler": "ses",
+    "realm": "internal",
+    "permission": null,
+    "public": "SES event webhook: the SNS message signature is the credential, verified before any read",
     "axel": false
   }
 ]

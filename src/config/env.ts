@@ -53,6 +53,18 @@ const envSchema = z
     // First administrator(s) accepted by POST /v1/bootstrap while the admin set is empty.
     BOOTSTRAP_ADMIN_EMAILS: list,
     IP_HASH_SALT: z.string().default('local'),
+    // Object store (Security section 6): S3 in AWS, a signed local store in development and tests.
+    STORAGE_KIND: z.enum(['s3', 'local']).default('local'),
+    S3_BUCKET: z.string().optional(),
+    AWS_REGION: z.string().default('us-east-1'),
+    STORAGE_LOCAL_ROOT: z.string().default('.xms-storage'),
+    STORAGE_SIGNING_SECRET: z.string().min(16).default('local-storage-signing-secret-change-me'),
+    API_BASE_URL: z.string().url().default('http://localhost:3001'),
+    // Mail: SES in AWS, files in development.
+    MAIL_TRANSPORT: z.enum(['ses', 'file']).default('file'),
+    MAIL_DOMAIN: z.string().default('mail.xms.local'),
+    SES_CONFIGURATION_SET: z.string().optional(),
+    SNS_WEBHOOK_SECRET: z.string().min(16).optional(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production') {
@@ -74,6 +86,23 @@ const envSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['CLERK_AUTHORIZED_PARTIES'],
+          message: 'required in production',
+        });
+      }
+      if (env.STORAGE_KIND !== 's3' || !env.S3_BUCKET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['STORAGE_KIND'],
+          message: 'production requires the S3 store and S3_BUCKET',
+        });
+      }
+      if (env.MAIL_TRANSPORT !== 'ses') {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['MAIL_TRANSPORT'], message: 'production requires SES' });
+      }
+      if (env.STORAGE_SIGNING_SECRET.startsWith('local-')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['STORAGE_SIGNING_SECRET'],
           message: 'required in production',
         });
       }
