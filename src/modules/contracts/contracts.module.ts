@@ -13,6 +13,9 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsISO8601,
@@ -25,6 +28,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { OVERAGE_RULES, ROLLOVER_RULES, type OverageRule, type RolloverRule } from '../../domain/time/budget.js';
 import { AFTER_HOURS_HANDLINGS, type AfterHoursHandling } from '../../domain/calendar/after-hours.js';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import { actorOf, AuditService } from '../../common/audit/audit.service.js';
@@ -55,6 +59,14 @@ export interface ContractRow {
   after_hours_handling: AfterHoursHandling;
   /** Premium multiplier under `premium_rate`; numeric comes back as a string. */
   after_hours_multiplier: string | null;
+  /** Budget rules (Time, Contracts & Budget technical 2.2). */
+  threshold_percents: number[];
+  threshold_notify_client: boolean;
+  overage_rule: OverageRule;
+  overage_multiplier: string | null;
+  rollover_rule: RolloverRule;
+  rollover_cap_hours: string | null;
+  forecast_window_days: number;
   version: number;
 }
 
@@ -92,13 +104,22 @@ export class ContractsRepository extends RepositoryBase {
       status?: string;
       after_hours_handling?: AfterHoursHandling;
       after_hours_multiplier?: number | null;
+      threshold_percents?: number[];
+      threshold_notify_client?: boolean;
+      overage_rule?: OverageRule;
+      overage_multiplier?: number | null;
+      rollover_rule?: RolloverRule;
+      rollover_cap_hours?: number | null;
+      forecast_window_days?: number;
     },
   ): Promise<ContractRow> {
     return this.one<ContractRow>(
       tx,
       'contract',
-      `insert into acct.contracts (account_id, key, name, model, currency, period_cadence, period_starts_on, period_ends_on, period_hours, status, after_hours_handling, after_hours_multiplier)
-       values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, coalesce($4, 'USD'), coalesce($5, 'monthly'), $6, $7, $8, coalesce($9, 'active'), coalesce($10, 'none'), $11)
+      `insert into acct.contracts (account_id, key, name, model, currency, period_cadence, period_starts_on, period_ends_on, period_hours, status, after_hours_handling, after_hours_multiplier,
+                                   threshold_percents, threshold_notify_client, overage_rule, overage_multiplier, rollover_rule, rollover_cap_hours, forecast_window_days)
+       values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, coalesce($4, 'USD'), coalesce($5, 'monthly'), $6, $7, $8, coalesce($9, 'active'), coalesce($10, 'none'), $11,
+               coalesce($12::integer[], '{50,75,90,100}'), coalesce($13, false), coalesce($14, 'allow_flag'), $15, coalesce($16, 'none'), $17, coalesce($18, 10))
        returning *`,
       [
         input.accountId,
@@ -112,6 +133,13 @@ export class ContractsRepository extends RepositoryBase {
         input.status,
         input.after_hours_handling ?? null,
         input.after_hours_multiplier ?? null,
+        input.threshold_percents ?? null,
+        input.threshold_notify_client ?? null,
+        input.overage_rule ?? null,
+        input.overage_multiplier ?? null,
+        input.rollover_rule ?? null,
+        input.rollover_cap_hours ?? null,
+        input.forecast_window_days ?? null,
       ],
     );
   }
@@ -130,7 +158,58 @@ export class ContractsRepository extends RepositoryBase {
   }
 }
 
-export class CreateContractDto {
+/** The commercial rules an operator sets on a contract (Time, Contracts & Budget 2.2; TB-09, TB-11). */
+export class ContractRulesDto {
+  @IsOptional()
+  @IsIn(AFTER_HOURS_HANDLINGS)
+  after_hours_handling?: AfterHoursHandling;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(9.999)
+  after_hours_multiplier?: number | null;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
+  @Max(1000, { each: true })
+  threshold_percents?: number[];
+
+  @IsOptional()
+  @IsBoolean()
+  threshold_notify_client?: boolean;
+
+  @IsOptional()
+  @IsIn(OVERAGE_RULES)
+  overage_rule?: OverageRule;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(9.999)
+  overage_multiplier?: number | null;
+
+  @IsOptional()
+  @IsIn(ROLLOVER_RULES)
+  rollover_rule?: RolloverRule;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100000)
+  rollover_cap_hours?: number | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(90)
+  forecast_window_days?: number;
+}
+
+export class CreateContractDto extends ContractRulesDto {
   @IsString()
   @MinLength(1)
   @MaxLength(120)
@@ -160,33 +239,42 @@ export class CreateContractDto {
   @IsInt()
   @Min(0)
   period_hours?: number;
-
-  @IsOptional()
-  @IsIn(AFTER_HOURS_HANDLINGS)
-  after_hours_handling?: AfterHoursHandling;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  @Max(9.999)
-  after_hours_multiplier?: number | null;
 }
 
-/** The commercial handling of after-hours work, changeable on a live contract (TB-13). */
-export class PatchContractDto {
+/** The rules, changeable on a live contract with the version (TB-09, TB-11, TB-13). */
+export class PatchContractDto extends ContractRulesDto {
   @IsInt()
   @Min(1)
   version!: number;
+}
 
-  @IsOptional()
-  @IsIn(AFTER_HOURS_HANDLINGS)
-  after_hours_handling?: AfterHoursHandling;
+const RULE_FIELDS = [
+  'after_hours_handling',
+  'after_hours_multiplier',
+  'threshold_percents',
+  'threshold_notify_client',
+  'overage_rule',
+  'overage_multiplier',
+  'rollover_rule',
+  'rollover_cap_hours',
+  'forecast_window_days',
+] as const;
 
-  @IsOptional()
-  @IsNumber()
-  @Min(1)
-  @Max(9.999)
-  after_hours_multiplier?: number | null;
+/** The rule set as it would stand after the patch; the checks that tie a multiplier or cap to its rule. */
+export function assertRules(rules: {
+  after_hours_handling: AfterHoursHandling;
+  after_hours_multiplier: number | null;
+  overage_rule: OverageRule;
+  overage_multiplier: number | null;
+  rollover_rule: RolloverRule;
+  rollover_cap_hours: number | null;
+}): void {
+  if (rules.after_hours_handling === 'premium_rate' && rules.after_hours_multiplier === null)
+    throw new BadRequestException({ code: 'multiplier_required', handling: 'premium_rate' });
+  if (rules.overage_rule === 'allow_rate' && rules.overage_multiplier === null)
+    throw new BadRequestException({ code: 'multiplier_required', handling: 'allow_rate' });
+  if (rules.rollover_rule === 'cap' && rules.rollover_cap_hours === null)
+    throw new BadRequestException({ code: 'cap_required', rule: 'cap' });
 }
 
 @Injectable()
@@ -202,6 +290,14 @@ export class ContractsService {
   }
 
   create(principal: Principal, ctx: RequestContext, accountId: string, dto: CreateContractDto): Promise<ContractRow> {
+    assertRules({
+      after_hours_handling: dto.after_hours_handling ?? 'none',
+      after_hours_multiplier: dto.after_hours_multiplier ?? null,
+      overage_rule: dto.overage_rule ?? 'allow_flag',
+      overage_multiplier: dto.overage_multiplier ?? null,
+      rollover_rule: dto.rollover_rule ?? 'none',
+      rollover_cap_hours: dto.rollover_cap_hours ?? null,
+    });
     return this.uow.run(principal, async (tx) => {
       const contract = await this.contracts.insert(tx, { accountId, ...dto });
       const startsOn = dto.period_starts_on ?? new Date().toISOString().slice(0, 8) + '01';
@@ -228,28 +324,40 @@ export class ContractsService {
     return this.uow.run(principal, async (tx) => {
       const before = await this.contracts.byId(tx, id);
       if (before.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'contract' });
-      const handling = dto.after_hours_handling ?? before.after_hours_handling;
-      const multiplier =
-        dto.after_hours_multiplier === undefined
-          ? before.after_hours_multiplier === null
-            ? null
-            : Number(before.after_hours_multiplier)
-          : dto.after_hours_multiplier;
-      if (handling === 'premium_rate' && multiplier === null)
-        throw new BadRequestException({ code: 'multiplier_required', handling });
+      const numeric = (value: string | null) => (value === null ? null : Number(value));
+      const next = {
+        after_hours_handling: dto.after_hours_handling ?? before.after_hours_handling,
+        after_hours_multiplier:
+          dto.after_hours_multiplier === undefined
+            ? numeric(before.after_hours_multiplier)
+            : dto.after_hours_multiplier,
+        threshold_percents: dto.threshold_percents ?? before.threshold_percents,
+        threshold_notify_client: dto.threshold_notify_client ?? before.threshold_notify_client,
+        overage_rule: dto.overage_rule ?? before.overage_rule,
+        overage_multiplier:
+          dto.overage_multiplier === undefined ? numeric(before.overage_multiplier) : dto.overage_multiplier,
+        rollover_rule: dto.rollover_rule ?? before.rollover_rule,
+        rollover_cap_hours:
+          dto.rollover_cap_hours === undefined ? numeric(before.rollover_cap_hours) : dto.rollover_cap_hours,
+        forecast_window_days: dto.forecast_window_days ?? before.forecast_window_days,
+      };
+      assertRules(next);
       const assignments: Record<string, unknown> = {
-        after_hours_handling: handling,
-        after_hours_multiplier: handling === 'premium_rate' ? multiplier : null,
+        ...next,
+        after_hours_multiplier: next.after_hours_handling === 'premium_rate' ? next.after_hours_multiplier : null,
+        overage_multiplier: next.overage_rule === 'allow_rate' ? next.overage_multiplier : null,
+        rollover_cap_hours: next.rollover_rule === 'cap' ? next.rollover_cap_hours : null,
       };
       const after = await this.contracts.update(tx, id, dto.version, assignments);
+      const changed = RULE_FIELDS.filter((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]));
       await this.audit.account(tx, accountId, actorOf(principal), ctx, [
         {
           entityKind: 'contract',
           entityId: id,
           eventType: 'updated',
-          field: 'after_hours',
-          oldValue: { handling: before.after_hours_handling, multiplier: before.after_hours_multiplier },
-          newValue: { handling: after.after_hours_handling, multiplier: after.after_hours_multiplier },
+          field: 'rules',
+          oldValue: Object.fromEntries(changed.map((field) => [field, before[field]])),
+          newValue: Object.fromEntries(changed.map((field) => [field, after[field]])),
         },
       ]);
       return after;

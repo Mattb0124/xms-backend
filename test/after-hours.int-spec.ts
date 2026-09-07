@@ -223,7 +223,7 @@ describe('after-hours class on time entries', () => {
         [accountId, contractId],
       ),
     );
-    expect(audit.rows.map((row) => row.field)).toContain('after_hours');
+    expect(audit.rows.map((row) => row.field)).toContain('rules');
   });
 
   it('under comp time the multiplier stays 1 and the entry reaches the comp-time report', async () => {

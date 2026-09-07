@@ -31,8 +31,16 @@ export interface TableInfo {
 
 type OverrideValue = unknown | ((client: pg.Client, accountId: string, cache: Map<string, string>) => Promise<unknown>);
 
+let nextFixtureDay = 0;
+
 const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.calendar_hours': { weekday: 1, start_minute: 540, end_minute: 1020 },
+  // One rate card version per (account, contract, effective date): each fixture row takes its own date.
+  'acct.rate_cards': {
+    effective_from: (): Promise<unknown> =>
+      Promise.resolve(new Date(Date.UTC(2020, 0, 1) + nextFixtureDay++ * 86_400_000).toISOString().slice(0, 10)),
+  },
+  'acct.threshold_alert_events': { percent: 50, consumed_minutes_at_fire: 0, available_minutes: 0 },
   // Exactly one of ticket_id or bucket_id must be set.
   'acct.time_entries': {
     ticket_id: (client: pg.Client, accountId: string, cache: Map<string, string>) =>

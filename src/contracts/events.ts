@@ -129,6 +129,7 @@ export const AUDIT_EVENT_TYPES = [
   'connector.dead_letter.replayed',
   'connector.dead_letter.discarded',
   'sync.applied',
+  'budget.threshold_crossed',
   'roster.person.created',
   'roster.person.updated',
   'roster.person.imported',

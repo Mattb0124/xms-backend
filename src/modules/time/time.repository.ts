@@ -19,6 +19,10 @@ export interface TimeEntryRow {
   after_hours_class: 'standard' | 'after_hours' | 'weekend' | 'holiday';
   /** numeric(5,3) comes back as a string. */
   rate_multiplier: string;
+  /** Hourly rate frozen at log time (numeric string) and the amount to the cent; null without a rate card entry. */
+  rate_snapshot: string | null;
+  amount: string | null;
+  over_budget: boolean;
   source: string;
   created_by: string;
   created_at: string;
@@ -48,7 +52,20 @@ export interface ContractPeriodRow {
   contracted_minutes: number;
   carried_over_minutes: number;
   locked: boolean;
+  thresholds_fired: number[];
   version: number;
+}
+
+export interface RateCardRow {
+  id: string;
+  account_id: string;
+  contract_id: string | null;
+  effective_from: string;
+  currency: string;
+  note: string;
+  created_by: string;
+  created_at: string;
+  entries: { role: string; bill_rate: number; overage_rate: number | null }[];
 }
 
 export interface BucketRow {
@@ -82,6 +99,9 @@ export class TimeRepository extends RepositoryBase {
       performedStart?: string | null;
       afterHoursClass?: string;
       rateMultiplier?: number;
+      rateSnapshot?: number | null;
+      amount?: number | null;
+      overBudget?: boolean;
       source?: string;
       createdBy: string;
     },
@@ -91,9 +111,9 @@ export class TimeRepository extends RepositoryBase {
       'time_entry',
       `insert into acct.time_entries (account_id, ticket_id, bucket_id, contract_id, person_id, person_name, performed_on, minutes,
                                       activity_type, billable_class, description, after_hours, source, created_by,
-                                      performed_start, after_hours_class, rate_multiplier)
+                                      performed_start, after_hours_class, rate_multiplier, rate_snapshot, amount, over_budget)
        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, coalesce($13, 'manual'), $14,
-               $15, coalesce($16, 'standard'), coalesce($17::numeric, 1.0)) returning *`,
+               $15, coalesce($16, 'standard'), coalesce($17::numeric, 1.0), $18, $19, coalesce($20, false)) returning *`,
       [
         input.accountId,
         input.ticketId ?? null,
@@ -112,6 +132,217 @@ export class TimeRepository extends RepositoryBase {
         input.performedStart ?? null,
         input.afterHoursClass ?? null,
         input.rateMultiplier ?? null,
+        input.rateSnapshot ?? null,
+        input.amount ?? null,
+        input.overBudget ?? null,
+      ],
+    );
+  }
+
+  /** Consumption per performed date and class inside a range (entries plus adjustments), for the forecast. */
+  consumptionByDay(
+    tx: Tx,
+    contractId: string,
+    from: string,
+    to: string,
+  ): Promise<{ performed_on: string; billable_class: string; minutes: number }[]> {
+    return this.many(
+      tx,
+      `with lines as (
+         select e.performed_on, e.billable_class, e.minutes from acct.time_entries e
+          where e.contract_id = $1 and e.performed_on between $2 and $3
+         union all
+         select a.performed_on, coalesce(a.new_billable_class, e.billable_class), a.delta_minutes
+           from acct.time_adjustments a join acct.time_entries e on e.id = a.entry_id
+          where a.contract_id = $1 and a.performed_on between $2 and $3
+       )
+       select performed_on::text as performed_on, billable_class, sum(minutes)::int as minutes from lines group by 1, 2 order by 1, 2`,
+      [contractId, from, to],
+    );
+  }
+
+  /** Minutes in a period that carry no rate snapshot: the "unrated" figure on the budget view. */
+  unratedMinutes(tx: Tx, contractId: string, from: string, to: string): Promise<number> {
+    return this.one<{ n: number }>(
+      tx,
+      'time_entries',
+      `select coalesce(sum(minutes), 0)::int as n from acct.time_entries
+        where contract_id = $1 and performed_on between $2 and $3 and rate_snapshot is null`,
+      [contractId, from, to],
+    ).then((row) => row.n);
+  }
+
+  /** The period that ends before `startsOn`, if any. */
+  previousPeriod(tx: Tx, contractId: string, startsOn: string): Promise<ContractPeriodRow | undefined> {
+    return this.maybeOne<ContractPeriodRow>(
+      tx,
+      'select * from acct.contract_periods where contract_id = $1 and ends_on < $2 order by ends_on desc limit 1',
+      [contractId, startsOn],
+    );
+  }
+
+  /** The person's roster role for the rate lookup; null without a roster row. */
+  roleOfUser(tx: Tx, userId: string): Promise<string | null> {
+    return this.maybeOne<{ role: string }>(tx, 'select role from op.people where user_id = $1 and is_active', [
+      userId,
+    ]).then((row) => row?.role ?? null);
+  }
+
+  /** Every rate card version that could apply: the contract's own and the account defaults, entries attached. */
+  rateCards(tx: Tx, accountId: string, contractId?: string | null): Promise<RateCardRow[]> {
+    return this.many<RateCardRow & { entries: { role: string; bill_rate: string; overage_rate: string | null }[] }>(
+      tx,
+      `select c.*, c.effective_from::text as effective_from,
+              coalesce((select json_agg(json_build_object('role', e.role, 'bill_rate', e.bill_rate, 'overage_rate', e.overage_rate) order by e.role)
+                          from acct.rate_card_entries e where e.rate_card_id = c.id), '[]'::json) as entries
+         from acct.rate_cards c
+        where c.account_id = $1 and (c.contract_id is null or c.contract_id = $2::uuid)
+        order by c.contract_id nulls last, c.effective_from desc`,
+      [accountId, contractId ?? null],
+    ).then((rows) =>
+      rows.map((row) => ({
+        ...row,
+        entries: row.entries.map((entry) => ({
+          role: entry.role,
+          bill_rate: Number(entry.bill_rate),
+          overage_rate: entry.overage_rate === null ? null : Number(entry.overage_rate),
+        })),
+      })),
+    );
+  }
+
+  async insertRateCard(
+    tx: Tx,
+    input: {
+      accountId: string;
+      contractId: string | null;
+      effectiveFrom: string;
+      currency: string;
+      note: string;
+      createdBy: string;
+      entries: { role: string; bill_rate: number; overage_rate?: number | null }[];
+    },
+  ): Promise<{ id: string }> {
+    const card = await this.one<{ id: string }>(
+      tx,
+      'rate_card',
+      `insert into acct.rate_cards (account_id, contract_id, effective_from, currency, note, created_by)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [input.accountId, input.contractId, input.effectiveFrom, input.currency, input.note, input.createdBy],
+    );
+    for (const entry of input.entries)
+      await tx.query(
+        'insert into acct.rate_card_entries (account_id, rate_card_id, role, bill_rate, overage_rate) values ($1, $2, $3, $4, $5)',
+        [input.accountId, card.id, entry.role, entry.bill_rate, entry.overage_rate ?? null],
+      );
+    return card;
+  }
+
+  /** Records a threshold crossing once per period and percent; false when it already fired. */
+  async fireThreshold(
+    tx: Tx,
+    input: {
+      accountId: string;
+      contractId: string;
+      periodId: string;
+      percent: number;
+      consumed: number;
+      available: number;
+      notified: number;
+    },
+  ): Promise<boolean> {
+    const inserted = await tx.query(
+      `insert into acct.threshold_alert_events (account_id, contract_id, contract_period_id, percent, consumed_minutes_at_fire, available_minutes, notified_count)
+       values ($1, $2, $3, $4, $5, $6, $7) on conflict (contract_period_id, percent) do nothing returning id`,
+      [
+        input.accountId,
+        input.contractId,
+        input.periodId,
+        input.percent,
+        input.consumed,
+        input.available,
+        input.notified,
+      ],
+    );
+    if (inserted.rowCount === 0) return false;
+    await tx.query(
+      `update acct.contract_periods set thresholds_fired = array_append(thresholds_fired, $2) where id = $1 and not ($2 = any (thresholds_fired))`,
+      [input.periodId, input.percent],
+    );
+    return true;
+  }
+
+  thresholdEvents(
+    tx: Tx,
+    contractId: string,
+  ): Promise<
+    {
+      id: string;
+      contract_period_id: string;
+      percent: number;
+      consumed_minutes_at_fire: number;
+      available_minutes: number;
+      fired_at: string;
+    }[]
+  > {
+    return this.many(
+      tx,
+      'select id, contract_period_id, percent, consumed_minutes_at_fire, available_minutes, fired_at from acct.threshold_alert_events where contract_id = $1 order by fired_at desc limit 100',
+      [contractId],
+    );
+  }
+
+  /** Internal users whose role manages contracts or locks periods, granted on the account or administrators (bound to every account). */
+  budgetRecipients(tx: Tx, accountId: string): Promise<string[]> {
+    return this.many<{ id: string }>(
+      tx,
+      `select distinct u.id from op.users u
+         join op.role_assignments ra on ra.user_id = u.id and (ra.account_id is null or ra.account_id = $1)
+         join op.roles r on r.id = ra.role_id
+        where u.kind = 'internal' and u.status = 'active' and r.status = 'active'
+          and ('contracts:manage' = any (r.permissions) or 'time:lock-period' = any (r.permissions))
+          and (exists (select 1 from op.account_grants g where g.user_id = u.id and g.account_id = $1)
+               or (ra.account_id is null and ('admin:accounts' = any (r.permissions) or 'admin:users' = any (r.permissions))))`,
+      [accountId],
+    ).then((rows) => rows.map((row) => row.id));
+  }
+
+  /** The drill-through list behind the budget view (TB-07), filtered and bounded. */
+  entriesFiltered(
+    tx: Tx,
+    accountId: string,
+    filter: {
+      contractId?: string;
+      personId?: string;
+      activity?: string;
+      billableClass?: string;
+      from: string;
+      to: string;
+    },
+    limit = 1000,
+  ): Promise<(TimeEntryRow & { ticket_number: string | null; bucket_label: string | null; contract_key: string })[]> {
+    return this.many(
+      tx,
+      `select e.*, t.number::text as ticket_number, b.label as bucket_label, c.key as contract_key
+         from acct.time_entries e
+         join acct.contracts c on c.id = e.contract_id
+         left join acct.tickets t on t.id = e.ticket_id
+         left join acct.non_ticket_buckets b on b.id = e.bucket_id
+        where e.account_id = $1 and e.performed_on between $2 and $3
+          and ($4::uuid is null or e.contract_id = $4)
+          and ($5::text is null or e.person_id = $5)
+          and ($6::text is null or e.activity_type = $6)
+          and ($7::text is null or e.billable_class = $7)
+        order by e.performed_on desc, e.created_at desc limit $8`,
+      [
+        accountId,
+        filter.from,
+        filter.to,
+        filter.contractId ?? null,
+        filter.personId ?? null,
+        filter.activity ?? null,
+        filter.billableClass ?? null,
+        limit,
       ],
     );
   }

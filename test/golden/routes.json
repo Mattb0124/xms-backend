@@ -81,6 +81,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/budget",
+    "controller": "TimeController",
+    "handler": "budget",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/budget/entries",
+    "controller": "TimeController",
+    "handler": "budgetEntries",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/contracts",
     "controller": "ContractsController",
     "handler": "list",
@@ -136,6 +156,26 @@
     "handler": "position",
     "realm": "internal",
     "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/rate-cards",
+    "controller": "TimeController",
+    "handler": "rateCards",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/accounts/:accountId/rate-cards",
+    "controller": "TimeController",
+    "handler": "createRateCard",
+    "realm": "internal",
+    "permission": "contracts:manage",
     "public": null,
     "axel": false
   },
