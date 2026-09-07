@@ -65,6 +65,18 @@ export class ConnectorsService {
 
   // Instances -----------------------------------------------------------------
 
+  get(principal: Principal, id: string) {
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.repo.instance(tx, id);
+      return {
+        ...publicView(row),
+        account_name: await this.repo.accountName(tx, row.account_id),
+        pending_inbox: await this.repo.pendingInboxCount(tx, row.id),
+        open_dead_letters: await this.repo.openDeadLetterCount(tx, row.id),
+      };
+    });
+  }
+
   list(principal: Principal, accountId: string) {
     return this.uow.run(principal, async (tx) => (await this.repo.instances(tx, accountId)).map(publicView));
   }
@@ -198,7 +210,8 @@ export class ConnectorsService {
       await this.uow.run(principal, async (tx) => {
         const map = await this.repo.map<FieldMap>(tx, 'field', mapId);
         if (map.instance_id !== id) throw new NotFoundException({ code: 'not_found', entity: 'field_map' });
-        if (map.state !== 'draft') throw new ConflictException({ code: 'map_not_draft' });
+        if (map.state !== 'draft' && map.state !== 'validated')
+          throw new ConflictException({ code: 'map_not_draft', state: map.state });
         await this.repo.updateMap(tx, 'field', mapId, { samples: records });
       });
     }
@@ -467,6 +480,7 @@ export class ConnectorsService {
         if (row.account_id === GLOBAL_ACCOUNT_ID) continue;
         result.push({
           ...publicView(row),
+          account_name: await this.repo.accountName(tx, row.account_id),
           pending_inbox: await this.repo.pendingInboxCount(tx, row.id),
           open_dead_letters: await this.repo.openDeadLetterCount(tx, row.id),
           inbound_lag_seconds: Math.max(0, Math.round((Date.now() - new Date(row.inbound_watermark).getTime()) / 1000)),

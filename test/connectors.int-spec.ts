@@ -201,6 +201,17 @@ describe('onboarding an instance (SN-08)', () => {
       .expect(400);
   });
 
+  it('reads one instance with its account name and queue depths', async () => {
+    const one = await api().get(`/v1/connectors/${instanceId}`).set(bearer(adminToken)).expect(200);
+    expect(one.body).toMatchObject({
+      id: instanceId,
+      account_name: 'Brookfield',
+      pending_inbox: 0,
+      open_dead_letters: 0,
+    });
+    expect(one.body.credential_secret_name).toBeUndefined();
+  });
+
   it('needs admin:connectors', async () => {
     const roles = await api().get('/v1/admin/roles?catalog=operator').set(bearer(adminToken)).expect(200);
     const consultant = roles.body.find((row: { name: string }) => row.name === 'Consultant');
@@ -595,7 +606,12 @@ describe('dead letters, the kill switch and health (SN-07, SN-09)', () => {
     await api()
       .post(`/v1/connectors/${instanceId}/kill-switch`)
       .set(bearer(adminToken))
-      .send({ action: 'arm', reason: 'resume' })
+      .send({ action: 'trip' })
+      .expect(400);
+    await api()
+      .post(`/v1/connectors/${instanceId}/kill-switch`)
+      .set(bearer(adminToken))
+      .send({ action: 'arm' })
       .expect(201);
     expect(await sync.applyPending()).toBe('applied 1, failed 0');
   });

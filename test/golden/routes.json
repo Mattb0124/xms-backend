@@ -930,6 +930,16 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/connectors/:instanceId",
+    "controller": "ConnectorsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "PATCH",
     "path": "/v1/connectors/:instanceId",
     "controller": "ConnectorsController",

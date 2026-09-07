@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -84,7 +85,8 @@ class MapBodyDto {
 
 class KillSwitchDto {
   @IsIn(['trip', 'arm']) action!: 'trip' | 'arm';
-  @IsString() @MinLength(3) @MaxLength(500) reason!: string;
+  /** Required to trip (at least three characters); optional to arm. */
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 class WatermarkDto {
@@ -134,6 +136,11 @@ export class ConnectorsController {
     return this.connectors.health(principal);
   }
 
+  @Get('connectors/:instanceId')
+  get(@CurrentPrincipal() principal: Principal, @Param('instanceId', ParseUUIDPipe) instanceId: string) {
+    return this.connectors.get(principal, instanceId);
+  }
+
   @Patch('connectors/:instanceId')
   update(
     @CurrentPrincipal() principal: Principal,
@@ -165,7 +172,9 @@ export class ConnectorsController {
     @Param('instanceId', ParseUUIDPipe) instanceId: string,
     @Body() dto: KillSwitchDto,
   ) {
-    return this.connectors.killSwitch(principal, ctx, instanceId, dto.action, dto.reason);
+    if (dto.action === 'trip' && (dto.reason ?? '').trim().length < 3)
+      throw new BadRequestException({ code: 'reason_required' });
+    return this.connectors.killSwitch(principal, ctx, instanceId, dto.action, dto.reason ?? '');
   }
 
   @Post('connectors/:instanceId/watermark')

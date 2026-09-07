@@ -139,6 +139,12 @@ export class ConnectorsRepository extends RepositoryBase {
     return this.many(tx, 'select * from acct.connector_instances where account_id = $1 order by name', [accountId]);
   }
 
+  accountName(tx: Tx, accountId: string): Promise<string> {
+    return this.maybeOne<{ name: string }>(tx, 'select name from op.accounts where id = $1', [accountId]).then(
+      (row) => row?.name ?? '',
+    );
+  }
+
   allInstances(tx: Tx): Promise<InstanceRow[]> {
     return this.many(tx, 'select * from acct.connector_instances order by account_id, name');
   }
@@ -389,13 +395,14 @@ export class ConnectorsRepository extends RepositoryBase {
   ): Promise<Record<string, unknown>[]> {
     return this.many(
       tx,
-      `select * from acct.sync_runs
-        where instance_id = $1
-          and ($2::text is null or direction = $2)
-          and ($3::text is null or outcome = $3)
-          and ($4::timestamptz is null or created_at >= $4)
-          and ($5::timestamptz is null or created_at < $5)
-        order by created_at desc limit $6`,
+      `select r.*, case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end as ticket_key
+         from acct.sync_runs r left join acct.tickets t on t.id = r.ticket_id
+        where r.instance_id = $1
+          and ($2::text is null or r.direction = $2)
+          and ($3::text is null or r.outcome = $3)
+          and ($4::timestamptz is null or r.created_at >= $4)
+          and ($5::timestamptz is null or r.created_at < $5)
+        order by r.created_at desc limit $6`,
       [
         instanceId,
         filter.direction ?? null,
