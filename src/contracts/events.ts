@@ -137,6 +137,7 @@ export const AUDIT_EVENT_TYPES = [
   'roster.skills.updated',
   'roster.certification.added',
   'roster.certification.removed',
+  'roster.certification.expiring',
   'capacity.pto.added',
   'capacity.pto.removed',
   'capacity.allocations.updated',

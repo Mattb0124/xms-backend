@@ -18,6 +18,8 @@ import { TicketsCoreModule } from '../modules/tickets/tickets.module.js';
 import { JobRunner } from './jobs.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
 import { SlaJobs } from './sla-jobs.js';
+import { PeriodJobs } from './period-jobs.js';
+import { RosterJobs } from './roster-jobs.js';
 
 /**
  * Worker root module (ADR-08): the same feature providers as the API, no
@@ -49,6 +51,8 @@ import { SlaJobs } from './sla-jobs.js';
     },
     JobRunner,
     SlaJobs,
+    PeriodJobs,
+    RosterJobs,
   ],
 })
 export class WorkerModule implements OnModuleInit {
@@ -62,6 +66,8 @@ export class WorkerModule implements OnModuleInit {
     private readonly suggestions: SuggestionService,
     private readonly digests: DigestService,
     private readonly sync: SyncWorker,
+    private readonly periods: PeriodJobs,
+    private readonly roster: RosterJobs,
   ) {}
 
   onModuleInit(): void {
@@ -85,5 +91,7 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.sync.pollJob());
     this.runner.schedule(this.sync.applyJob());
     this.runner.schedule(this.sync.healthJob());
+    this.runner.schedule(this.periods.autoLock());
+    this.runner.schedule(this.roster.certificationExpiry());
   }
 }
