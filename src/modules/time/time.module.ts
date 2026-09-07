@@ -899,7 +899,7 @@ export class TimeService {
           body,
           targetKind: 'contract',
           targetId: contract.id,
-          link: `/admin/accounts/${contract.account_id}?tab=budget`,
+          link: `/accounts/${contract.account_id}?tab=budget`,
           collapseKey: `budget:${period.id}:${percent}`,
         });
       await this.outbox.write(tx, {
