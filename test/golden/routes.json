@@ -1101,6 +1101,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/capacity/skills-matrix",
+    "controller": "CapacityController",
+    "handler": "skillsMatrix",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/capacity/variance",
     "controller": "CapacityController",
     "handler": "variance",

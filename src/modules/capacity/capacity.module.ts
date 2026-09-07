@@ -41,6 +41,7 @@ import type { Principal } from '../../common/auth/principal.js';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { monthBounds, monthOf, personMonth, variance, type PersonMonth } from '../../domain/capacity/capacity.js';
+import { coverage, heatMap, SPOF_LEVEL, type SkillHolder } from '../../domain/capacity/skills.js';
 import { RosterCoreModule, RosterRepository, type PersonRow } from '../roster/roster.module.js';
 
 /**
@@ -268,6 +269,38 @@ export class CapacityRepository extends RepositoryBase {
          planned_minutes = excluded.planned_minutes, actual_minutes = excluded.actual_minutes,
          variance_minutes = excluded.variance_minutes, computed_at = now()`,
       [row.personId, row.accountId, row.month, row.planned, row.actual],
+    );
+  }
+
+  /** Every active person's level on every active skill. */
+  skillHolders(tx: Tx): Promise<(SkillHolder & { kind: string })[]> {
+    return this.many(
+      tx,
+      `select ps.person_id, s.code, s.kind, ps.level
+         from op.person_skills ps
+         join op.skills s on s.id = ps.skill_id and s.is_active
+         join op.people p on p.id = ps.person_id and p.is_active`,
+    );
+  }
+
+  activeSkills(tx: Tx): Promise<{ id: string; code: string; name: string; kind: string }[]> {
+    return this.many(tx, 'select id, code, name, kind from op.skills where is_active order by kind, name');
+  }
+
+  /** The technologies each granted account requires: the union over its active contracts. */
+  requiredTechnologies(
+    tx: Tx,
+    accountIds: string[],
+  ): Promise<{ account_id: string; key: string; name: string; codes: string[] }[]> {
+    return this.many(
+      tx,
+      `select a.id as account_id, a.key, a.name,
+              coalesce((select array_agg(distinct code) from acct.contracts c, unnest(c.technology_codes) as code
+                          where c.account_id = a.id and c.status = 'active'), '{}') as codes
+         from op.accounts a
+        where a.id = any ($1::uuid[]) and a.status in ('onboarding', 'active', 'suspended', 'offboarding')
+        order by a.name`,
+      [accountIds],
     );
   }
 
@@ -518,6 +551,64 @@ export class CapacityService {
     return views;
   }
 
+  // Skills matrix (CAP-07) ------------------------------------------------------
+
+  /**
+   * People lens: a heat map of levels per person and skill. Account lens:
+   * per granted account (or the one asked for), the technologies its active
+   * contracts require, who is at level three or above, and the single point
+   * of failure or gap flags the account record shows as chips.
+   */
+  skillsMatrix(principal: Principal, lens: 'people' | 'account', accountId?: string) {
+    return this.uow.run(principal, async (tx) => {
+      const holders = await this.repo.skillHolders(tx);
+      if (lens === 'people') {
+        const people = await this.roster.list(tx, { active: true });
+        const skills = await this.repo.activeSkills(tx);
+        const rows = heatMap(
+          people.map((person) => person.id),
+          holders,
+        );
+        return {
+          lens,
+          skills,
+          people: people.map((person, index) => ({
+            id: person.id,
+            display_name: person.display_name,
+            role: person.role,
+            levels: rows[index].levels,
+          })),
+        };
+      }
+      const accountIds = accountId ? principal.accountIds.filter((id) => id === accountId) : [...principal.accountIds];
+      if (accountId && accountIds.length === 0) throw new NotFoundException({ code: 'not_found', entity: 'account' });
+      const people = new Map((await this.roster.list(tx, { active: true })).map((person) => [person.id, person]));
+      const required = await this.repo.requiredTechnologies(tx, accountIds);
+      const technologyHolders = holders.filter((row) => row.kind === 'technology');
+      return {
+        lens,
+        required_level: SPOF_LEVEL,
+        accounts: required.map((account) => {
+          const rows = coverage(account.codes, technologyHolders);
+          return {
+            account_id: account.account_id,
+            key: account.key,
+            name: account.name,
+            technologies: rows.map((row) => ({
+              ...row,
+              qualified: row.qualified.map((personId) => ({
+                person_id: personId,
+                display_name: people.get(personId)?.display_name ?? personId,
+              })),
+            })),
+            single_points_of_failure: rows.filter((row) => row.status === 'spof').map((row) => row.code),
+            gaps: rows.filter((row) => row.status === 'gap').map((row) => row.code),
+          };
+        }),
+      };
+    });
+  }
+
   // Allocations (CAP-04) -------------------------------------------------------
 
   allocations(principal: Principal, filter: { account?: string; from: string; to: string }) {
@@ -702,6 +793,18 @@ export class CapacityController {
     const ids = (personIds ?? '').split(',').filter((id) => /^[0-9a-f-]{36}$/i.test(id));
     if (ids.length === 0) throw new BadRequestException({ code: 'person_ids_required' });
     return this.capacity.check(principal, ids.slice(0, 50), monthOr(month));
+  }
+
+  @Get('capacity/skills-matrix')
+  @RequirePermission('capacity:view')
+  skillsMatrix(
+    @CurrentPrincipal() principal: Principal,
+    @Query('lens') lens?: string,
+    @Query('account') account?: string,
+  ) {
+    if (lens !== undefined && lens !== 'people' && lens !== 'account')
+      throw new BadRequestException({ code: 'bad_lens', lens });
+    return this.capacity.skillsMatrix(principal, lens === 'account' ? 'account' : 'people', account);
   }
 
   @Get('capacity/variance')

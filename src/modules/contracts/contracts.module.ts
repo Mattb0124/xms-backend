@@ -23,6 +23,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
   Max,
   MaxLength,
   Min,
@@ -67,6 +68,8 @@ export interface ContractRow {
   rollover_rule: RolloverRule;
   rollover_cap_hours: string | null;
   forecast_window_days: number;
+  /** Technologies the contract requires (CAP-07 account lens). */
+  technology_codes: string[];
   version: number;
 }
 
@@ -111,15 +114,16 @@ export class ContractsRepository extends RepositoryBase {
       rollover_rule?: RolloverRule;
       rollover_cap_hours?: number | null;
       forecast_window_days?: number;
+      technology_codes?: string[];
     },
   ): Promise<ContractRow> {
     return this.one<ContractRow>(
       tx,
       'contract',
       `insert into acct.contracts (account_id, key, name, model, currency, period_cadence, period_starts_on, period_ends_on, period_hours, status, after_hours_handling, after_hours_multiplier,
-                                   threshold_percents, threshold_notify_client, overage_rule, overage_multiplier, rollover_rule, rollover_cap_hours, forecast_window_days)
+                                   threshold_percents, threshold_notify_client, overage_rule, overage_multiplier, rollover_rule, rollover_cap_hours, forecast_window_days, technology_codes)
        values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, coalesce($4, 'USD'), coalesce($5, 'monthly'), $6, $7, $8, coalesce($9, 'active'), coalesce($10, 'none'), $11,
-               coalesce($12::integer[], '{50,75,90,100}'), coalesce($13, false), coalesce($14, 'allow_flag'), $15, coalesce($16, 'none'), $17, coalesce($18, 10))
+               coalesce($12::integer[], '{50,75,90,100}'), coalesce($13, false), coalesce($14, 'allow_flag'), $15, coalesce($16, 'none'), $17, coalesce($18, 10), coalesce($19::text[], '{}'))
        returning *`,
       [
         input.accountId,
@@ -140,6 +144,7 @@ export class ContractsRepository extends RepositoryBase {
         input.rollover_rule ?? null,
         input.rollover_cap_hours ?? null,
         input.forecast_window_days ?? null,
+        input.technology_codes ?? null,
       ],
     );
   }
@@ -207,6 +212,13 @@ export class ContractRulesDto {
   @Min(1)
   @Max(90)
   forecast_window_days?: number;
+
+  /** Skill codes the contract requires (CAP-07). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @Matches(/^[a-z0-9][a-z0-9_.-]{0,59}$/, { each: true })
+  technology_codes?: string[];
 }
 
 export class CreateContractDto extends ContractRulesDto {
@@ -258,6 +270,7 @@ const RULE_FIELDS = [
   'rollover_rule',
   'rollover_cap_hours',
   'forecast_window_days',
+  'technology_codes',
 ] as const;
 
 /** The rule set as it would stand after the patch; the checks that tie a multiplier or cap to its rule. */
@@ -340,6 +353,7 @@ export class ContractsService {
         rollover_cap_hours:
           dto.rollover_cap_hours === undefined ? numeric(before.rollover_cap_hours) : dto.rollover_cap_hours,
         forecast_window_days: dto.forecast_window_days ?? before.forecast_window_days,
+        technology_codes: dto.technology_codes ? [...new Set(dto.technology_codes)] : before.technology_codes,
       };
       assertRules(next);
       const assignments: Record<string, unknown> = {

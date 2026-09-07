@@ -145,7 +145,9 @@ describe('billing auto-lock', () => {
   it('leaves an approved period alone until its instant, then locks it once with the summary and the outbox event', async () => {
     expect(await periods.lockDue()).toBe('locked 0');
     await withSuperuser((client) =>
-      client.query(`update acct.billing_periods set auto_lock_at = now() - interval '1 minute' where id = $1`, [periodId]),
+      client.query(`update acct.billing_periods set auto_lock_at = now() - interval '1 minute' where id = $1`, [
+        periodId,
+      ]),
     );
     expect(await periods.lockDue()).toBe('locked 1');
     expect(await periods.lockDue()).toBe('locked 0');
