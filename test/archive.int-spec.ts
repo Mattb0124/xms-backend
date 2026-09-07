@@ -96,15 +96,20 @@ describe('event archive (XA-04)', () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     // Digests first, so the archive rows can point at them.
     await digests.writeMissing(tomorrow);
-    // The usage stream has no events yet, so it has no day to archive.
-    expect(await archive.exportMissing(tomorrow)).toBe('archived 2');
+    // The usage stream archives only once the request telemetry has landed, so two or three streams.
+    const first = await archive.exportMissing(tomorrow);
+    expect(first).toMatch(/^archived [23]$/);
+    const archived = Number(first.slice('archived '.length));
     expect(await archive.exportMissing(tomorrow)).toBe('archived 0');
     const rows = await withSuperuser((client) =>
       client.query(
         `select stream, day::text as day, row_count, byte_count, checksum, digest_id from sys.event_archives order by stream`,
       ),
     );
-    expect(rows.rows.map((row) => `${row.stream}:${row.day}`)).toEqual([`audit:${today}`, `security:${today}`]);
+    expect(rows.rows).toHaveLength(archived);
+    expect(rows.rows.map((row) => `${row.stream}:${row.day}`)).toEqual(
+      expect.arrayContaining([`audit:${today}`, `security:${today}`]),
+    );
     for (const row of rows.rows) {
       expect(row.digest_id).not.toBeNull();
       expect(row.checksum).toMatch(/^[0-9a-f]{64}$/);
@@ -125,11 +130,14 @@ describe('event archive (XA-04)', () => {
     expect(auditLines.some((line) => JSON.parse(line).event_type === 'ticket.created')).toBe(true);
 
     const listed = await api().get('/v1/admin/integrity/archives').set(bearer(adminToken)).expect(200);
-    expect(listed.body.map((row: { stream: string }) => row.stream)).toEqual(['audit', 'security']);
+    expect(listed.body).toHaveLength(archived);
+    expect(listed.body.map((row: { stream: string }) => row.stream)).toEqual(
+      expect.arrayContaining(['audit', 'security']),
+    );
     const events = await withSuperuser((client) =>
       client.query(`select count(*)::int as n from sys.security_events where event_type = 'integrity.archive.written'`),
     );
-    expect(events.rows[0].n).toBe(2);
+    expect(events.rows[0].n).toBe(archived);
     await api().get('/v1/admin/integrity/archives').expect(401);
   });
 });
