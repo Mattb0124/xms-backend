@@ -1,7 +1,6 @@
 import { Global, Logger, Module, type OnApplicationBootstrap } from '@nestjs/common';
 import { APP_GUARD, DiscoveryModule, ModuleRef } from '@nestjs/core';
 import { loadEnv } from '../../config/env.js';
-import { SecurityEventsService } from '../events/security-events.service.js';
 import { AUTH_GUARD_OPTIONS, AuthGuard, type AuthGuardOptions } from './auth.guard.js';
 import { PrincipalRepository } from './principal.repository.js';
 import { collectRouteTable, undeclaredRoutes } from './route-table.js';
@@ -16,7 +15,6 @@ import { TokenVerifiers } from './token-verifier.js';
   imports: [DiscoveryModule],
   providers: [
     PrincipalRepository,
-    SecurityEventsService,
     {
       provide: TokenVerifiers,
       useFactory: (): TokenVerifiers => {
@@ -44,7 +42,7 @@ import { TokenVerifiers } from './token-verifier.js';
     AuthGuard,
     { provide: APP_GUARD, useExisting: AuthGuard },
   ],
-  exports: [PrincipalRepository, SecurityEventsService, TokenVerifiers, AuthGuard],
+  exports: [PrincipalRepository, TokenVerifiers, AuthGuard],
 })
 export class AuthModule implements OnApplicationBootstrap {
   private readonly logger = new Logger(AuthModule.name);

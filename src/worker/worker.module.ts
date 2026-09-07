@@ -1,24 +1,42 @@
-import { Module } from '@nestjs/common';
+import { Module, type OnModuleInit } from '@nestjs/common';
 import { CommonModule } from '../common/common.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
+import { TicketsCoreModule } from '../modules/tickets/tickets.module.js';
+import { JobRunner } from './jobs.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
+import { SlaJobs } from './sla-jobs.js';
 
 /**
- * Worker root module. Handlers land per Implementation Plan item: outbox
- * dispatcher and inbox apply (P1.5.3), notifications (P1.5.4), attachments
- * scan consumer (P1.6.1), inbound and outbound email (P1.6.3, P1.6.4), the
- * SLA breach sweeper (P2.10.2), snapshots (P2.19.2), report packs (P2.20.1).
+ * Worker root module (ADR-08): the same feature providers as the API, no
+ * controllers, no guard needed because nothing but the health endpoints is
+ * exposed. Jobs: outbox dispatcher (every second), SLA breach sweeper and
+ * at-risk notifier (every five minutes, leased). Notifications delivery,
+ * attachments scan, email and snapshots land with their modules.
  */
 @Module({
-  imports: [DbModule, CommonModule, HealthModule],
+  imports: [DbModule, CommonModule, HealthModule, TicketsCoreModule],
   providers: [
     {
       provide: OutboxDispatcher,
       useFactory: (pools: DbPools): OutboxDispatcher => new OutboxDispatcher(pools),
       inject: [DbPools],
     },
+    JobRunner,
+    SlaJobs,
   ],
 })
-export class WorkerModule {}
+export class WorkerModule implements OnModuleInit {
+  constructor(
+    private readonly runner: JobRunner,
+    private readonly sla: SlaJobs,
+    private readonly pools: DbPools,
+  ) {}
+
+  onModuleInit(): void {
+    if (!this.pools.has('worker')) return;
+    this.runner.schedule(this.sla.sweeper());
+    this.runner.schedule(this.sla.atRisk());
+  }
+}

@@ -440,6 +440,86 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/portal/me",
+    "controller": "PortalController",
+    "handler": "me",
+    "realm": "portal",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/tickets",
+    "controller": "PortalController",
+    "handler": "list",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/tickets",
+    "controller": "PortalController",
+    "handler": "create",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/tickets/:key",
+    "controller": "PortalController",
+    "handler": "get",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/tickets/:key/comments",
+    "controller": "PortalController",
+    "handler": "comment",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/tickets/:key/timeline",
+    "controller": "PortalController",
+    "handler": "timeline",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/tickets/:key/transitions",
+    "controller": "PortalController",
+    "handler": "transitions",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/tickets/:key/transitions",
+    "controller": "PortalController",
+    "handler": "transition",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/telemetry",
     "controller": "TelemetryController",
@@ -604,6 +684,56 @@
     "path": "/v1/users",
     "controller": "DirectoryController",
     "handler": "assignable",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/views",
+    "controller": "ViewsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/views",
+    "controller": "ViewsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/views/:id",
+    "controller": "ViewsController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/views/:id",
+    "controller": "ViewsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/views/:id",
+    "controller": "ViewsController",
+    "handler": "update",
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,

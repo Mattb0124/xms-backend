@@ -95,6 +95,8 @@ export interface ListFilters {
   open?: boolean;
   q?: string;
   requesterContactId?: string;
+  /** Translated condition set; called with the current bind offset. */
+  conditions?: (offset: number) => { sql: string; values: unknown[] };
 }
 
 export interface Page {
@@ -198,6 +200,11 @@ export class TicketsRepository extends RepositoryBase {
           `(search @@ plainto_tsquery('english', $${values.length}) or ('CS' || lpad(number::text, 7, '0')) ilike '%' || $${values.length} || '%')`,
         );
       }
+    }
+    if (filters.conditions) {
+      const translated = filters.conditions(values.length);
+      values.push(...translated.values);
+      where.push(translated.sql);
     }
     const orderBy =
       page.sort === 'created_desc'

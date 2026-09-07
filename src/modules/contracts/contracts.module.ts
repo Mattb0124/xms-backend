@@ -178,8 +178,14 @@ export class ContractsController {
 }
 
 @Module({
-  controllers: [ContractsController],
   providers: [ContractsRepository, ContractsService],
-  exports: [ContractsRepository],
+  exports: [ContractsRepository, ContractsService],
+})
+export class ContractsCoreModule {}
+
+@Module({
+  imports: [ContractsCoreModule],
+  controllers: [ContractsController],
+  exports: [ContractsCoreModule],
 })
 export class ContractsModule {}

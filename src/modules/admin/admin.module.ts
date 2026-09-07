@@ -17,7 +17,31 @@ import { UsersService } from './users/users.service.js';
  * Controller, service, repository and DTOs colocated per entity; the
  * configuration resolver is exported for the ticket module.
  */
+/** Providers only, shared by the API and the worker; no controllers. */
 @Module({
+  providers: [
+    AccountsRepository,
+    AccountsService,
+    UsersRepository,
+    UsersService,
+    ConfigRepository,
+    ConfigService,
+    { provide: ClerkAdminClient, useFactory: (): ClerkAdminClient => new ClerkAdminClient(loadEnv().CLERK_SECRET_KEY) },
+  ],
+  exports: [
+    AccountsRepository,
+    AccountsService,
+    UsersRepository,
+    UsersService,
+    ConfigRepository,
+    ConfigService,
+    ClerkAdminClient,
+  ],
+})
+export class AdminCoreModule {}
+
+@Module({
+  imports: [AdminCoreModule],
   controllers: [
     MeController,
     BootstrapController,
@@ -27,16 +51,7 @@ import { UsersService } from './users/users.service.js';
     DirectoryController,
     AdminConfigController,
   ],
-  providers: [
-    AccountsRepository,
-    AccountsService,
-    UsersRepository,
-    UsersService,
-    ConfigRepository,
-    ConfigService,
-    BootstrapService,
-    { provide: ClerkAdminClient, useFactory: (): ClerkAdminClient => new ClerkAdminClient(loadEnv().CLERK_SECRET_KEY) },
-  ],
-  exports: [ConfigService, AccountsRepository, UsersRepository, AccountsService, UsersService],
+  providers: [BootstrapService],
+  exports: [AdminCoreModule],
 })
 export class AdminModule {}

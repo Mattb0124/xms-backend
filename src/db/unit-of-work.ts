@@ -33,6 +33,19 @@ export class UnitOfWork {
     return withSession(this.pools, 'app', { binding }, fn);
   }
 
+  /**
+   * Portal writes. The portal database role is read-only by design (defence
+   * in depth); a portal principal's writes run on the app role bound to
+   * exactly its one account, through the same services internal users use,
+   * with the actor recorded as the portal user.
+   */
+  portalWrite<T>(principal: Principal, fn: Work<T>): Promise<T> {
+    if (principal.kind !== 'portal') throw new Error('portalWrite is for portal principals');
+    const [accountId] = principal.accountIds;
+    if (!accountId) throw new Error('Portal principal without an account');
+    return withSession(this.pools, 'app', { binding: { kind: 'operator', accountIds: [accountId] } }, fn);
+  }
+
   /** Operator tables only; account-scoped tables return nothing under this binding. */
   operator<T>(fn: Work<T>): Promise<T> {
     return withSession(this.pools, 'app', { binding: { kind: 'none' } }, fn);

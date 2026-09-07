@@ -265,4 +265,15 @@ export class ListTicketsQueryDto {
   @IsOptional()
   @IsString()
   cursor?: string;
+
+  /** Saved view id; its conditions and sort apply. */
+  @IsOptional()
+  @IsUUID('4')
+  view?: string;
+
+  /** Inline condition set, base64url JSON of { conditions, match }. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  conditions?: string;
 }

@@ -25,6 +25,8 @@ import {
   type ClockView,
 } from '../../domain/sla/engine.js';
 import { checkRequirements } from '../../domain/tickets/close-discipline.js';
+import { translate, type ConditionSet } from './conditions.js';
+import { ViewsRepository } from './views.js';
 import type { Level, Priority } from '../../domain/tickets/priority-matrix.js';
 import type { StateMachine } from '../../domain/tickets/state-machine.js';
 import { ConfigService } from '../admin/config/config.service.js';
@@ -122,6 +124,7 @@ export class TicketsService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
+    private readonly views: ViewsRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -129,18 +132,27 @@ export class TicketsService {
   async list(
     principal: Principal,
     query: ListTicketsQueryDto,
+    bound?: Tx,
   ): Promise<{ items: TicketView[]; next_cursor: string | null; stats: unknown }> {
     const limit = Math.min(query.limit ?? 50, 200);
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const accountIds = query.account_id?.length
         ? query.account_id.filter((id) => principal.accountIds.includes(id))
         : [...principal.accountIds];
       if (accountIds.length === 0)
         return { items: [], next_cursor: null, stats: { open: 0, unassigned: 0, breached: 0, p1: 0 } };
+      let conditions: ConditionSet | undefined = query.conditions ? decodeConditions(query.conditions) : undefined;
+      let sort = query.sort;
+      if (query.view) {
+        const view = await this.views.byId(tx, query.view);
+        conditions = view.definition.conditions;
+        sort = sort ?? view.definition.sort;
+      }
       const page = await this.tickets.list(
         tx,
         {
           accountIds,
+          conditions: conditions ? (offset) => translate(conditions!, { userId: principal.userId }, offset) : undefined,
           state: query.state,
           type: query.type,
           priority: query.priority,
@@ -150,7 +162,7 @@ export class TicketsService {
           open: query.open,
           q: query.q,
         },
-        { limit, sort: query.sort ?? 'updated_desc', cursor: decodeCursor(query.cursor) },
+        { limit, sort: sort ?? 'updated_desc', cursor: decodeCursor(query.cursor) },
       );
       const clocks = await this.tickets.clocksOfMany(
         tx,
@@ -181,8 +193,8 @@ export class TicketsService {
     });
   }
 
-  async get(principal: Principal, idOrKey: string): Promise<TicketView | PortalTicketView> {
-    return this.uow.run(principal, async (tx) => {
+  async get(principal: Principal, idOrKey: string, bound?: Tx): Promise<TicketView | PortalTicketView> {
+    return this.inTx(principal, bound, async (tx) => {
       const row = await this.load(tx, idOrKey);
       const machine = await this.machineFor(tx, row, new Map());
       const requester = row.requester_contact_id
@@ -197,8 +209,9 @@ export class TicketsService {
   async allowedTransitions(
     principal: Principal,
     idOrKey: string,
+    bound?: Tx,
   ): Promise<{ from: string; transitions: { to: string; label: string; requires: string[]; reopen: boolean }[] }> {
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const row = await this.load(tx, idOrKey);
       const machine = await this.machineFor(tx, row, new Map());
       const actor = { kind: principal.kind === 'portal' ? ('portal' as const) : ('internal' as const) };
@@ -214,8 +227,8 @@ export class TicketsService {
     });
   }
 
-  async timeline(principal: Principal, idOrKey: string): Promise<unknown[]> {
-    return this.uow.run(principal, async (tx) => {
+  async timeline(principal: Principal, idOrKey: string, bound?: Tx): Promise<unknown[]> {
+    return this.inTx(principal, bound, async (tx) => {
       const row = await this.load(tx, idOrKey);
       if (principal.kind === 'portal') return this.tickets.publicTimeline(tx, row.id);
       const [comments, notes, audit, pauses] = await Promise.all([
@@ -273,11 +286,11 @@ export class TicketsService {
 
   // Writes --------------------------------------------------------------------
 
-  async create(principal: Principal, ctx: RequestContext, dto: CreateTicketDto): Promise<TicketView> {
+  async create(principal: Principal, ctx: RequestContext, dto: CreateTicketDto, bound?: Tx): Promise<TicketView> {
     if (!principal.accountIds.includes(dto.account_id))
       throw new NotFoundException({ code: 'not_found', entity: 'account' });
     const correlationId = ctx.requestId ?? randomUUID();
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const contract = await this.resolveContract(tx, dto.account_id, dto.contract_id);
       const { machine, versionId } = await this.config.stateMachine(tx, dto.type, dto.account_id);
       const { matrix, versionId: matrixVersionId } = await this.config.priorityMatrix(tx, dto.account_id);
@@ -300,7 +313,7 @@ export class TicketsService {
         urgency: dto.urgency ?? null,
         priority,
         matrix_version_id: matrixVersionId,
-        source: dto.source ?? 'internal',
+        source: principal.kind === 'portal' ? 'portal' : (dto.source ?? 'internal'),
         requester_contact_id: requester?.id ?? null,
         group_id: dto.group_id ?? null,
         assignee_id: assignee?.id ?? null,
@@ -357,9 +370,15 @@ export class TicketsService {
     });
   }
 
-  async patch(principal: Principal, ctx: RequestContext, idOrKey: string, dto: PatchTicketDto): Promise<TicketView> {
+  async patch(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    dto: PatchTicketDto,
+    bound?: Tx,
+  ): Promise<TicketView> {
     const correlationId = ctx.requestId ?? randomUUID();
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const before = await this.lock(tx, idOrKey);
       if (OPEN_STATES_EXCLUDED.includes(before.state)) throw new ConflictException({ code: 'ticket_closed' });
       const assignments: Record<string, unknown> = {};
@@ -514,9 +533,10 @@ export class TicketsService {
     ctx: RequestContext,
     idOrKey: string,
     dto: TransitionDto,
+    bound?: Tx,
   ): Promise<TicketView | PortalTicketView> {
     const correlationId = ctx.requestId ?? randomUUID();
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const before = await this.lock(tx, idOrKey);
       if (before.version !== dto.version)
         throw new ConflictException({ code: 'stale_version', version: before.version });
@@ -727,9 +747,15 @@ export class TicketsService {
     });
   }
 
-  async addComment(principal: Principal, ctx: RequestContext, idOrKey: string, dto: MessageDto): Promise<unknown> {
+  async addComment(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    dto: MessageDto,
+    bound?: Tx,
+  ): Promise<unknown> {
     const correlationId = ctx.requestId ?? randomUUID();
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const ticket = await this.lock(tx, idOrKey);
       const isOperator = principal.kind === 'internal' || principal.kind === 'api_client';
       const firstResponse = isOperator && !ticket.first_response_at;
@@ -810,10 +836,16 @@ export class TicketsService {
     });
   }
 
-  async addWorkNote(principal: Principal, ctx: RequestContext, idOrKey: string, dto: MessageDto): Promise<unknown> {
+  async addWorkNote(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    dto: MessageDto,
+    bound?: Tx,
+  ): Promise<unknown> {
     if (principal.kind === 'portal') throw new ForbiddenException({ code: 'wrong_realm' });
     const correlationId = ctx.requestId ?? randomUUID();
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const ticket = await this.load(tx, idOrKey);
       const note = await this.tickets.insertWorkNote(tx, {
         accountId: ticket.account_id,
@@ -841,17 +873,17 @@ export class TicketsService {
     });
   }
 
-  async comments(principal: Principal, idOrKey: string): Promise<unknown[]> {
-    return this.uow.run(principal, async (tx) => this.tickets.commentsOf(tx, (await this.load(tx, idOrKey)).id));
+  async comments(principal: Principal, idOrKey: string, bound?: Tx): Promise<unknown[]> {
+    return this.inTx(principal, bound, async (tx) => this.tickets.commentsOf(tx, (await this.load(tx, idOrKey)).id));
   }
 
-  async workNotes(principal: Principal, idOrKey: string): Promise<unknown[]> {
+  async workNotes(principal: Principal, idOrKey: string, bound?: Tx): Promise<unknown[]> {
     if (principal.kind === 'portal') throw new ForbiddenException({ code: 'wrong_realm' });
-    return this.uow.run(principal, async (tx) => this.tickets.workNotesOf(tx, (await this.load(tx, idOrKey)).id));
+    return this.inTx(principal, bound, async (tx) => this.tickets.workNotesOf(tx, (await this.load(tx, idOrKey)).id));
   }
 
-  async links(principal: Principal, idOrKey: string): Promise<unknown[]> {
-    return this.uow.run(principal, async (tx) => this.linksIn(tx, await this.load(tx, idOrKey)));
+  async links(principal: Principal, idOrKey: string, bound?: Tx): Promise<unknown[]> {
+    return this.inTx(principal, bound, async (tx) => this.linksIn(tx, await this.load(tx, idOrKey)));
   }
 
   private async linksIn(tx: Tx, ticket: TicketRow): Promise<unknown[]> {
@@ -882,8 +914,9 @@ export class TicketsService {
     idOrKey: string,
     toTicketId: string,
     type: string,
+    bound?: Tx,
   ): Promise<unknown[]> {
-    return this.uow.run(principal, async (tx) => {
+    return this.inTx(principal, bound, async (tx) => {
       const ticket = await this.load(tx, idOrKey);
       const target = await this.tickets.byId(tx, toTicketId);
       if (target.account_id !== ticket.account_id) throw new NotFoundException({ code: 'not_found', entity: 'ticket' });
@@ -904,8 +937,14 @@ export class TicketsService {
     });
   }
 
-  async removeLink(principal: Principal, ctx: RequestContext, idOrKey: string, linkId: string): Promise<void> {
-    await this.uow.run(principal, async (tx) => {
+  async removeLink(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    linkId: string,
+    bound?: Tx,
+  ): Promise<void> {
+    await this.inTx(principal, bound, async (tx) => {
       const ticket = await this.load(tx, idOrKey);
       const removed = await this.tickets.deleteLink(tx, linkId);
       if (removed === 0) throw new NotFoundException({ code: 'not_found', entity: 'ticket_link' });
@@ -922,8 +961,8 @@ export class TicketsService {
     });
   }
 
-  async watch(principal: Principal, idOrKey: string, muted: boolean): Promise<{ muted: boolean }> {
-    return this.uow.run(principal, async (tx) => {
+  async watch(principal: Principal, idOrKey: string, muted: boolean, bound?: Tx): Promise<{ muted: boolean }> {
+    return this.inTx(principal, bound, async (tx) => {
       const ticket = await this.load(tx, idOrKey);
       await this.tickets.ensureWatcher(tx, ticket.account_id, ticket.id, principal.userId, 'explicit');
       await this.tickets.setMuted(tx, ticket.id, principal.userId, muted);
@@ -932,6 +971,11 @@ export class TicketsService {
   }
 
   // Helpers -------------------------------------------------------------------
+
+  /** Runs in the caller's transaction when one is bound (the portal write path), else in a fresh unit of work. */
+  private inTx<T>(principal: Principal, bound: Tx | undefined, fn: (tx: Tx) => Promise<T>): Promise<T> {
+    return bound ? fn(bound) : this.uow.run(principal, (tx) => fn(tx));
+  }
 
   private async load(tx: Tx, idOrKey: string): Promise<TicketRow> {
     const number = idOrKey.match(/^CS\d{7,}$/i) ? String(Number(idOrKey.slice(2))) : undefined;
@@ -1158,6 +1202,15 @@ export class TicketsService {
 
 function name(user: { first_name: string; last_name: string; email: string }): string {
   return `${user.first_name} ${user.last_name}`.trim() || user.email;
+}
+
+function decodeConditions(encoded: string): ConditionSet {
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as ConditionSet;
+    return parsed;
+  } catch {
+    throw new BadRequestException({ code: 'bad_conditions' });
+  }
 }
 
 function encodeCursor(updatedAt: string, id: string): string {
