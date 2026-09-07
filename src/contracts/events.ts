@@ -129,6 +129,13 @@ export const AUDIT_EVENT_TYPES = [
   'connector.dead_letter.replayed',
   'connector.dead_letter.discarded',
   'sync.applied',
+  'roster.person.created',
+  'roster.person.updated',
+  'roster.person.imported',
+  'roster.calendar.updated',
+  'roster.skills.updated',
+  'roster.certification.added',
+  'roster.certification.removed',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

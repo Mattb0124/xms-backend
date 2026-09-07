@@ -1350,6 +1350,136 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/roster/import",
+    "controller": "RosterController",
+    "handler": "importFromDirectory",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/people",
+    "controller": "RosterController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/roster/people",
+    "controller": "RosterController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/people/:id",
+    "controller": "RosterController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/roster/people/:id",
+    "controller": "RosterController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/roster/people/:id/calendar",
+    "controller": "RosterController",
+    "handler": "calendar",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/people/:id/certifications",
+    "controller": "RosterController",
+    "handler": "certifications",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/roster/people/:id/certifications",
+    "controller": "RosterController",
+    "handler": "addCertification",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/roster/people/:id/certifications/:certificationId",
+    "controller": "RosterController",
+    "handler": "removeCertification",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/people/:id/skills",
+    "controller": "RosterController",
+    "handler": "personSkills",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/roster/people/:id/skills",
+    "controller": "RosterController",
+    "handler": "setSkills",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/roster/skills",
+    "controller": "RosterController",
+    "handler": "skills",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/roster/skills",
+    "controller": "RosterController",
+    "handler": "createSkill",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/search/solutions",
     "controller": "KnowledgeController",
