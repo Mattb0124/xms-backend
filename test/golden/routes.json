@@ -18,5 +18,375 @@
     "permission": null,
     "public": "health",
     "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts",
+    "controller": "AccountsController",
+    "handler": "granted",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/accounts",
+    "controller": "AdminAccountsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts",
+    "controller": "AdminAccountsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/accounts/:id",
+    "controller": "AdminAccountsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/accounts/:id",
+    "controller": "AdminAccountsController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts/:id/activate",
+    "controller": "AdminAccountsController",
+    "handler": "activate",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/accounts/:id/grants",
+    "controller": "AdminUsersController",
+    "handler": "grantees",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/accounts/:id/grants",
+    "controller": "AdminUsersController",
+    "handler": "replaceGrantees",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts/:id/offboard",
+    "controller": "AdminAccountsController",
+    "handler": "offboard",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/accounts/:id/portal-users",
+    "controller": "AdminUsersController",
+    "handler": "portalUsers",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts/:id/portal-users",
+    "controller": "AdminUsersController",
+    "handler": "invitePortalUser",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/accounts/:id/settings",
+    "controller": "AdminAccountsController",
+    "handler": "settings",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/accounts/:id/settings",
+    "controller": "AdminAccountsController",
+    "handler": "updateSettings",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/accounts/:id/suspend",
+    "controller": "AdminAccountsController",
+    "handler": "suspend",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/config/:kind",
+    "controller": "AdminConfigController",
+    "handler": "describe",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/config/:kind/versions",
+    "controller": "AdminConfigController",
+    "handler": "createDraft",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/config/:kind/versions/:id/activate",
+    "controller": "AdminConfigController",
+    "handler": "activate",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/groups",
+    "controller": "AdminUsersController",
+    "handler": "groups",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/groups",
+    "controller": "AdminUsersController",
+    "handler": "createGroup",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/groups/:id",
+    "controller": "AdminUsersController",
+    "handler": "group",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/groups/:id",
+    "controller": "AdminUsersController",
+    "handler": "updateGroup",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/groups/:id/members",
+    "controller": "AdminUsersController",
+    "handler": "members",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/me",
+    "controller": "MeController",
+    "handler": "me",
+    "realm": "internal",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/permissions",
+    "controller": "AdminUsersController",
+    "handler": "permissions",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/roles",
+    "controller": "AdminUsersController",
+    "handler": "listRoles",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/roles",
+    "controller": "AdminUsersController",
+    "handler": "createRole",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/roles/:id",
+    "controller": "AdminUsersController",
+    "handler": "role",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/roles/:id",
+    "controller": "AdminUsersController",
+    "handler": "updateRole",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/users",
+    "controller": "AdminUsersController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/users",
+    "controller": "AdminUsersController",
+    "handler": "invite",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/users/:id",
+    "controller": "AdminUsersController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/users/:id",
+    "controller": "AdminUsersController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/users/:id/grants",
+    "controller": "AdminUsersController",
+    "handler": "grants",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/users/:id/roles",
+    "controller": "AdminUsersController",
+    "handler": "roles",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/bootstrap",
+    "controller": "BootstrapController",
+    "handler": "run",
+    "realm": "internal",
+    "permission": null,
+    "public": "bootstrap: gated inside on the configured administrator emails and an empty administrator set",
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/groups",
+    "controller": "DirectoryController",
+    "handler": "groups",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/users",
+    "controller": "DirectoryController",
+    "handler": "assignable",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
   }
 ]

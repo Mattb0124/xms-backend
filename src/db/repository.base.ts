@@ -24,11 +24,7 @@ export class StaleVersionError extends Error {
 }
 
 export abstract class RepositoryBase {
-  protected async many<T extends pg.QueryResultRow>(
-    tx: Tx,
-    text: string,
-    values: unknown[] = [],
-  ): Promise<T[]> {
+  protected async many<T extends pg.QueryResultRow>(tx: Tx, text: string, values: unknown[] = []): Promise<T[]> {
     const result = await tx.query<T>(text, values);
     return result.rows;
   }
@@ -53,11 +49,7 @@ export abstract class RepositoryBase {
     return row;
   }
 
-  protected async count(
-    tx: Tx,
-    text: string,
-    values: unknown[] = [],
-  ): Promise<number> {
+  protected async count(tx: Tx, text: string, values: unknown[] = []): Promise<number> {
     const result = await tx.query(text, values);
     return result.rowCount ?? 0;
   }
@@ -77,23 +69,15 @@ export abstract class RepositoryBase {
   ): Promise<T> {
     const keys = Object.keys(assignments);
     if (keys.length === 0) {
-      return this.one<T>(tx, entity, `select * from ${table} where id = $1`, [
-        id,
-      ]);
+      return this.one<T>(tx, entity, `select * from ${table} where id = $1`, [id]);
     }
-    const sets = keys
-      .map((key, index) => `${quoteIdent(key)} = $${index + 3}`)
-      .join(', ');
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 3}`).join(', ');
     const result = await tx.query<T>(
       `update ${table} set ${sets}, version = version + 1 where id = $1 and version = $2 returning *`,
       [id, expectedVersion, ...keys.map((key) => assignments[key])],
     );
     if (result.rows[0]) return result.rows[0];
-    const exists = await this.maybeOne(
-      tx,
-      `select 1 from ${table} where id = $1`,
-      [id],
-    );
+    const exists = await this.maybeOne(tx, `select 1 from ${table} where id = $1`, [id]);
     if (!exists) throw new NotFoundException({ code: 'not_found', entity });
     throw new StaleVersionError(entity, id);
   }

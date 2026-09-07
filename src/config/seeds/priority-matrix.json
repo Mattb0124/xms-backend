@@ -1,0 +1,8 @@
+{
+  "cells": {
+    "high": { "high": "p1", "medium": "p2", "low": "p3" },
+    "medium": { "high": "p2", "medium": "p3", "low": "p4" },
+    "low": { "high": "p3", "medium": "p4", "low": "p4" }
+  },
+  "default": "p3"
+}

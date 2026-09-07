@@ -1,17 +1,9 @@
-import {
-  Controller,
-  Get,
-  INestApplication,
-  VersioningType,
-} from '@nestjs/common';
+import { Controller, Get, INestApplication, VersioningType } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-  AUTH_GUARD_OPTIONS,
-  AuthGuard,
-} from '../src/common/auth/auth.guard.js';
+import { AUTH_GUARD_OPTIONS, AuthGuard } from '../src/common/auth/auth.guard.js';
 import {
   Authenticated,
   AxelRoute,
@@ -201,10 +193,7 @@ describe('token rejection', () => {
   });
 
   it('a token signed with the wrong secret is 401 with reason bad_signature', async () => {
-    const token = await devToken(
-      { sub: 'x' },
-      'another-secret-that-is-long-enough',
-    );
+    const token = await devToken({ sub: 'x' }, 'another-secret-that-is-long-enough');
     await get('/v1/probe/internal', token).expect(401);
     expect(sink.ofType('auth.token.rejected')[0].attrs).toMatchObject({
       reason: 'bad_signature',
@@ -246,13 +235,8 @@ describe('token rejection', () => {
   });
 
   it('a deactivated user is 401', async () => {
-    const user = principals.add(
-      aUser({ clerk_user_id: 'dev_gone', status: 'deactivated' }),
-    );
-    await get(
-      '/v1/probe/internal',
-      await devToken({ sub: user.clerk_user_id! }),
-    ).expect(401);
+    const user = principals.add(aUser({ clerk_user_id: 'dev_gone', status: 'deactivated' }));
+    await get('/v1/probe/internal', await devToken({ sub: user.clerk_user_id! })).expect(401);
     expect(sink.ofType('auth.signin.failed')[0].attrs).toMatchObject({
       reason: 'deactivated',
     });
@@ -273,13 +257,8 @@ describe('token rejection', () => {
 
 describe('accepted tokens', () => {
   it('a dev token for a known internal user reaches the route with its principal', async () => {
-    const user = principals.add(
-      aUser({ clerk_user_id: 'dev_ok', accountIds: [ACCOUNT] }),
-    );
-    const response = await get(
-      '/v1/probe/internal',
-      await devToken({ sub: user.clerk_user_id! }),
-    ).expect(200);
+    const user = principals.add(aUser({ clerk_user_id: 'dev_ok', accountIds: [ACCOUNT] }));
+    const response = await get('/v1/probe/internal', await devToken({ sub: user.clerk_user_id! })).expect(200);
     expect(response.body).toEqual({
       userId: user.id,
       kind: 'internal',
@@ -301,16 +280,11 @@ describe('accepted tokens', () => {
 
   it('a Clerk RS256 token with the right party and organisation is accepted', async () => {
     const user = principals.add(aUser({ clerk_user_id: 'user_clerk' }));
-    await get(
-      '/v1/probe/internal',
-      await clerkToken(keys, { sub: user.clerk_user_id! }),
-    ).expect(200);
+    await get('/v1/probe/internal', await clerkToken(keys, { sub: user.clerk_user_id! })).expect(200);
   });
 
   it('binds a pre-invited user to the Clerk subject on first sign-in by email', async () => {
-    const user = principals.add(
-      aUser({ email: 'invited@example.test', status: 'invited' }),
-    );
+    const user = principals.add(aUser({ email: 'invited@example.test', status: 'invited' }));
     await get(
       '/v1/probe/internal',
       await clerkToken(keys, {
@@ -326,45 +300,26 @@ describe('accepted tokens', () => {
 
   it('a harness session token maps to the user by email as a harness principal', async () => {
     const user = principals.add(aUser({ email: 'consultant@example.test' }));
-    const response = await get(
-      '/v1/probe/me',
-      await harnessToken({ sub: 'harness-1', email: user.email }),
-    ).expect(200);
+    const response = await get('/v1/probe/me', await harnessToken({ sub: 'harness-1', email: user.email })).expect(200);
     expect(response.body.kind).toBe('harness');
   });
 
   it('a harness token whose type is not session is rejected', async () => {
     const user = principals.add(aUser({ email: 'harness2@example.test' }));
-    await get(
-      '/v1/probe/me',
-      await harnessToken({ sub: 'h', email: user.email, type: 'refresh' }),
-    ).expect(401);
+    await get('/v1/probe/me', await harnessToken({ sub: 'h', email: user.email, type: 'refresh' })).expect(401);
   });
 
   it('expands permissions transitively for the principal', async () => {
-    const user = principals.add(
-      aUser({ clerk_user_id: 'dev_perms', permissions: ['tickets:resolve'] }),
-    );
-    const response = await get(
-      '/v1/probe/me',
-      await devToken({ sub: user.clerk_user_id! }),
-    ).expect(200);
-    expect(response.body.permissions).toEqual([
-      'tickets:create',
-      'tickets:resolve',
-      'tickets:view',
-      'tickets:work',
-    ]);
+    const user = principals.add(aUser({ clerk_user_id: 'dev_perms', permissions: ['tickets:resolve'] }));
+    const response = await get('/v1/probe/me', await devToken({ sub: user.clerk_user_id! })).expect(200);
+    expect(response.body.permissions).toEqual(['tickets:create', 'tickets:resolve', 'tickets:view', 'tickets:work']);
   });
 });
 
 describe('authorisation', () => {
   it('a missing permission is 403 with one authz.permission.denied event naming the permission', async () => {
     const user = principals.add(aUser({ clerk_user_id: 'dev_noadmin' }));
-    const response = await get(
-      '/v1/probe/admin',
-      await devToken({ sub: user.clerk_user_id! }),
-    ).expect(403);
+    const response = await get('/v1/probe/admin', await devToken({ sub: user.clerk_user_id! })).expect(403);
     expect(response.body).toMatchObject({
       code: 'forbidden',
       permission: 'admin:accounts',
@@ -398,13 +353,8 @@ describe('authorisation', () => {
   });
 
   it('an internal token on a portal route is 403', async () => {
-    const user = principals.add(
-      aUser({ clerk_user_id: 'dev_internal2', permissions: ['portal:submit'] }),
-    );
-    await get(
-      '/v1/portal/probe/mine',
-      await devToken({ sub: user.clerk_user_id! }),
-    ).expect(403);
+    const user = principals.add(aUser({ clerk_user_id: 'dev_internal2', permissions: ['portal:submit'] }));
+    await get('/v1/portal/probe/mine', await devToken({ sub: user.clerk_user_id! })).expect(403);
     expect(sink.ofType('authz.realm.denied')).toHaveLength(1);
   });
 
@@ -463,14 +413,8 @@ describe('long-lived agents token', () => {
 
 describe('API clients', () => {
   it('a valid key acts as its service user with its scopes and grants', async () => {
-    const service = principals.add(
-      aUser({ kind: 'service', email: 'finance-bot@example.test' }),
-    );
-    const key = await principals.addApiClient(
-      service,
-      ['tickets:view'],
-      [ACCOUNT],
-    );
+    const service = principals.add(aUser({ kind: 'service', email: 'finance-bot@example.test' }));
+    const key = await principals.addApiClient(service, ['tickets:view'], [ACCOUNT]);
     const response = await get('/v1/probe/internal', key).expect(200);
     expect(response.body).toEqual({
       userId: service.id,
@@ -481,9 +425,7 @@ describe('API clients', () => {
   });
 
   it('a key outside its scopes is 403', async () => {
-    const service = principals.add(
-      aUser({ kind: 'service', email: 'bot2@example.test' }),
-    );
+    const service = principals.add(aUser({ kind: 'service', email: 'bot2@example.test' }));
     const key = await principals.addApiClient(service, ['tickets:view'], []);
     await get('/v1/probe/admin', key).expect(403);
   });
@@ -493,15 +435,8 @@ describe('API clients', () => {
     expect(sink.ofType('auth.apikey.rejected')[0].attrs).toMatchObject({
       reason: 'unknown',
     });
-    const service = principals.add(
-      aUser({ kind: 'service', email: 'bot3@example.test' }),
-    );
-    const revoked = await principals.addApiClient(
-      service,
-      ['tickets:view'],
-      [],
-      'revoked',
-    );
+    const service = principals.add(aUser({ kind: 'service', email: 'bot3@example.test' }));
+    const revoked = await principals.addApiClient(service, ['tickets:view'], [], 'revoked');
     await get('/v1/probe/internal', revoked).expect(401);
     expect(sink.ofType('auth.apikey.rejected')[1].attrs).toMatchObject({
       reason: 'revoked',
@@ -509,13 +444,8 @@ describe('API clients', () => {
   });
 
   it('a service user cannot sign in with a session token', async () => {
-    const service = principals.add(
-      aUser({ kind: 'service', clerk_user_id: 'dev_service' }),
-    );
-    await get(
-      '/v1/probe/internal',
-      await devToken({ sub: service.clerk_user_id! }),
-    ).expect(401);
+    const service = principals.add(aUser({ kind: 'service', clerk_user_id: 'dev_service' }));
+    await get('/v1/probe/internal', await devToken({ sub: service.clerk_user_id! })).expect(401);
     expect(sink.ofType('auth.signin.failed')[0].attrs).toMatchObject({
       reason: 'service_user',
     });

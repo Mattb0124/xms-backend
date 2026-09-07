@@ -1,17 +1,8 @@
-import {
-  Global,
-  Logger,
-  Module,
-  type OnApplicationBootstrap,
-} from '@nestjs/common';
+import { Global, Logger, Module, type OnApplicationBootstrap } from '@nestjs/common';
 import { APP_GUARD, DiscoveryModule, ModuleRef } from '@nestjs/core';
 import { loadEnv } from '../../config/env.js';
 import { SecurityEventsService } from '../events/security-events.service.js';
-import {
-  AUTH_GUARD_OPTIONS,
-  AuthGuard,
-  type AuthGuardOptions,
-} from './auth.guard.js';
+import { AUTH_GUARD_OPTIONS, AuthGuard, type AuthGuardOptions } from './auth.guard.js';
 import { PrincipalRepository } from './principal.repository.js';
 import { collectRouteTable, undeclaredRoutes } from './route-table.js';
 import { TokenVerifiers } from './token-verifier.js';
@@ -53,12 +44,7 @@ import { TokenVerifiers } from './token-verifier.js';
     AuthGuard,
     { provide: APP_GUARD, useExisting: AuthGuard },
   ],
-  exports: [
-    PrincipalRepository,
-    SecurityEventsService,
-    TokenVerifiers,
-    AuthGuard,
-  ],
+  exports: [PrincipalRepository, SecurityEventsService, TokenVerifiers, AuthGuard],
 })
 export class AuthModule implements OnApplicationBootstrap {
   private readonly logger = new Logger(AuthModule.name);
@@ -70,17 +56,10 @@ export class AuthModule implements OnApplicationBootstrap {
     const missing = undeclaredRoutes(table);
     if (missing.length > 0) {
       const list = missing
-        .map(
-          (entry) =>
-            `${entry.method} ${entry.path} (${entry.controller}.${entry.handler})`,
-        )
+        .map((entry) => `${entry.method} ${entry.path} (${entry.controller}.${entry.handler})`)
         .join(', ');
-      throw new Error(
-        `Routes without a permission or @Public(reason): ${list}`,
-      );
+      throw new Error(`Routes without a permission or @Public(reason): ${list}`);
     }
-    this.logger.log(
-      `${table.length} routes declared with a permission or a public reason`,
-    );
+    this.logger.log(`${table.length} routes declared with a permission or a public reason`);
   }
 }

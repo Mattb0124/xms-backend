@@ -4,11 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withSession } from '../../src/db/session.js';
 import { closePools, pools, resetDatabase, withSuperuser } from '../kit/db.js';
-import {
-  insertFixtureRow,
-  listAccountScopedTables,
-  type TableInfo,
-} from '../kit/fixtures.js';
+import { insertFixtureRow, listAccountScopedTables, type TableInfo } from '../kit/fixtures.js';
 
 /**
  * The generated isolation suite (Test Strategy section 3, Implementation
@@ -62,13 +58,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await withSuperuser(async (client) => {
-    await client.query(
-      'insert into sys.schema_checks (tables_checked, tables_failed, detail) values ($1, 0, $2)',
-      [
-        tables.length,
-        JSON.stringify({ tables: tables.map((table) => table.qualified) }),
-      ],
-    );
+    await client.query('insert into sys.schema_checks (tables_checked, tables_failed, detail) values ($1, 0, $2)', [
+      tables.length,
+      JSON.stringify({ tables: tables.map((table) => table.qualified) }),
+    ]);
   });
   await closePools();
 });
@@ -76,18 +69,14 @@ afterAll(async () => {
 describe('isolation suite', () => {
   it('finds the account-scoped tables', () => {
     expect(tables.length).toBeGreaterThan(0);
-    expect(tables.map((table) => table.qualified)).toContain(
-      'acct.account_settings',
-    );
+    expect(tables.map((table) => table.qualified)).toContain('acct.account_settings');
   });
 
   it('covers every account-scoped table the database knows about', () => {
     // The per-table blocks are generated from the migration files at
     // collection time; this cross-check fails when a table exists in the
     // database that the static scan did not see (or the reverse).
-    expect(tablesForEach().sort()).toEqual(
-      tables.map((table) => table.qualified).sort(),
-    );
+    expect(tablesForEach().sort()).toEqual(tables.map((table) => table.qualified).sort());
   });
 
   it('gives the portal role no privilege on any operator or system table', async () => {
@@ -102,8 +91,7 @@ describe('isolation suite', () => {
 });
 
 describe.each(tablesForEach())('%s', (qualified) => {
-  const table = (): TableInfo =>
-    tables.find((candidate) => candidate.qualified === qualified)!;
+  const table = (): TableInfo => tables.find((candidate) => candidate.qualified === qualified)!;
   const ids = (): { a: string; b: string } => rows.get(qualified)!;
 
   it('has row level security enabled and forced', () => {
@@ -112,125 +100,76 @@ describe.each(tablesForEach())('%s', (qualified) => {
   });
 
   it('has the operator policy with USING and WITH CHECK on account_id', () => {
-    const policy = table().policies.find(
-      (candidate) => candidate.name === 'acct_isolation_operator',
-    );
+    const policy = table().policies.find((candidate) => candidate.name === 'acct_isolation_operator');
     expect(policy, 'acct_isolation_operator policy missing').toBeDefined();
     expect(policy!.using).toContain('account_id');
     expect(policy!.withCheck).toContain('account_id');
-    expect(policy!.roles).toEqual(
-      expect.arrayContaining(['xms_app', 'xms_worker']),
-    );
+    expect(policy!.roles).toEqual(expect.arrayContaining(['xms_app', 'xms_worker']));
   });
 
   it('has the portal policy exactly when the portal may read', () => {
-    const policy = table().policies.find(
-      (candidate) => candidate.name === 'acct_isolation_portal',
-    );
+    const policy = table().policies.find((candidate) => candidate.name === 'acct_isolation_portal');
     if (table().portalCanSelect) {
-      expect(
-        policy,
-        'portal has SELECT but no acct_isolation_portal policy',
-      ).toBeDefined();
+      expect(policy, 'portal has SELECT but no acct_isolation_portal policy').toBeDefined();
       expect(policy!.using).toContain('account_id');
     } else {
-      expect(
-        table().portalPrivileges,
-        'portal has privileges without a portal policy',
-      ).toEqual([]);
+      expect(table().portalPrivileges, 'portal has privileges without a portal policy').toEqual([]);
     }
   });
 
   it('shows account A only its own rows', async () => {
-    const seen = await withSession(
-      pools(),
-      'app',
-      { binding: { kind: 'operator', accountIds: [A] } },
-      (tx) =>
-        tx.query<{ id: string; account_id: string }>(
-          `select id, account_id from ${qualified}`,
-        ),
+    const seen = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
+      tx.query<{ id: string; account_id: string }>(`select id, account_id from ${qualified}`),
     );
     expect(seen.rows.map((row) => row.id)).toContain(ids().a);
     expect(seen.rows.map((row) => row.id)).not.toContain(ids().b);
-    expect(new Set(seen.rows.map((row) => row.account_id))).toEqual(
-      new Set([A]),
-    );
+    expect(new Set(seen.rows.map((row) => row.account_id))).toEqual(new Set([A]));
     expect(seen.rows.length).toBe(totals.get(qualified)!.a);
   });
 
   it('shows nothing to a session without a binding', async () => {
-    const seen = await withSession(
-      pools(),
-      'app',
-      { binding: { kind: 'none' } },
-      (tx) => tx.query(`select count(*)::int as n from ${qualified}`),
+    const seen = await withSession(pools(), 'app', { binding: { kind: 'none' } }, (tx) =>
+      tx.query(`select count(*)::int as n from ${qualified}`),
     );
     expect(seen.rows[0].n).toBe(0);
   });
 
   it('shows both rows to a session granted both accounts', async () => {
-    const seen = await withSession(
-      pools(),
-      'app',
-      { binding: { kind: 'operator', accountIds: [A, B] } },
-      (tx) => tx.query(`select count(*)::int as n from ${qualified}`),
+    const seen = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A, B] } }, (tx) =>
+      tx.query(`select count(*)::int as n from ${qualified}`),
     );
     expect(seen.rows[0].n).toBe(totals.get(qualified)!.all);
   });
 
   it('lets account A update or delete nothing of account B', async () => {
-    const updated = await withSession(
-      pools(),
-      'app',
-      { binding: { kind: 'operator', accountIds: [A] } },
-      (tx) =>
-        tx.query(
-          `update ${qualified} set account_id = account_id where id = $1`,
-          [ids().b],
-        ),
+    const updated = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
+      tx.query(`update ${qualified} set account_id = account_id where id = $1`, [ids().b]),
     );
     expect(updated.rowCount).toBe(0);
-    const deleted = await withSession(
-      pools(),
-      'app',
-      { binding: { kind: 'operator', accountIds: [A] } },
-      (tx) => tx.query(`delete from ${qualified} where id = $1`, [ids().b]),
+    const deleted = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
+      tx.query(`delete from ${qualified} where id = $1`, [ids().b]),
     );
     expect(deleted.rowCount).toBe(0);
   });
 
   it('refuses an insert for account B from a session bound to A', async () => {
     const copy = await withSuperuser(async (client) => {
-      const result = await client.query(
-        `select * from ${qualified} where id = $1`,
-        [ids().b],
-      );
+      const result = await client.query(`select * from ${qualified} where id = $1`, [ids().b]);
       return result.rows[0] as Record<string, unknown>;
     });
     delete copy.id;
-    const columns = Object.keys(copy).filter(
-      (column) => !table().generatedColumns.includes(column),
-    );
+    const columns = Object.keys(copy).filter((column) => !table().generatedColumns.includes(column));
     const text = `insert into ${qualified} (${columns.map((column) => `"${column}"`).join(', ')})
       values (${columns.map((_, index) => `$${index + 1}`).join(', ')})`;
     const values = columns.map((column) => serialise(copy[column]));
     await expect(
-      withSession(
-        pools(),
-        'app',
-        { binding: { kind: 'operator', accountIds: [A] } },
-        (tx) => tx.query(text, values),
-      ),
+      withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) => tx.query(text, values)),
     ).rejects.toMatchObject({ code: '42501' });
   });
 
   it('bounds the portal role to one account or refuses it entirely', async () => {
-    const attempt = withSession(
-      pools(),
-      'portal',
-      { binding: { kind: 'portal', accountId: A } },
-      (tx) => tx.query<{ id: string }>(`select id from ${qualified}`),
+    const attempt = withSession(pools(), 'portal', { binding: { kind: 'portal', accountId: A } }, (tx) =>
+      tx.query<{ id: string }>(`select id from ${qualified}`),
     );
     if (table().portalCanSelect) {
       const seen = await attempt;
@@ -257,9 +196,7 @@ function staticTableNames(): string[] {
     .filter((name) => name.endsWith('.sql'))
     .sort()) {
     const sql = readFileSync(join(dir, file), 'utf8');
-    for (const match of sql.matchAll(
-      /create table ((?:acct|rpt)\.[a-z_]+) \(([\s\S]*?)\n\)/g,
-    )) {
+    for (const match of sql.matchAll(/create table ((?:acct|rpt)\.[a-z_]+) \(([\s\S]*?)\n\)/g)) {
       if (/\baccount_id uuid/.test(match[2])) names.add(match[1]);
     }
   }
@@ -269,7 +206,6 @@ function staticTableNames(): string[] {
 function serialise(value: unknown): unknown {
   if (value === null || value === undefined) return null;
   if (Array.isArray(value)) return value;
-  if (typeof value === 'object' && !(value instanceof Date))
-    return JSON.stringify(value);
+  if (typeof value === 'object' && !(value instanceof Date)) return JSON.stringify(value);
   return value;
 }

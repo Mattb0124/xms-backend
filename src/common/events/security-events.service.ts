@@ -1,10 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type {
-  ActorKind,
-  Outcome,
-  PrincipalKind,
-  SecurityEventType,
-} from '../../contracts/events.js';
+import type { ActorKind, Outcome, PrincipalKind, SecurityEventType } from '../../contracts/events.js';
 import { DbPools } from '../../db/pool.js';
 import type { Queryable } from '../../db/session.js';
 
@@ -77,9 +72,7 @@ export class SecurityEventsService implements SecurityEventSink {
     } catch (error) {
       // Never fail a request because the security write failed, but never
       // lose it silently either: the log line is alarmed on in Platform 5.
-      this.logger.error(
-        `security event ${event.type} not written: ${(error as Error).message}`,
-      );
+      this.logger.error(`security event ${event.type} not written: ${(error as Error).message}`);
     }
   }
 }

@@ -40,14 +40,7 @@ export interface VerifiedToken {
 
 export class TokenRejectedError extends Error {
   constructor(
-    readonly reason:
-      | 'garbage'
-      | 'expired'
-      | 'bad_issuer'
-      | 'bad_audience'
-      | 'bad_signature'
-      | 'bad_party'
-      | 'bad_type',
+    readonly reason: 'garbage' | 'expired' | 'bad_issuer' | 'bad_audience' | 'bad_signature' | 'bad_party' | 'bad_type',
   ) {
     super(`token rejected: ${reason}`);
   }
@@ -76,9 +69,7 @@ export class TokenVerifiers {
 
   constructor(private readonly options: TokenVerifiersOptions) {
     if (options.clerk) {
-      const url =
-        options.clerk.jwksUrl ??
-        `${options.clerk.issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
+      const url = options.clerk.jwksUrl ?? `${options.clerk.issuer.replace(/\/$/, '')}/.well-known/jwks.json`;
       this.clerkKeys = options.clerk.keys ?? createRemoteJWKSet(new URL(url));
     }
   }
@@ -103,8 +94,7 @@ export class TokenVerifiers {
       return this.verifyDev;
     }
     if (claims['type'] === 'session') {
-      if (!this.options.harnessSessionSecret)
-        throw new TokenRejectedError('bad_issuer');
+      if (!this.options.harnessSessionSecret) throw new TokenRejectedError('bad_issuer');
       return this.verifyHarness;
     }
     if (this.options.clerk && alg === 'RS256') {
@@ -132,9 +122,7 @@ export class TokenVerifiers {
     }
     const audience = audienceOf(payload);
     const type: TokenType =
-      audience && clerk.agentsAudience && audience === clerk.agentsAudience
-        ? 'clerk_agents'
-        : 'clerk';
+      audience && clerk.agentsAudience && audience === clerk.agentsAudience ? 'clerk_agents' : 'clerk';
     if (audience && type === 'clerk') {
       // A Clerk session token normally carries no aud; any other audience is
       // a template we did not define for this API.
@@ -169,8 +157,7 @@ export class TokenVerifiers {
       type: 'harness',
       subject: requireSubject(payload),
       email: stringClaim(payload, 'email'),
-      sessionId:
-        stringClaim(payload, 'session_id') ?? stringClaim(payload, 'sid'),
+      sessionId: stringClaim(payload, 'session_id') ?? stringClaim(payload, 'sid'),
       claims: payload,
     };
   };
@@ -221,8 +208,7 @@ function classify(error: unknown): TokenRejectedError['reason'] {
 }
 
 function requireSubject(payload: JWTPayload): string {
-  if (typeof payload.sub !== 'string' || payload.sub.length === 0)
-    throw new TokenRejectedError('garbage');
+  if (typeof payload.sub !== 'string' || payload.sub.length === 0) throw new TokenRejectedError('garbage');
   return payload.sub;
 }
 
@@ -233,7 +219,6 @@ function stringClaim(payload: JWTPayload, name: string): string | undefined {
 
 function audienceOf(payload: JWTPayload): string | undefined {
   if (typeof payload.aud === 'string') return payload.aud;
-  if (Array.isArray(payload.aud) && payload.aud.length === 1)
-    return payload.aud[0];
+  if (Array.isArray(payload.aud) && payload.aud.length === 1) return payload.aud[0];
   return undefined;
 }

@@ -18,9 +18,7 @@ const list = z
 
 const envSchema = z
   .object({
-    NODE_ENV: z
-      .enum(['development', 'test', 'production'])
-      .default('development'),
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().positive().default(3001),
     CORS_ORIGINS: z
       .string()
@@ -31,9 +29,7 @@ const envSchema = z
           .map((origin) => origin.trim())
           .filter(Boolean),
       ),
-    LOG_LEVEL: z
-      .enum(['trace', 'debug', 'info', 'warn', 'error'])
-      .default('info'),
+    LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
     APP_VERSION: z.string().default('dev'),
     // Database URLs per role (Data Model section 2).
     DATABASE_URL_APP: z.string().url().optional(),
@@ -106,9 +102,7 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (cached) return cached;
   const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
-      .join('; ');
+    const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
     throw new Error(`Invalid environment: ${issues}`);
   }
   cached = parsed.data;

@@ -8,21 +8,15 @@ import type { RequestContext } from './auth/decorators.js';
  * to every request, and echoes the id on the response so the browser's
  * telemetry can correlate its next event (Audit & Analytics 3, 5.2).
  */
-export function requestContextMiddleware(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): void {
+export function requestContextMiddleware(req: Request, res: Response, next: NextFunction): void {
   const inbound = req.header('x-request-id');
-  const requestId =
-    inbound && /^[A-Za-z0-9._-]{8,128}$/.test(inbound) ? inbound : randomUUID();
+  const requestId = inbound && /^[A-Za-z0-9._-]{8,128}$/.test(inbound) ? inbound : randomUUID();
   const context: RequestContext = {
     requestId,
     ipHash: hashIp(req.ip),
     userAgentFamily: userAgentFamily(req.header('user-agent')),
   };
-  (req as Request & { requestContext: RequestContext }).requestContext =
-    context;
+  (req as Request & { requestContext: RequestContext }).requestContext = context;
   res.setHeader('x-request-id', requestId);
   next();
 }
@@ -31,10 +25,7 @@ function hashIp(ip: string | undefined): string | undefined {
   if (!ip) return undefined;
   const day = new Date().toISOString().slice(0, 10);
   const salt = process.env.IP_HASH_SALT ?? 'local';
-  return createHash('sha256')
-    .update(`${salt}:${day}:${ip}`)
-    .digest('hex')
-    .slice(0, 32);
+  return createHash('sha256').update(`${salt}:${day}:${ip}`).digest('hex').slice(0, 32);
 }
 
 const FAMILIES: [RegExp, string][] = [
@@ -47,9 +38,7 @@ const FAMILIES: [RegExp, string][] = [
   [/node/i, 'node'],
 ];
 
-export function userAgentFamily(
-  header: string | undefined,
-): string | undefined {
+export function userAgentFamily(header: string | undefined): string | undefined {
   if (!header) return undefined;
   for (const [pattern, family] of FAMILIES) {
     const match = header.match(pattern);

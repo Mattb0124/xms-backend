@@ -31,7 +31,8 @@
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
     "test:int": "vitest run --config ./vitest.config.integration.ts",
     "test:all": "pnpm test && pnpm test:int && pnpm test:e2e",
-    "dev:token": "node --experimental-strip-types src/tools/dev-token.ts"
+    "dev:token": "node --experimental-strip-types src/tools/dev-token.ts",
+    "seed:dev": "node --experimental-strip-types --experimental-transform-types src/tools/seed-dev.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

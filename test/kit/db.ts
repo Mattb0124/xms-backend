@@ -20,17 +20,12 @@ export function urls(): TestDbUrls {
 export function pools(): DbPools {
   if (!cachedPools) {
     const u = urls();
-    cachedPools = new DbPools(
-      { app: u.app, portal: u.portal, worker: u.worker },
-      4,
-    );
+    cachedPools = new DbPools({ app: u.app, portal: u.portal, worker: u.worker }, 4);
   }
   return cachedPools;
 }
 
-export async function withSuperuser<T>(
-  fn: (client: pg.Client) => Promise<T>,
-): Promise<T> {
+export async function withSuperuser<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
   const client = new pg.Client({ connectionString: urls().superuser });
   await client.connect();
   try {
@@ -49,9 +44,7 @@ export async function resetDatabase(): Promise<void> {
           and not exists (select 1 from pg_inherits where inhrelid = c.oid)`,
     );
     if (tables.rows.length === 0) return;
-    const list = tables.rows
-      .map((row) => `"${row.schema}"."${row.name}"`)
-      .join(', ');
+    const list = tables.rows.map((row) => `"${row.schema}"."${row.name}"`).join(', ');
     // Append-only triggers are BEFORE UPDATE OR DELETE; TRUNCATE is neither.
     await client.query(`truncate ${list} restart identity cascade`);
   });

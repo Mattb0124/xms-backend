@@ -50,9 +50,7 @@ export type Permission = OperatorPermission | PortalPermission;
 export type Catalog = 'operator' | 'portal';
 
 /** A permission implies the ones listed; the closure is computed at resolution. */
-export const PERMISSION_IMPLICATIONS: Partial<
-  Record<Permission, readonly Permission[]>
-> = {
+export const PERMISSION_IMPLICATIONS: Partial<Record<Permission, readonly Permission[]>> = {
   'tickets:create': ['tickets:view'],
   'tickets:work': ['tickets:view', 'tickets:create'],
   'tickets:resolve': ['tickets:work'],
@@ -104,25 +102,17 @@ export function expandPermissions(granted: Iterable<string>): Set<Permission> {
 }
 
 /** Catalog rows for the admin screens: key, label, direct implications. */
-export function describeCatalog(
-  catalog: Catalog,
-): { key: Permission; label: string; implies: Permission[] }[] {
-  const source =
-    catalog === 'portal' ? PORTAL_PERMISSIONS : OPERATOR_PERMISSIONS;
-  return (Object.entries(source) as [Permission, string][]).map(
-    ([key, label]) => ({
-      key,
-      label,
-      implies: [...(PERMISSION_IMPLICATIONS[key] ?? [])],
-    }),
-  );
+export function describeCatalog(catalog: Catalog): { key: Permission; label: string; implies: Permission[] }[] {
+  const source = catalog === 'portal' ? PORTAL_PERMISSIONS : OPERATOR_PERMISSIONS;
+  return (Object.entries(source) as [Permission, string][]).map(([key, label]) => ({
+    key,
+    label,
+    implies: [...(PERMISSION_IMPLICATIONS[key] ?? [])],
+  }));
 }
 
 /** System roles seeded at bootstrap (Domain Model 3.1). */
-export const SYSTEM_ROLES: Record<
-  Catalog,
-  Record<string, readonly Permission[]>
-> = {
+export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>> = {
   operator: {
     Administrator: [
       'tickets:resolve',
@@ -141,12 +131,7 @@ export const SYSTEM_ROLES: Record<
       'admin:connectors',
     ],
     Consultant: ['tickets:resolve', 'time:log', 'kb:author', 'ai:use'],
-    Dispatcher: [
-      'tickets:work',
-      'tickets:override-priority',
-      'reports:view-portfolio',
-      'ai:use',
-    ],
+    Dispatcher: ['tickets:work', 'tickets:override-priority', 'reports:view-portfolio', 'ai:use'],
     'Account Owner': [
       'tickets:resolve',
       'tickets:override-priority',
@@ -162,12 +147,7 @@ export const SYSTEM_ROLES: Record<
   },
   portal: {
     Requester: ['portal:submit', 'portal:kb'],
-    'Account Admin': [
-      'portal:manage-users',
-      'portal:comment',
-      'portal:view-consumption',
-      'portal:kb',
-    ],
+    'Account Admin': ['portal:manage-users', 'portal:comment', 'portal:view-consumption', 'portal:kb'],
     'Read Only': ['portal:view-org-tickets', 'portal:kb'],
   },
 };

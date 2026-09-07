@@ -1,0 +1,162 @@
+{
+  "incident": {
+    "type": "incident",
+    "initial": "new",
+    "states": [
+      { "key": "new", "label": "New", "kind": "intake" },
+      { "key": "assigned", "label": "Assigned", "kind": "active" },
+      { "key": "in_progress", "label": "In progress", "kind": "active", "effects": { "responseMet": true } },
+      { "key": "awaiting_client", "label": "Awaiting client", "kind": "paused", "effects": { "pause": true } },
+      { "key": "awaiting_third_party", "label": "Awaiting third party", "kind": "paused", "effects": { "pause": true } },
+      { "key": "resolved", "label": "Resolved", "kind": "resolved", "effects": { "resolve": true } },
+      { "key": "closed", "label": "Closed", "kind": "terminal", "effects": { "close": true } },
+      { "key": "cancelled", "label": "Cancelled", "kind": "terminal", "effects": { "cancel": true } }
+    ],
+    "transitions": [
+      { "from": "new", "to": "assigned" },
+      { "from": "new", "to": "in_progress" },
+      { "from": "new", "to": "cancelled", "portal": true },
+      { "from": "assigned", "to": "in_progress" },
+      { "from": "assigned", "to": "new", "label": "Unassign" },
+      { "from": "assigned", "to": "cancelled", "portal": true },
+      { "from": "in_progress", "to": "awaiting_client", "requires": ["pause_reason"] },
+      { "from": "in_progress", "to": "awaiting_third_party", "requires": ["pause_reason"] },
+      { "from": "in_progress", "to": "resolved", "requires": ["resolution", "solution_link", "time_logged"] },
+      { "from": "in_progress", "to": "cancelled", "portal": true },
+      { "from": "awaiting_client", "to": "in_progress", "label": "Resume" },
+      { "from": "awaiting_client", "to": "cancelled", "portal": true },
+      { "from": "awaiting_third_party", "to": "in_progress", "label": "Resume" },
+      { "from": "resolved", "to": "closed", "portal": true },
+      { "from": "resolved", "to": "in_progress", "label": "Reopen", "reopen": true, "portal": true }
+    ]
+  },
+  "service_request": {
+    "type": "service_request",
+    "initial": "new",
+    "states": [
+      { "key": "new", "label": "New", "kind": "intake" },
+      { "key": "triage", "label": "Triage", "kind": "active" },
+      { "key": "approved", "label": "Approved", "kind": "active" },
+      { "key": "in_progress", "label": "In progress", "kind": "active", "effects": { "responseMet": true } },
+      { "key": "awaiting_client", "label": "Awaiting client", "kind": "paused", "effects": { "pause": true } },
+      { "key": "awaiting_third_party", "label": "Awaiting third party", "kind": "paused", "effects": { "pause": true } },
+      { "key": "fulfilled", "label": "Fulfilled", "kind": "resolved", "effects": { "resolve": true } },
+      { "key": "closed", "label": "Closed", "kind": "terminal", "effects": { "close": true } },
+      { "key": "cancelled", "label": "Cancelled", "kind": "terminal", "effects": { "cancel": true } }
+    ],
+    "transitions": [
+      { "from": "new", "to": "triage" },
+      { "from": "new", "to": "cancelled", "portal": true },
+      { "from": "triage", "to": "approved", "requires": ["approval"] },
+      { "from": "triage", "to": "in_progress" },
+      { "from": "triage", "to": "awaiting_client", "requires": ["pause_reason"] },
+      { "from": "triage", "to": "cancelled", "portal": true },
+      { "from": "approved", "to": "in_progress" },
+      { "from": "approved", "to": "cancelled", "portal": true },
+      { "from": "in_progress", "to": "awaiting_client", "requires": ["pause_reason"] },
+      { "from": "in_progress", "to": "awaiting_third_party", "requires": ["pause_reason"] },
+      { "from": "in_progress", "to": "fulfilled", "requires": ["resolution", "solution_link", "time_logged"] },
+      { "from": "in_progress", "to": "cancelled", "portal": true },
+      { "from": "awaiting_client", "to": "in_progress", "label": "Resume" },
+      { "from": "awaiting_client", "to": "triage", "label": "Back to triage" },
+      { "from": "awaiting_client", "to": "cancelled", "portal": true },
+      { "from": "awaiting_third_party", "to": "in_progress", "label": "Resume" },
+      { "from": "fulfilled", "to": "closed", "portal": true },
+      { "from": "fulfilled", "to": "in_progress", "label": "Reopen", "reopen": true, "portal": true }
+    ]
+  },
+  "change": {
+    "type": "change",
+    "initial": "new",
+    "states": [
+      { "key": "new", "label": "New", "kind": "intake" },
+      { "key": "assessment", "label": "Assessment", "kind": "active", "effects": { "responseMet": true } },
+      { "key": "approved", "label": "Approved", "kind": "active" },
+      { "key": "scheduled", "label": "Scheduled", "kind": "active" },
+      { "key": "implementing", "label": "Implementing", "kind": "active" },
+      { "key": "awaiting_client", "label": "Awaiting client", "kind": "paused", "effects": { "pause": true } },
+      { "key": "validation", "label": "Validation", "kind": "active" },
+      { "key": "completed", "label": "Completed", "kind": "resolved", "effects": { "resolve": true } },
+      { "key": "closed", "label": "Closed", "kind": "terminal", "effects": { "close": true } },
+      { "key": "cancelled", "label": "Cancelled", "kind": "terminal", "effects": { "cancel": true } },
+      { "key": "rejected", "label": "Rejected", "kind": "terminal", "effects": { "cancel": true } }
+    ],
+    "transitions": [
+      { "from": "new", "to": "assessment" },
+      { "from": "new", "to": "cancelled", "portal": true },
+      { "from": "assessment", "to": "approved", "requires": ["implementation_plan", "backout_plan", "validation_notes", "approval"] },
+      { "from": "assessment", "to": "awaiting_client", "requires": ["pause_reason"] },
+      { "from": "assessment", "to": "rejected" },
+      { "from": "assessment", "to": "cancelled", "portal": true },
+      { "from": "awaiting_client", "to": "assessment", "label": "Resume" },
+      { "from": "awaiting_client", "to": "cancelled", "portal": true },
+      { "from": "approved", "to": "scheduled", "requires": ["change_window"] },
+      { "from": "approved", "to": "cancelled", "portal": true },
+      { "from": "scheduled", "to": "implementing" },
+      { "from": "scheduled", "to": "approved", "label": "Unschedule" },
+      { "from": "scheduled", "to": "cancelled" },
+      { "from": "implementing", "to": "validation" },
+      { "from": "implementing", "to": "scheduled", "label": "Backed out" },
+      { "from": "validation", "to": "completed", "requires": ["resolution", "time_logged"] },
+      { "from": "validation", "to": "implementing", "label": "Validation failed" },
+      { "from": "completed", "to": "closed", "portal": true },
+      { "from": "completed", "to": "validation", "label": "Reopen", "reopen": true }
+    ]
+  },
+  "problem": {
+    "type": "problem",
+    "initial": "new",
+    "states": [
+      { "key": "new", "label": "New", "kind": "intake" },
+      { "key": "investigating", "label": "Investigating", "kind": "active", "effects": { "responseMet": true } },
+      { "key": "known_error", "label": "Known error", "kind": "active" },
+      { "key": "awaiting_third_party", "label": "Awaiting third party", "kind": "paused", "effects": { "pause": true } },
+      { "key": "resolved", "label": "Resolved", "kind": "resolved", "effects": { "resolve": true } },
+      { "key": "closed", "label": "Closed", "kind": "terminal", "effects": { "close": true } },
+      { "key": "cancelled", "label": "Cancelled", "kind": "terminal", "effects": { "cancel": true } }
+    ],
+    "transitions": [
+      { "from": "new", "to": "investigating" },
+      { "from": "new", "to": "cancelled" },
+      { "from": "investigating", "to": "known_error", "requires": ["workaround_article"] },
+      { "from": "investigating", "to": "awaiting_third_party", "requires": ["pause_reason"] },
+      { "from": "investigating", "to": "resolved", "requires": ["resolution", "solution_link", "time_logged"] },
+      { "from": "investigating", "to": "cancelled" },
+      { "from": "known_error", "to": "investigating" },
+      { "from": "known_error", "to": "awaiting_third_party", "requires": ["pause_reason"] },
+      { "from": "known_error", "to": "resolved", "requires": ["resolution", "solution_link", "time_logged"] },
+      { "from": "awaiting_third_party", "to": "investigating", "label": "Resume" },
+      { "from": "awaiting_third_party", "to": "known_error", "label": "Resume as known error" },
+      { "from": "resolved", "to": "closed" },
+      { "from": "resolved", "to": "investigating", "label": "Reopen", "reopen": true }
+    ]
+  },
+  "project_task": {
+    "type": "project_task",
+    "initial": "new",
+    "states": [
+      { "key": "new", "label": "New", "kind": "intake" },
+      { "key": "planned", "label": "Planned", "kind": "active" },
+      { "key": "in_progress", "label": "In progress", "kind": "active", "effects": { "responseMet": true } },
+      { "key": "blocked", "label": "Blocked", "kind": "paused", "effects": { "pause": true } },
+      { "key": "done", "label": "Done", "kind": "resolved", "effects": { "resolve": true } },
+      { "key": "closed", "label": "Closed", "kind": "terminal", "effects": { "close": true } },
+      { "key": "cancelled", "label": "Cancelled", "kind": "terminal", "effects": { "cancel": true } }
+    ],
+    "transitions": [
+      { "from": "new", "to": "planned" },
+      { "from": "new", "to": "in_progress" },
+      { "from": "new", "to": "cancelled" },
+      { "from": "planned", "to": "in_progress" },
+      { "from": "planned", "to": "cancelled" },
+      { "from": "in_progress", "to": "blocked", "requires": ["pause_reason"] },
+      { "from": "in_progress", "to": "done", "requires": ["time_logged"] },
+      { "from": "in_progress", "to": "planned", "label": "Back to planned" },
+      { "from": "in_progress", "to": "cancelled" },
+      { "from": "blocked", "to": "in_progress", "label": "Unblock" },
+      { "from": "blocked", "to": "cancelled" },
+      { "from": "done", "to": "closed" },
+      { "from": "done", "to": "in_progress", "label": "Reopen", "reopen": true }
+    ]
+  }
+}

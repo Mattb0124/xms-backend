@@ -1,26 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import {
-  createLocalJWKSet,
-  exportJWK,
-  generateKeyPair,
-  SignJWT,
-  type JWTVerifyGetKey,
-} from 'jose';
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWTVerifyGetKey } from 'jose';
 import type { Permission } from '../../src/contracts/permissions.js';
 import { expandPermissions } from '../../src/contracts/permissions.js';
-import type {
-  PrincipalRepository,
-  ResolvedAccess,
-  UserRow,
-} from '../../src/common/auth/principal.repository.js';
-import {
-  API_KEY_PREFIX,
-  apiKeyLookupHash,
-} from '../../src/common/auth/principal.repository.js';
-import type {
-  SecurityEvent,
-  SecurityEventSink,
-} from '../../src/common/events/security-events.service.js';
+import type { PrincipalRepository, ResolvedAccess, UserRow } from '../../src/common/auth/principal.repository.js';
+import { API_KEY_PREFIX, apiKeyLookupHash } from '../../src/common/auth/principal.repository.js';
+import type { SecurityEvent, SecurityEventSink } from '../../src/common/events/security-events.service.js';
 import { DEV_ISSUER } from '../../src/common/auth/token-verifier.js';
 import bcrypt from 'bcryptjs';
 
@@ -92,15 +76,11 @@ export class InMemoryPrincipals implements Pick<
   }
 
   async findUserByClerkId(clerkUserId: string): Promise<UserRow | undefined> {
-    return [...this.users.values()].find(
-      (user) => user.clerk_user_id === clerkUserId,
-    );
+    return [...this.users.values()].find((user) => user.clerk_user_id === clerkUserId);
   }
 
   async findUserByEmail(email: string): Promise<UserRow | undefined> {
-    return [...this.users.values()].find(
-      (user) => user.email.toLowerCase() === email.toLowerCase(),
-    );
+    return [...this.users.values()].find((user) => user.email.toLowerCase() === email.toLowerCase());
   }
 
   async findUserById(id: string): Promise<UserRow | undefined> {

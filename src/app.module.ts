@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from './common/auth/auth.module.js';
+import { CommonModule } from './common/common.module.js';
 import { DbModule } from './db/db.module.js';
 import { HealthModule } from './health/health.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
 
 /**
  * Root module of the API. Feature modules are added one per spec module
@@ -10,6 +12,6 @@ import { HealthModule } from './health/health.module.js';
  * worker/worker.module.ts so every business rule exists once.
  */
 @Module({
-  imports: [DbModule, AuthModule, HealthModule],
+  imports: [DbModule, CommonModule, AuthModule, HealthModule, AdminModule],
 })
 export class AppModule {}

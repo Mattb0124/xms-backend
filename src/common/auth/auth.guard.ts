@@ -10,29 +10,12 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { isPermission, type Permission } from '../../contracts/permissions.js';
-import {
-  SecurityEventsService,
-  type SecurityEvent,
-} from '../events/security-events.service.js';
-import {
-  AXEL_ROUTE_KEY,
-  PERMISSION_KEY,
-  REALM_KEY,
-  type Realm,
-  type RequestContext,
-} from './decorators.js';
+import { SecurityEventsService, type SecurityEvent } from '../events/security-events.service.js';
+import { AXEL_ROUTE_KEY, PERMISSION_KEY, REALM_KEY, type Realm, type RequestContext } from './decorators.js';
 import { actorKindOf, type Principal } from './principal.js';
-import {
-  API_KEY_PREFIX,
-  PrincipalRepository,
-  type UserRow,
-} from './principal.repository.js';
+import { API_KEY_PREFIX, PrincipalRepository, type UserRow } from './principal.repository.js';
 import { IS_PUBLIC_KEY } from './public.decorator.js';
-import {
-  TokenRejectedError,
-  TokenVerifiers,
-  type VerifiedToken,
-} from './token-verifier.js';
+import { TokenRejectedError, TokenVerifiers, type VerifiedToken } from './token-verifier.js';
 
 /**
  * The single guard (Security & Tenancy 2.2, 3). Order of checks for every
@@ -73,13 +56,7 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const targets = [context.getHandler(), context.getClass()];
-    if (
-      this.reflector.getAllAndOverride<string | undefined>(
-        IS_PUBLIC_KEY,
-        targets,
-      )
-    )
-      return true;
+    if (this.reflector.getAllAndOverride<string | undefined>(IS_PUBLIC_KEY, targets)) return true;
 
     const request = context.switchToHttp().getRequest<GuardedRequest>();
     const ctx = request.requestContext ?? { requestId: 'unknown' };
@@ -102,20 +79,13 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException({ code: 'unauthenticated' });
     }
 
-    const axelRoute = Boolean(
-      this.reflector.getAllAndOverride<boolean>(AXEL_ROUTE_KEY, targets),
-    );
+    const axelRoute = Boolean(this.reflector.getAllAndOverride<boolean>(AXEL_ROUTE_KEY, targets));
     const principal = token.startsWith(API_KEY_PREFIX)
       ? await this.resolveApiClient(token, base)
       : await this.resolveToken(token, axelRoute, base);
 
-    const realm =
-      this.reflector.getAllAndOverride<Realm | undefined>(REALM_KEY, targets) ??
-      'internal';
-    const realmOk =
-      realm === 'portal'
-        ? principal.kind === 'portal'
-        : principal.kind !== 'portal';
+    const realm = this.reflector.getAllAndOverride<Realm | undefined>(REALM_KEY, targets) ?? 'internal';
+    const realmOk = realm === 'portal' ? principal.kind === 'portal' : principal.kind !== 'portal';
     if (!realmOk) {
       await this.deny({
         ...base,
@@ -126,9 +96,10 @@ export class AuthGuard implements CanActivate {
       throw new ForbiddenException({ code: 'wrong_realm' });
     }
 
-    const required = this.reflector.getAllAndOverride<
-      Permission | 'authenticated' | undefined
-    >(PERMISSION_KEY, targets);
+    const required = this.reflector.getAllAndOverride<Permission | 'authenticated' | undefined>(
+      PERMISSION_KEY,
+      targets,
+    );
     if (!required) {
       // The startup check makes this unreachable; kept as the fail-closed default.
       throw new InternalServerErrorException({
@@ -150,17 +121,12 @@ export class AuthGuard implements CanActivate {
     return true;
   }
 
-  private async resolveToken(
-    token: string,
-    axelRoute: boolean,
-    base: EventBase,
-  ): Promise<Principal> {
+  private async resolveToken(token: string, axelRoute: boolean, base: EventBase): Promise<Principal> {
     let verified: VerifiedToken;
     try {
       verified = await this.verifiers.verify(token);
     } catch (error) {
-      const reason =
-        error instanceof TokenRejectedError ? error.reason : 'garbage';
+      const reason = error instanceof TokenRejectedError ? error.reason : 'garbage';
       await this.deny({
         ...base,
         type: 'auth.token.rejected',
@@ -203,15 +169,13 @@ export class AuthGuard implements CanActivate {
         actorId: user.id,
         attrs: {
           ...base.attrs,
-          reason:
-            user.status === 'deactivated' ? 'deactivated' : 'service_user',
+          reason: user.status === 'deactivated' ? 'deactivated' : 'service_user',
         },
       });
       throw new UnauthorizedException({ code: 'user_inactive' });
     }
     if (verified.type === 'clerk' || verified.type === 'clerk_agents') {
-      const expectedOrg =
-        user.kind === 'portal' ? undefined : this.options.internalOrgSlug;
+      const expectedOrg = user.kind === 'portal' ? undefined : this.options.internalOrgSlug;
       // Portal organisations are `acct-<key>`; the account check happens
       // through the user's own account_id, the org slug must at least be a
       // portal organisation and not the internal one.
@@ -233,12 +197,7 @@ export class AuthGuard implements CanActivate {
 
     const access = await this.principals.resolveAccess(user);
     const principal: Principal = {
-      kind:
-        verified.type === 'harness'
-          ? 'harness'
-          : user.kind === 'portal'
-            ? 'portal'
-            : 'internal',
+      kind: verified.type === 'harness' ? 'harness' : user.kind === 'portal' ? 'portal' : 'internal',
       userId: user.id,
       email: user.email,
       displayName: `${user.first_name} ${user.last_name}`.trim() || user.email,
@@ -251,13 +210,9 @@ export class AuthGuard implements CanActivate {
     return principal;
   }
 
-  private async findUser(
-    verified: VerifiedToken,
-  ): Promise<UserRow | undefined> {
+  private async findUser(verified: VerifiedToken): Promise<UserRow | undefined> {
     if (verified.type === 'harness') {
-      return verified.email
-        ? this.principals.findUserByEmail(verified.email)
-        : undefined;
+      return verified.email ? this.principals.findUserByEmail(verified.email) : undefined;
     }
     const byClerk = await this.principals.findUserByClerkId(verified.subject);
     if (byClerk) return byClerk;
@@ -272,14 +227,9 @@ export class AuthGuard implements CanActivate {
     };
   }
 
-  private async resolveApiClient(
-    token: string,
-    base: EventBase,
-  ): Promise<Principal> {
+  private async resolveApiClient(token: string, base: EventBase): Promise<Principal> {
     const client = await this.principals.findApiClient(token);
-    const expired = client?.expires_at
-      ? new Date(client.expires_at).getTime() < Date.now()
-      : false;
+    const expired = client?.expires_at ? new Date(client.expires_at).getTime() < Date.now() : false;
     if (!client || client.status !== 'active' || expired) {
       await this.deny({
         ...base,
@@ -316,12 +266,8 @@ export class AuthGuard implements CanActivate {
     return principal;
   }
 
-  private async noteSession(
-    principal: Principal,
-    base: EventBase,
-  ): Promise<void> {
-    const key =
-      principal.sessionId ?? `${principal.userId}:${principal.tokenType}`;
+  private async noteSession(principal: Principal, base: EventBase): Promise<void> {
+    const key = principal.sessionId ?? `${principal.userId}:${principal.tokenType}`;
     if (this.seenSessions.has(key)) return;
     if (this.seenSessions.size > 5000) {
       const oldest = this.seenSessions.keys().next().value;
@@ -352,10 +298,7 @@ type EventBase = {
 
 function actor(
   principal: Principal,
-): Pick<
-  SecurityEvent,
-  'actorKind' | 'actorId' | 'actorName' | 'principalKind' | 'sessionId'
-> {
+): Pick<SecurityEvent, 'actorKind' | 'actorId' | 'actorName' | 'principalKind' | 'sessionId'> {
   return {
     actorKind: actorKindOf(principal),
     actorId: principal.userId,

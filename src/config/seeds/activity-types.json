@@ -1,0 +1,14 @@
+{
+  "items": [
+    { "key": "analysis", "label": "Analysis and investigation", "billable_class": "billable" },
+    { "key": "development", "label": "Development and configuration", "billable_class": "billable" },
+    { "key": "testing", "label": "Testing and validation", "billable_class": "billable" },
+    { "key": "deployment", "label": "Deployment and release", "billable_class": "billable" },
+    { "key": "client_meeting", "label": "Client meeting", "billable_class": "billable" },
+    { "key": "documentation", "label": "Documentation", "billable_class": "billable" },
+    { "key": "training", "label": "Training and knowledge transfer", "billable_class": "billable" },
+    { "key": "internal_review", "label": "Internal review", "billable_class": "non_billable" },
+    { "key": "rework", "label": "Rework of own defect", "billable_class": "absorbed" },
+    { "key": "governance", "label": "Governance and account management", "billable_class": "non_billable" }
+  ]
+}

@@ -4,11 +4,7 @@ import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
-import {
-  collectRouteTable,
-  undeclaredRoutes,
-  type RouteEntry,
-} from '../src/common/auth/route-table.js';
+import { collectRouteTable, undeclaredRoutes, type RouteEntry } from '../src/common/auth/route-table.js';
 import { isPermission } from '../src/contracts/permissions.js';
 
 /**
@@ -45,10 +41,7 @@ describe('route and permission snapshot', () => {
   it('uses only permissions from the catalog', () => {
     for (const entry of table) {
       if (entry.permission && entry.permission !== 'authenticated') {
-        expect(
-          isPermission(entry.permission),
-          `${entry.method} ${entry.path} uses ${entry.permission}`,
-        ).toBe(true);
+        expect(isPermission(entry.permission), `${entry.method} ${entry.path} uses ${entry.permission}`).toBe(true);
       }
     }
   });
@@ -57,10 +50,7 @@ describe('route and permission snapshot', () => {
     for (const entry of table) {
       if (entry.public) continue;
       const underPortal = entry.path.startsWith('/v1/portal');
-      expect(
-        entry.realm === 'portal',
-        `${entry.method} ${entry.path} realm ${entry.realm}`,
-      ).toBe(underPortal);
+      expect(entry.realm === 'portal', `${entry.method} ${entry.path} realm ${entry.realm}`).toBe(underPortal);
     }
   });
 

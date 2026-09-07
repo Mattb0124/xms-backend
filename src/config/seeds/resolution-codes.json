@@ -1,0 +1,15 @@
+{
+  "items": [
+    { "key": "fixed", "label": "Fixed", "no_solution": false },
+    { "key": "configuration_change", "label": "Configuration change", "no_solution": false },
+    { "key": "workaround", "label": "Workaround provided", "no_solution": false },
+    { "key": "user_guidance", "label": "User guidance", "no_solution": false },
+    { "key": "data_correction", "label": "Data correction", "no_solution": false },
+    { "key": "vendor_fix", "label": "Vendor fix", "no_solution": false },
+    { "key": "no_fault_found", "label": "No fault found", "no_solution": true },
+    { "key": "duplicate", "label": "Duplicate", "no_solution": true },
+    { "key": "cancelled_by_client", "label": "Cancelled by client", "no_solution": true },
+    { "key": "out_of_scope", "label": "Out of scope", "no_solution": true },
+    { "key": "known_error", "label": "Known error, no fix available", "no_solution": true }
+  ]
+}

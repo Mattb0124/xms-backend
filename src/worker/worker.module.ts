@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CommonModule } from '../common/common.module.js';
 import { DbModule } from '../db/db.module.js';
 import { HealthModule } from '../health/health.module.js';
 
@@ -9,6 +10,6 @@ import { HealthModule } from '../health/health.module.js';
  * SLA breach sweeper (P2.10.2), snapshots (P2.19.2), report packs (P2.20.1).
  */
 @Module({
-  imports: [DbModule, HealthModule],
+  imports: [DbModule, CommonModule, HealthModule],
 })
 export class WorkerModule {}

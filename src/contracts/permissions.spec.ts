@@ -12,11 +12,7 @@ import {
 describe('permission catalog', () => {
   it('expands implications transitively (A implies B implies C yields C)', () => {
     const closure = expandPermissions(['time:lock-period']);
-    expect([...closure].sort()).toEqual([
-      'time:adjust',
-      'time:lock-period',
-      'time:log',
-    ]);
+    expect([...closure].sort()).toEqual(['time:adjust', 'time:lock-period', 'time:log']);
   });
 
   it('drops keys outside the catalog instead of granting them', () => {
@@ -27,9 +23,7 @@ describe('permission catalog', () => {
   it('never implies across catalogs', () => {
     for (const [key, implied] of Object.entries(PERMISSION_IMPLICATIONS)) {
       for (const target of implied ?? []) {
-        expect(catalogOf(target), `${key} implies ${target}`).toBe(
-          catalogOf(key as never),
-        );
+        expect(catalogOf(target), `${key} implies ${target}`).toBe(catalogOf(key as never));
       }
     }
   });
@@ -47,17 +41,13 @@ describe('permission catalog', () => {
 
   it('gives the Administrator role every operator permission after expansion', () => {
     const closure = expandPermissions(SYSTEM_ROLES.operator.Administrator);
-    const operator = ALL_PERMISSIONS.filter(
-      (key) => catalogOf(key) === 'operator',
-    );
+    const operator = ALL_PERMISSIONS.filter((key) => catalogOf(key) === 'operator');
     expect(operator.filter((key) => !closure.has(key))).toEqual([]);
   });
 
   it('describes a catalog with labels and direct implications', () => {
     const rows = describeCatalog('portal');
     expect(rows.map((row) => row.key)).toContain('portal:submit');
-    expect(
-      rows.find((row) => row.key === 'portal:manage-users')!.implies,
-    ).toEqual(['portal:view-org-tickets']);
+    expect(rows.find((row) => row.key === 'portal:manage-users')!.implies).toEqual(['portal:view-org-tickets']);
   });
 });

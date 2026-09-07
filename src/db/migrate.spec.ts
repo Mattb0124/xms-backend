@@ -8,9 +8,7 @@ describe('migration files', () => {
   it('lists the repository migrations in numeric order with stable checksums', () => {
     const files = listMigrations(MIGRATIONS_DIR);
     expect(files.length).toBeGreaterThanOrEqual(3);
-    expect(files.map((file) => file.id)).toEqual(
-      files.map((file) => file.id).sort(),
-    );
+    expect(files.map((file) => file.id)).toEqual(files.map((file) => file.id).sort());
     expect(files[0].name).toBe('0001_foundation');
     expect(files[0].checksum).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -27,14 +25,11 @@ describe('migration files', () => {
     // Static guard next to the runtime isolation suite: a migration that
     // creates an acct.* table must call sys.apply_account_isolation on it.
     for (const file of listMigrations(MIGRATIONS_DIR)) {
-      const created = [
-        ...file.sql.matchAll(/create table (acct\.[a-z_]+)/g),
-      ].map((match) => match[1]);
+      const created = [...file.sql.matchAll(/create table (acct\.[a-z_]+)/g)].map((match) => match[1]);
       for (const table of created) {
-        expect(
-          file.sql,
-          `${file.name} creates ${table} without sys.apply_account_isolation`,
-        ).toContain(`sys.apply_account_isolation('${table}'`);
+        expect(file.sql, `${file.name} creates ${table} without sys.apply_account_isolation`).toContain(
+          `sys.apply_account_isolation('${table}'`,
+        );
       }
     }
   });

@@ -1,0 +1,8 @@
+{
+  "items": [
+    { "key": "billable", "label": "Billable", "consumes_contract": true },
+    { "key": "non_billable", "label": "Non-billable", "consumes_contract": false },
+    { "key": "absorbed", "label": "Absorbed by Hackett", "consumes_contract": false },
+    { "key": "fixed_fee", "label": "Fixed fee", "consumes_contract": false }
+  ]
+}

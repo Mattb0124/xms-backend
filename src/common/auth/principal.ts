@@ -23,16 +23,11 @@ export interface Principal {
   readonly tokenType: 'clerk' | 'clerk_agents' | 'harness' | 'api_key' | 'dev';
 }
 
-export function hasPermission(
-  principal: Principal,
-  permission: Permission,
-): boolean {
+export function hasPermission(principal: Principal, permission: Permission): boolean {
   return principal.permissions.has(permission);
 }
 
-export function actorKindOf(
-  principal: Principal,
-): 'user' | 'portal_user' | 'api_client' {
+export function actorKindOf(principal: Principal): 'user' | 'portal_user' | 'api_client' {
   switch (principal.kind) {
     case 'portal':
       return 'portal_user';

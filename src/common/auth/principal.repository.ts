@@ -1,10 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import {
-  expandPermissions,
-  type Permission,
-} from '../../contracts/permissions.js';
+import { expandPermissions, type Permission } from '../../contracts/permissions.js';
 import { DbPools } from '../../db/pool.js';
 
 /**
@@ -72,10 +69,9 @@ export class PrincipalRepository {
   async findUserById(id: string): Promise<UserRow | undefined> {
     const result = await this.pools
       .get('app')
-      .query<UserRow>(
-        'select id, kind, account_id, email, first_name, last_name, status from op.users where id = $1',
-        [id],
-      );
+      .query<UserRow>('select id, kind, account_id, email, first_name, last_name, status from op.users where id = $1', [
+        id,
+      ]);
     return result.rows[0];
   }
 
@@ -89,11 +85,7 @@ export class PrincipalRepository {
   }
 
   async touchSignIn(userId: string): Promise<void> {
-    await this.pools
-      .get('app')
-      .query('update op.users set last_sign_in_at = now() where id = $1', [
-        userId,
-      ]);
+    await this.pools.get('app').query('update op.users set last_sign_in_at = now() where id = $1', [userId]);
   }
 
   /** Grants and the transitive permission closure for a user. */
@@ -121,20 +113,29 @@ export class PrincipalRepository {
         where ra.user_id = $1 and r.status = 'active' and r.catalog = $2`,
       [user.id, user.kind === 'portal' ? 'portal' : 'operator'],
     );
+    // Administrators (admin:accounts) are granted every live account
+    // implicitly: account administration is by definition portfolio-wide.
+    const globalPermissions = expandPermissions(
+      granted.rows.flatMap((row) => (row.account_id === null ? row.permissions : [])),
+    );
+    const isAdministrator = globalPermissions.has('admin:accounts');
+    const boundAccountIds = isAdministrator
+      ? (
+          await pool.query<{ id: string }>(
+            `select id from op.accounts where status in ('onboarding', 'active', 'suspended', 'offboarding')`,
+          )
+        ).rows.map((row) => row.id)
+      : accountIds;
     // Account-scoped role assignments contribute only when the account is
     // granted; Phase 1 treats them as global within the granted set (the
     // record-level scoping lands with the admin screens).
     const keys = granted.rows.flatMap((row) =>
-      row.account_id === null || accountIds.includes(row.account_id)
-        ? row.permissions
-        : [],
+      row.account_id === null || accountIds.includes(row.account_id) ? row.permissions : [],
     );
-    return { user, accountIds, permissions: expandPermissions(keys) };
+    return { user, accountIds: boundAccountIds, permissions: expandPermissions(keys) };
   }
 
-  async findApiClient(
-    key: string,
-  ): Promise<(ApiClientRow & { accountIds: string[] }) | undefined> {
+  async findApiClient(key: string): Promise<(ApiClientRow & { accountIds: string[] }) | undefined> {
     if (!key.startsWith(API_KEY_PREFIX)) return undefined;
     const pool = this.pools.get('app');
     const result = await pool.query<ApiClientRow>(
@@ -154,10 +155,6 @@ export class PrincipalRepository {
   }
 
   async touchApiClient(id: string): Promise<void> {
-    await this.pools
-      .get('app')
-      .query('update op.api_clients set last_used_at = now() where id = $1', [
-        id,
-      ]);
+    await this.pools.get('app').query('update op.api_clients set last_used_at = now() where id = $1', [id]);
   }
 }

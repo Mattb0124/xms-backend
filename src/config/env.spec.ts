@@ -12,18 +12,16 @@ describe('loadEnv', () => {
   });
 
   it('splits CORS origins and rejects a malformed port', () => {
-    expect(
-      loadEnv({ CORS_ORIGINS: 'https://xms.example, https://portal.example' })
-        .CORS_ORIGINS,
-    ).toEqual(['https://xms.example', 'https://portal.example']);
+    expect(loadEnv({ CORS_ORIGINS: 'https://xms.example, https://portal.example' }).CORS_ORIGINS).toEqual([
+      'https://xms.example',
+      'https://portal.example',
+    ]);
     resetEnvForTests();
     expect(() => loadEnv({ PORT: 'eighty' })).toThrow(/PORT/);
   });
 
   it('rejects a database URL that is not a URL', () => {
-    expect(() => loadEnv({ DATABASE_URL_APP: 'not-a-url' })).toThrow(
-      /DATABASE_URL_APP/,
-    );
+    expect(() => loadEnv({ DATABASE_URL_APP: 'not-a-url' })).toThrow(/DATABASE_URL_APP/);
   });
 });
 
@@ -38,30 +36,22 @@ describe('loadEnv production guard rails', () => {
   };
 
   it('accepts a complete production environment', () => {
-    expect(loadEnv(production).CLERK_AUTHORIZED_PARTIES).toEqual([
-      'https://xms.example.test',
-    ]);
+    expect(loadEnv(production).CLERK_AUTHORIZED_PARTIES).toEqual(['https://xms.example.test']);
   });
 
   it('refuses development tokens in production', () => {
-    expect(() =>
-      loadEnv({ ...production, AUTH_DEV_SECRET: 'not-in-production-ever' }),
-    ).toThrow(/AUTH_DEV_SECRET/);
+    expect(() => loadEnv({ ...production, AUTH_DEV_SECRET: 'not-in-production-ever' })).toThrow(/AUTH_DEV_SECRET/);
   });
 
   it('requires the Clerk issuer and authorised parties in production', () => {
-    expect(() =>
-      loadEnv({ NODE_ENV: 'production', IP_HASH_SALT: 'x' }),
-    ).toThrow(/CLERK_ISSUER/);
-    expect(() =>
-      loadEnv({ ...production, CLERK_AUTHORIZED_PARTIES: '' }),
-    ).toThrow(/CLERK_AUTHORIZED_PARTIES/);
+    expect(() => loadEnv({ NODE_ENV: 'production', IP_HASH_SALT: 'x' })).toThrow(/CLERK_ISSUER/);
+    expect(() => loadEnv({ ...production, CLERK_AUTHORIZED_PARTIES: '' })).toThrow(/CLERK_AUTHORIZED_PARTIES/);
   });
 
   it('splits bootstrap administrator emails', () => {
-    expect(
-      loadEnv({ BOOTSTRAP_ADMIN_EMAILS: 'a@x.test, b@x.test' })
-        .BOOTSTRAP_ADMIN_EMAILS,
-    ).toEqual(['a@x.test', 'b@x.test']);
+    expect(loadEnv({ BOOTSTRAP_ADMIN_EMAILS: 'a@x.test, b@x.test' }).BOOTSTRAP_ADMIN_EMAILS).toEqual([
+      'a@x.test',
+      'b@x.test',
+    ]);
   });
 });

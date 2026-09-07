@@ -65,9 +65,7 @@ export async function migrate(
     // One runner at a time; a second pipeline job waits instead of racing.
     await client.query('select pg_advisory_lock(7245901)');
     const done = new Map<string, string>();
-    for (const row of (
-      await client.query('select id, checksum from public.xms_migrations')
-    ).rows) {
+    for (const row of (await client.query('select id, checksum from public.xms_migrations')).rows) {
       done.set(row.id as string, row.checksum as string);
     }
     for (const migration of listMigrations(options.dir)) {
@@ -85,16 +83,15 @@ export async function migrate(
       await client.query('begin');
       try {
         await client.query(migration.sql);
-        await client.query(
-          'insert into public.xms_migrations (id, name, checksum) values ($1, $2, $3)',
-          [migration.id, migration.name, migration.checksum],
-        );
+        await client.query('insert into public.xms_migrations (id, name, checksum) values ($1, $2, $3)', [
+          migration.id,
+          migration.name,
+          migration.checksum,
+        ]);
         await client.query('commit');
       } catch (error) {
         await client.query('rollback');
-        throw new Error(
-          `Migration ${migration.name} failed: ${(error as Error).message}`,
-        );
+        throw new Error(`Migration ${migration.name} failed: ${(error as Error).message}`);
       }
       applied.push(migration.name);
     }
@@ -105,8 +102,7 @@ export async function migrate(
   return { applied, skipped };
 }
 
-const invokedDirectly =
-  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (invokedDirectly) {
   const url = process.env.DATABASE_URL_MIGRATOR;
   if (!url) {
@@ -115,9 +111,7 @@ if (invokedDirectly) {
   }
   migrate(url, { log: (line) => console.log(line) })
     .then((result) => {
-      console.log(
-        `applied ${result.applied.length}, already applied ${result.skipped.length}`,
-      );
+      console.log(`applied ${result.applied.length}, already applied ${result.skipped.length}`);
     })
     .catch((error) => {
       console.error(error.message);

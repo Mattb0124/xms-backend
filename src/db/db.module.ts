@@ -1,9 +1,4 @@
-import {
-  Global,
-  Module,
-  type OnModuleDestroy,
-  type OnModuleInit,
-} from '@nestjs/common';
+import { Global, Module, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { loadEnv } from '../config/env.js';
 import { HealthModule } from '../health/health.module.js';
 import { HealthService } from '../health/health.service.js';
@@ -42,11 +37,7 @@ export class DbModule implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit(): void {
-    const role = this.pools.has('app')
-      ? 'app'
-      : this.pools.has('worker')
-        ? 'worker'
-        : undefined;
+    const role = this.pools.has('app') ? 'app' : this.pools.has('worker') ? 'worker' : undefined;
     if (role) {
       this.health.register('database', () => this.pools.ping(role));
     }

@@ -1,0 +1,35 @@
+{
+  "calendar": "24x7",
+  "targets": {
+    "incident": {
+      "p1": { "response_minutes": 30, "resolution_minutes": 240 },
+      "p2": { "response_minutes": 60, "resolution_minutes": 480 },
+      "p3": { "response_minutes": 240, "resolution_minutes": 1440 },
+      "p4": { "response_minutes": 480, "resolution_minutes": 2880 }
+    },
+    "service_request": {
+      "p1": { "response_minutes": 60, "resolution_minutes": 480 },
+      "p2": { "response_minutes": 240, "resolution_minutes": 1440 },
+      "p3": { "response_minutes": 480, "resolution_minutes": 2880 },
+      "p4": { "response_minutes": 960, "resolution_minutes": 5760 }
+    },
+    "change": {
+      "p1": { "response_minutes": 240, "resolution_minutes": null },
+      "p2": { "response_minutes": 480, "resolution_minutes": null },
+      "p3": { "response_minutes": 960, "resolution_minutes": null },
+      "p4": { "response_minutes": 1440, "resolution_minutes": null }
+    },
+    "problem": {
+      "p1": { "response_minutes": null, "resolution_minutes": 14400 },
+      "p2": { "response_minutes": null, "resolution_minutes": 28800 },
+      "p3": { "response_minutes": null, "resolution_minutes": null },
+      "p4": { "response_minutes": null, "resolution_minutes": null }
+    },
+    "project_task": {
+      "p1": { "response_minutes": null, "resolution_minutes": null },
+      "p2": { "response_minutes": null, "resolution_minutes": null },
+      "p3": { "response_minutes": null, "resolution_minutes": null },
+      "p4": { "response_minutes": null, "resolution_minutes": null }
+    }
+  }
+}

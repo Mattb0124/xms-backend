@@ -33,9 +33,7 @@ const OVERRIDES: Record<string, Record<string, unknown>> = {
   'acct.calendar_hours': { weekday: 1, start_minute: 540, end_minute: 1020 },
 };
 
-export async function listAccountScopedTables(
-  client: pg.Client,
-): Promise<TableInfo[]> {
+export async function listAccountScopedTables(client: pg.Client): Promise<TableInfo[]> {
   const tables = await client.query<{
     schema: string;
     name: string;
@@ -59,10 +57,10 @@ export async function listAccountScopedTables(
       cmd: string;
       qual: string | null;
       with_check: string | null;
-    }>(
-      `select policyname, roles, cmd, qual, with_check from pg_policies where schemaname = $1 and tablename = $2`,
-      [row.schema, row.name],
-    );
+    }>(`select policyname, roles, cmd, qual, with_check from pg_policies where schemaname = $1 and tablename = $2`, [
+      row.schema,
+      row.name,
+    ]);
     const privileges = await client.query<{ privilege_type: string }>(
       `select privilege_type from information_schema.role_table_grants
         where grantee = 'xms_portal' and table_schema = $1 and table_name = $2`,
@@ -73,9 +71,7 @@ export async function listAccountScopedTables(
         where table_schema = $1 and table_name = $2 and (is_generated = 'ALWAYS' or is_identity = 'YES')`,
       [row.schema, row.name],
     );
-    const portalPrivileges = privileges.rows.map(
-      (privilege) => privilege.privilege_type,
-    );
+    const portalPrivileges = privileges.rows.map((privilege) => privilege.privilege_type);
     result.push({
       schema: row.schema,
       name: row.name,
@@ -146,17 +142,9 @@ export async function insertFixtureRow(
       values[column.name] = overrides[column.name];
       continue;
     }
-    const fk = foreignKeys.find(
-      (candidate) => candidate.column === column.name,
-    );
+    const fk = foreignKeys.find((candidate) => candidate.column === column.name);
     if (fk) {
-      if (!column.nullable)
-        values[column.name] = await parentId(
-          client,
-          fk.refTable,
-          accountId,
-          cache,
-        );
+      if (!column.nullable) values[column.name] = await parentId(client, fk.refTable, accountId, cache);
       continue;
     }
     if (column.nullable || column.hasDefault) continue;
@@ -188,11 +176,7 @@ async function parentId(
   return id;
 }
 
-async function loadColumns(
-  client: pg.Client,
-  schema: string,
-  name: string,
-): Promise<ColumnInfo[]> {
+async function loadColumns(client: pg.Client, schema: string, name: string): Promise<ColumnInfo[]> {
   const result = await client.query<{
     column_name: string;
     data_type: string;
@@ -216,11 +200,7 @@ async function loadColumns(
   }));
 }
 
-async function loadForeignKeys(
-  client: pg.Client,
-  schema: string,
-  name: string,
-): Promise<ForeignKey[]> {
+async function loadForeignKeys(client: pg.Client, schema: string, name: string): Promise<ForeignKey[]> {
   const result = await client.query<{
     column: string;
     ref_schema: string;
@@ -242,11 +222,7 @@ async function loadForeignKeys(
   }));
 }
 
-async function loadCheckVocabularies(
-  client: pg.Client,
-  schema: string,
-  name: string,
-): Promise<Map<string, string>> {
+async function loadCheckVocabularies(client: pg.Client, schema: string, name: string): Promise<Map<string, string>> {
   const result = await client.query<{ definition: string }>(
     `select pg_get_constraintdef(con.oid) as definition
        from pg_constraint con
@@ -258,9 +234,7 @@ async function loadCheckVocabularies(
   const vocab = new Map<string, string>();
   for (const row of result.rows) {
     // CHECK ((status = ANY (ARRAY['a'::text, 'b'::text]))) -> status: a
-    const match = row.definition.match(
-      /\(\(?(\w+)\)?(?:::text)? = ANY \(\(?ARRAY\['([^']+)'/,
-    );
+    const match = row.definition.match(/\(\(?(\w+)\)?(?:::text)? = ANY \(\(?ARRAY\['([^']+)'/);
     if (match) vocab.set(match[1], match[2]);
   }
   return vocab;
@@ -275,9 +249,7 @@ function valueFor(column: ColumnInfo, vocabulary: string | undefined): unknown {
     case 'text':
     case 'varchar':
     case 'bpchar':
-      return column.name.includes('email')
-        ? `fixture-${suffix}@example.test`
-        : `fixture ${suffix}`;
+      return column.name.includes('email') ? `fixture-${suffix}@example.test` : `fixture ${suffix}`;
     case 'citext':
       return `fixture-${suffix}@example.test`;
     case 'int2':

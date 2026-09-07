@@ -52,31 +52,22 @@ export async function withSession<T>(
     // the session-level values guarantees a pooled connection never carries a
     // binding forward.
     await client
-      .query(
-        "select set_config('xms.account_ids', '', false), set_config('xms.account_id', '', false)",
-      )
+      .query("select set_config('xms.account_ids', '', false), set_config('xms.account_id', '', false)")
       .catch(() => undefined);
     client.release();
   }
 }
 
-async function bind(
-  client: pg.PoolClient,
-  binding: AccountBinding,
-): Promise<void> {
+async function bind(client: pg.PoolClient, binding: AccountBinding): Promise<void> {
   switch (binding.kind) {
     case 'operator': {
       const ids = binding.accountIds.map(assertUuid);
       // set_config with is_local = true is the parameterised form of SET LOCAL.
-      await client.query("select set_config('xms.account_ids', $1, true)", [
-        `{${ids.join(',')}}`,
-      ]);
+      await client.query("select set_config('xms.account_ids', $1, true)", [`{${ids.join(',')}}`]);
       return;
     }
     case 'portal': {
-      await client.query("select set_config('xms.account_id', $1, true)", [
-        assertUuid(binding.accountId),
-      ]);
+      await client.query("select set_config('xms.account_id', $1, true)", [assertUuid(binding.accountId)]);
       return;
     }
     case 'none':

@@ -113,14 +113,7 @@ export const AUDIT_EVENT_TYPES = [
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
 
-export type ActorKind =
-  | 'user'
-  | 'portal_user'
-  | 'api_client'
-  | 'system'
-  | 'ai'
-  | 'sync'
-  | 'anonymous';
+export type ActorKind = 'user' | 'portal_user' | 'api_client' | 'system' | 'ai' | 'sync' | 'anonymous';
 export type PrincipalKind = 'internal' | 'portal' | 'api_client' | 'harness';
 export type Outcome = 'success' | 'denied' | 'failed' | 'withheld';
 

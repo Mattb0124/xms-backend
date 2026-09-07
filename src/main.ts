@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
+import { HttpExceptionFilter } from './common/http-exception.filter.js';
 import { requestContextMiddleware } from './common/request-context.middleware.js';
 import { loadEnv } from './config/env.js';
 
@@ -29,6 +30,7 @@ async function bootstrap(): Promise<void> {
       transformOptions: { enableImplicitConversion: false },
     }),
   );
+  app.useGlobalFilters(new HttpExceptionFilter());
   app.enableCors({ origin: env.CORS_ORIGINS, credentials: true });
   app.enableShutdownHooks();
 

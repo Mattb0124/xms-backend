@@ -24,18 +24,12 @@ declare module 'vitest' {
 const ROLE_PASSWORD = 'xms';
 const ROLES = ['xms_app', 'xms_portal', 'xms_worker', 'xms_migrator'] as const;
 
-export default async function setup(
-  project: TestProject,
-): Promise<() => Promise<void>> {
+export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   let superuser = process.env.TEST_DATABASE_URL;
   let stop: () => Promise<void> = async () => undefined;
   if (!superuser) {
     const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
-    const container = await new PostgreSqlContainer(
-      'pgvector/pgvector:0.8.0-pg16',
-    )
-      .withDatabase('xms_test')
-      .start();
+    const container = await new PostgreSqlContainer('pgvector/pgvector:0.8.0-pg16').withDatabase('xms_test').start();
     superuser = container.getConnectionUri();
     stop = async () => {
       await container.stop();
@@ -46,18 +40,11 @@ export default async function setup(
   await client.connect();
   try {
     for (const role of ROLES) {
-      const exists = await client.query(
-        'select 1 from pg_roles where rolname = $1',
-        [role],
-      );
+      const exists = await client.query('select 1 from pg_roles where rolname = $1', [role]);
       if (exists.rowCount === 0) {
-        await client.query(
-          `create role ${role} login password '${ROLE_PASSWORD}'`,
-        );
+        await client.query(`create role ${role} login password '${ROLE_PASSWORD}'`);
       } else {
-        await client.query(
-          `alter role ${role} login password '${ROLE_PASSWORD}'`,
-        );
+        await client.query(`alter role ${role} login password '${ROLE_PASSWORD}'`);
       }
     }
   } finally {
