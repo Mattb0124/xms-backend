@@ -621,6 +621,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/admin/integrity/archives",
+    "controller": "IntegrityController",
+    "handler": "listArchives",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/integrity/digests",
     "controller": "IntegrityController",
     "handler": "list",

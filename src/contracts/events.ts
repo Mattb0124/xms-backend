@@ -60,6 +60,7 @@ export const SECURITY_EVENT_TYPES = [
   'abuse.csp_violation',
   'integrity.digest.written',
   'integrity.digest.mismatch',
+  'integrity.archive.written',
   // AI
   'ai.turn.started',
   'ai.turn.failed',

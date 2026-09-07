@@ -5,7 +5,7 @@ import { StorageCoreModule } from '../common/storage/storage.module.js';
 import { AiCoreModule } from '../modules/ai/ai.module.js';
 import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
-import { DigestService, IntegrityCoreModule } from '../modules/integrity/integrity.module.js';
+import { ArchiveService, DigestService, IntegrityCoreModule } from '../modules/integrity/integrity.module.js';
 import { CalendarsCoreModule } from '../modules/calendars/calendars.module.js';
 import { ConnectorsCoreModule } from '../modules/connectors/connectors.module.js';
 import { SyncWorker } from '../modules/connectors/sync.worker.js';
@@ -68,6 +68,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly sync: SyncWorker,
     private readonly periods: PeriodJobs,
     private readonly roster: RosterJobs,
+    private readonly archive: ArchiveService,
   ) {}
 
   onModuleInit(): void {
@@ -93,5 +94,6 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.sync.healthJob());
     this.runner.schedule(this.periods.autoLock());
     this.runner.schedule(this.roster.certificationExpiry());
+    this.runner.schedule(this.archive.archiveJob());
   }
 }

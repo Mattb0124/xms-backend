@@ -13,6 +13,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsOptional, Matches } from 'class-validator';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { SecurityEventsService } from '../../common/events/security-events.service.js';
@@ -263,7 +264,13 @@ export class DigestService {
     return { digest: outer.digest('hex'), count: rows.length };
   }
 
-  private async rowsOf(stream: Stream, day: string): Promise<string[]> {
+  /** The first day a stream has events, for the archive's catch-up. */
+  firstDayOf(stream: Stream): Promise<string | undefined> {
+    return this.firstDay(stream);
+  }
+
+  /** The canonical rows of a stream and day (the archive writes exactly these). */
+  async rowsOf(stream: Stream, day: string): Promise<string[]> {
     const from = `${day}T00:00:00Z`;
     const to = `${nextDay(day)}T00:00:00Z`;
     if (stream === 'audit') {
@@ -336,6 +343,127 @@ export function nextDay(day: string): string {
   return dayOf(new Date(new Date(`${day}T00:00:00Z`).getTime() + 86_400_000));
 }
 
+/**
+ * Cold storage for the three event streams (Audit & Analytics section 5,
+ * XA-04): every night the previous day's rows of each stream go to the
+ * object store as gzipped NDJSON under audit/<stream>/<yyyy>/<mm>/<dd>/,
+ * the same canonical rows the digest hashes, so the file and the digest
+ * describe one another. One append-only row per stream and day records
+ * the key, the count, the size and the file checksum. Parquet and Glue
+ * wait for the AWS environment; NDJSON reads anywhere and converts later.
+ */
+export interface ArchiveRow {
+  id: string;
+  stream: Stream;
+  day: string;
+  object_key: string;
+  row_count: number;
+  byte_count: number;
+  checksum: string;
+  digest_id: string | null;
+  created_at: string;
+}
+
+export function archiveKey(stream: Stream, day: string): string {
+  const [year, month, date] = day.split('-');
+  return `audit/${stream}/${year}/${month}/${date}/rows.ndjson.gz`;
+}
+
+@Injectable()
+export class ArchiveService {
+  private readonly logger = new Logger(ArchiveService.name);
+
+  constructor(
+    private readonly pools: DbPools,
+    private readonly digests: DigestService,
+    private readonly security: SecurityEventsService,
+    @Inject(OBJECT_STORE) private readonly store: ObjectStore,
+  ) {}
+
+  archiveJob(intervalMs = 60 * 60_000): Job {
+    return { name: 'integrity.archive', intervalMs, run: () => this.exportMissing() };
+  }
+
+  /** Exports every day from the last archive (or the first event) up to yesterday, per stream. */
+  async exportMissing(reference = new Date()): Promise<string> {
+    const yesterday = dayOf(new Date(reference.getTime() - 86_400_000));
+    let exported = 0;
+    for (const stream of STREAMS) {
+      const last = await this.last(stream);
+      const start = last ? nextDay(last.day) : await this.digests.firstDayOf(stream);
+      if (!start) continue;
+      for (let day = start; day <= yesterday; day = nextDay(day)) {
+        await this.export(stream, day);
+        exported += 1;
+      }
+    }
+    return `archived ${exported}`;
+  }
+
+  async export(stream: Stream, day: string, by = 'worker'): Promise<ArchiveRow> {
+    const existing = await this.archiveFor(stream, day);
+    if (existing) return existing;
+    const rows = await this.digests.rowsOf(stream, day);
+    const body = gzipSync(Buffer.from(rows.map((row) => `${row}\n`).join(''), 'utf8'));
+    const checksum = createHash('sha256').update(body).digest('hex');
+    const key = archiveKey(stream, day);
+    await this.store.putObject(key, body, 'application/gzip');
+    const digest = await this.pools
+      .get('worker')
+      .query<{ id: string }>('select id from sys.event_digests where stream = $1 and day = $2', [stream, day]);
+    const row = (
+      await this.pools.get('worker').query<ArchiveRow>(
+        `insert into sys.event_archives (stream, day, object_key, row_count, byte_count, checksum, digest_id)
+           values ($1, $2, $3, $4, $5, $6, $7) returning id, stream, day::text as day, object_key, row_count, byte_count, checksum, digest_id, created_at`,
+        [stream, day, key, rows.length, body.byteLength, checksum, digest.rows[0]?.id ?? null],
+      )
+    ).rows[0];
+    await this.security.write({
+      type: 'integrity.archive.written',
+      outcome: 'success',
+      actorKind: 'system',
+      actorId: by,
+      entityKind: 'event_archive',
+      entityId: row.id,
+      attrs: { stream, day, row_count: rows.length, byte_count: body.byteLength, checksum, object_key: key },
+    });
+    this.logger.log(`archived ${stream} ${day}: ${rows.length} rows, ${body.byteLength} bytes`);
+    return row;
+  }
+
+  list(limit = 100): Promise<ArchiveRow[]> {
+    return this.pools
+      .get('app')
+      .query<ArchiveRow>(
+        'select id, stream, day::text as day, object_key, row_count, byte_count, checksum, digest_id, created_at from sys.event_archives order by day desc, stream limit $1',
+        [Math.min(Math.max(1, limit), 1000)],
+      )
+      .then((result) => result.rows);
+  }
+
+  private async last(stream: Stream): Promise<ArchiveRow | undefined> {
+    return (
+      await this.pools
+        .get('worker')
+        .query<ArchiveRow>(
+          'select id, stream, day::text as day, object_key, row_count, byte_count, checksum, digest_id, created_at from sys.event_archives where stream = $1 order by day desc limit 1',
+          [stream],
+        )
+    ).rows[0];
+  }
+
+  private async archiveFor(stream: Stream, day: string): Promise<ArchiveRow | undefined> {
+    return (
+      await this.pools
+        .get('worker')
+        .query<ArchiveRow>(
+          'select id, stream, day::text as day, object_key, row_count, byte_count, checksum, digest_id, created_at from sys.event_archives where stream = $1 and day = $2',
+          [stream, day],
+        )
+    ).rows[0];
+  }
+}
+
 class VerifyDto {
   @IsIn(STREAMS)
   stream!: Stream;
@@ -358,12 +486,21 @@ class ListQueryDto {
 @ApiBearerAuth()
 @Controller('admin/integrity')
 export class IntegrityController {
-  constructor(private readonly digests: DigestService) {}
+  constructor(
+    private readonly digests: DigestService,
+    private readonly archives: ArchiveService,
+  ) {}
 
   @Get('status')
   @RequirePermission('audit:read')
   status() {
     return this.digests.status();
+  }
+
+  @Get('archives')
+  @RequirePermission('audit:read')
+  listArchives(@Query('limit') limit?: string) {
+    return this.archives.list(limit ? Number(limit) : 100);
   }
 
   @Get('digests')
@@ -381,8 +518,8 @@ export class IntegrityController {
 
 @Module({
   imports: [StorageCoreModule],
-  providers: [DigestService],
-  exports: [DigestService],
+  providers: [DigestService, ArchiveService],
+  exports: [DigestService, ArchiveService],
 })
 export class IntegrityCoreModule {}
 
