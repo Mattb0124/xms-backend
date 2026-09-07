@@ -53,7 +53,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.listen(env.PORT);
-  logger.info({ port: env.PORT, version: env.APP_VERSION }, 'xms-api listening');
+  logger.info({ port: env.PORT }, 'xms-api listening');
 }
 
 await bootstrap();

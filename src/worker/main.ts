@@ -15,7 +15,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(WorkerModule, { bufferLogs: true, logger: new PinoLoggerService(logger) });
   app.enableShutdownHooks();
   await app.listen(env.PORT);
-  logger.info({ port: env.PORT, version: env.APP_VERSION }, 'xms-worker listening');
+  logger.info({ port: env.PORT }, 'xms-worker listening');
 }
 
 await bootstrap();
