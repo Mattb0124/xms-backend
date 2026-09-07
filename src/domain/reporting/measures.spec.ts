@@ -112,3 +112,33 @@ describe('measures', () => {
     expect(week.end.toISOString()).toBe('2026-09-07T00:00:00.000Z');
   });
 });
+
+describe('risk, assignment and empty periods', () => {
+  it('counts at-risk clocks inside the last quarter of their target, skips paused and breached ones', () => {
+    const measures = computeMeasures(
+      [
+        ticket({ key: 'A', resolutionRemainingMinutes: 20, resolutionTargetMinutes: 100 }),
+        ticket({ key: 'B', resolutionRemainingMinutes: 60, resolutionTargetMinutes: 100 }),
+        ticket({ key: 'C', resolutionRemainingMinutes: null, resolutionTargetMinutes: 100 }),
+        ticket({ key: 'D', resolutionRemainingMinutes: -5, resolutionTargetMinutes: 100, resolutionBreached: true }),
+        {
+          ...ticket({ key: 'E', resolutionRemainingMinutes: 5, resolutionTargetMinutes: 100 }),
+          assigneeId: 'u1',
+        } as TicketFacts,
+      ],
+      [],
+      period,
+      now,
+    );
+    expect(measures.at_risk_now).toBe(2);
+    expect(measures.breached_now).toBe(1);
+    expect(measures.unassigned_now).toBe(4);
+    expect(measures.open_by_type).toEqual({ incident: 5 });
+    expect(measures.mttr_minutes).toBeNull();
+    expect(measures.oldest_open_days).toBeCloseTo(8.1, 1);
+  });
+
+  it('lists nothing notable when every ticket is closed', () => {
+    expect(notableTickets([ticket({ state: 'closed', closedAt: now })], now)).toEqual([]);
+  });
+});

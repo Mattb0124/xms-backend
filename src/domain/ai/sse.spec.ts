@@ -70,3 +70,35 @@ describe('proposal extraction', () => {
     expect(extractProposal('```json\n[1,2]\n```')).toBeUndefined();
   });
 });
+
+describe('frame defaults', () => {
+  it('fills the documented defaults when optional fields are missing', () => {
+    const frames = new SseParser().push(
+      [
+        'data: {"type":"error"}\n\n',
+        'data: {"type":"cancelled"}\n\n',
+        'data: {"type":"attachment"}\n\n',
+        'data: {"type":"stream_started"}\n\n',
+        'data: {"type":"thread_created"}\n\n',
+        'data: {"content": 5}\n\n',
+        'data: 42\n\n',
+      ].join(''),
+    );
+    expect(frames).toEqual([
+      { type: 'error', error: 'unknown', code: undefined },
+      { type: 'cancelled', reason: undefined },
+      {
+        type: 'attachment',
+        filename: 'file',
+        mimeType: 'application/octet-stream',
+        size: 0,
+        contentBase64: undefined,
+        s3Key: undefined,
+      },
+      { type: 'stream_started', stream_id: '', model_id: undefined, build: undefined },
+      { type: 'thread_created', thread_id: '' },
+      { type: 'text', content: '' },
+      { type: 'unparsable', raw: '42' },
+    ]);
+  });
+});

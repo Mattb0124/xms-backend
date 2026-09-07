@@ -148,3 +148,31 @@ describe('view', () => {
     });
   });
 });
+
+describe('edge cases', () => {
+  it('marking a met clock again keeps the first time', () => {
+    const [response] = clocks();
+    const met = markMet(response, minutes(10));
+    expect(markMet(met, minutes(20)).metAt).toEqual(minutes(10));
+  });
+
+  it('restamping a met or breached clock changes nothing', () => {
+    const [response] = clocks();
+    const met = markMet(response, minutes(10));
+    expect(restampForPriority(met, 30, WALL_CLOCK, minutes(20))).toBe(met);
+    const { clock: breached } = latch(response, minutes(61));
+    expect(restampForPriority(breached, 30, WALL_CLOCK, minutes(70))).toBe(breached);
+  });
+
+  it('restamping a paused clock measures from the pause, not from now', () => {
+    const [response] = clocks();
+    const paused = pause(response, minutes(20));
+    const restamped = restampForPriority(paused, 90, WALL_CLOCK, minutes(50));
+    // 20 consumed, 70 remain, counted from the pause point so resume shifts it forward.
+    expect(restamped.dueAt).toEqual(minutes(90));
+    expect(restamped.targetMinutes).toBe(90);
+    const resumed = resume(restamped, WALL_CLOCK, minutes(50));
+    expect(resumed.clock.dueAt).toEqual(minutes(120));
+    expect(remaining(resumed.clock, WALL_CLOCK, minutes(50))).toBe(70);
+  });
+});

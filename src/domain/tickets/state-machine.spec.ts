@@ -138,3 +138,94 @@ describe('validateMachine', () => {
     expect(validateMachine(body)).toContain('transitions into paused state awaiting_client must require pause_reason');
   });
 });
+
+describe('machine queries', () => {
+  const incident = new StateMachine(machines.incident);
+
+  it('exposes the initial state, state definitions and terminal kinds', () => {
+    expect(incident.initial).toBe('new');
+    expect(incident.state('resolved')).toMatchObject({ kind: 'resolved', effects: { resolve: true } });
+    expect(incident.state('missing')).toBeUndefined();
+    expect(incident.isTerminal('closed')).toBe(true);
+    expect(incident.isTerminal('in_progress')).toBe(false);
+    expect(incident.isTerminal('missing')).toBe(false);
+  });
+
+  it('lists the transitions available to an internal user and the portal subset', () => {
+    const internal = incident.available('in_progress', { kind: 'internal' }).map((transition) => transition.to);
+    expect(internal).toEqual(['awaiting_client', 'awaiting_third_party', 'resolved', 'cancelled']);
+    const portal = incident.available('in_progress', { kind: 'portal' }).map((transition) => transition.to);
+    expect(portal).toEqual(['cancelled']);
+    expect(incident.available('missing', { kind: 'internal' })).toEqual([]);
+  });
+
+  it('answers requirements and effects for known and unknown pairs', () => {
+    expect(incident.requirements('in_progress', 'resolved')).toEqual(['resolution', 'solution_link', 'time_logged']);
+    expect(incident.requirements('new', 'assigned')).toEqual([]);
+    expect(incident.requirements('new', 'missing')).toEqual([]);
+    expect(incident.effects('awaiting_client')).toEqual({ pause: true });
+    expect(incident.effects('missing')).toEqual({});
+  });
+});
+
+describe('validation catches every editor mistake at once', () => {
+  const base = machines.incident;
+
+  it('names bad keys, duplicates, a missing initial state and shapes without states or transitions', () => {
+    expect(validateMachine(null as unknown as StateMachineBody)).toEqual(['no states']);
+    expect(validateMachine({ ...base, states: [] })).toEqual(['no states']);
+    const problems = validateMachine({
+      ...base,
+      initial: 'nowhere',
+      states: [
+        ...base.states,
+        { key: 'Bad Key', label: 'Bad', kind: 'active' },
+        { key: 'new', label: 'Dup', kind: 'active' },
+      ],
+    });
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        'state key Bad Key is not snake_case',
+        'duplicate state new',
+        'initial state nowhere is not defined',
+      ]),
+    );
+    const noTransitions = validateMachine({
+      ...base,
+      transitions: undefined as unknown as StateMachineBody['transitions'],
+    });
+    expect(noTransitions).toContain('state assigned is unreachable from new');
+  });
+
+  it('names unknown sources, self transitions, duplicate transitions and a machine without a terminal state', () => {
+    const problems = validateMachine({
+      ...base,
+      transitions: [
+        ...base.transitions,
+        { from: 'ghost', to: 'new' },
+        { from: 'new', to: 'new' },
+        { from: 'new', to: 'assigned' },
+      ],
+    });
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        'transition from unknown state ghost',
+        'self transition on new',
+        'duplicate transition new>assigned',
+      ]),
+    );
+    const noTerminal = validateMachine({
+      ...base,
+      states: base.states.map((state) => (state.kind === 'terminal' ? { ...state, kind: 'active' as const } : state)),
+    });
+    expect(noTerminal).toContain('no terminal state');
+  });
+
+  it('answers canTransition for internal and portal actors', () => {
+    const incident = new StateMachine(base);
+    expect(incident.canTransition('new', 'assigned', { kind: 'internal' })).toBe(true);
+    expect(incident.canTransition('new', 'assigned', { kind: 'portal' })).toBe(false);
+    expect(incident.canTransition('new', 'cancelled', { kind: 'portal' })).toBe(true);
+    expect(incident.canTransition('new', 'closed', { kind: 'internal' })).toBe(false);
+  });
+});
