@@ -21,3 +21,7 @@
 .DS_Store
 npm-debug.log*
 pnpm-debug.log*
+
+# Local object store and mail files written by the local adapters
+.xms-storage/
+*.log
