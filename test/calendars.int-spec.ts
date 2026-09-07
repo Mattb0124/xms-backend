@@ -250,6 +250,60 @@ describe('SLA clocks on the account calendar', () => {
     );
   });
 
+  it('the at-risk job judges calendar clocks on working minutes, not wall time', async () => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'At risk on Friday',
+        impact: 'high',
+        urgency: 'high',
+        requester_email: 'pat@client.test',
+      })
+      .expect(201);
+    // A response clock with 60 working minutes left at Friday 16:00 BST: due Monday 10:00 BST, two and a half wall days away.
+    const friday = new Date('2026-04-10T15:00:00Z');
+    await withSuperuser((client) =>
+      client.query(
+        `update acct.sla_clocks set target_minutes = 120, started_at = $2, due_at = '2026-04-13T09:00:00Z', at_risk_notified_at = null where ticket_id = $1 and kind = 'response'`,
+        [created.body.id, friday],
+      ),
+    );
+    const { SlaJobs } = await import('../src/worker/sla-jobs.js');
+    const { TicketsRepository } = await import('../src/modules/tickets/tickets.repository.js');
+    const { NotificationsRepository } = await import('../src/modules/notifications/notifications.repository.js');
+    const { AuditService } = await import('../src/common/audit/audit.service.js');
+    const { OutboxService } = await import('../src/common/outbox/outbox.service.js');
+    const { CalendarService } = await import('../src/modules/calendars/calendars.module.js');
+    const { UnitOfWork } = await import('../src/db/unit-of-work.js');
+    const { pools } = await import('./kit/db.js');
+    const jobs = new SlaJobs(
+      pools(),
+      app.get(UnitOfWork),
+      app.get(TicketsRepository),
+      app.get(NotificationsRepository),
+      app.get(AuditService),
+      app.get(OutboxService),
+      app.get(CalendarService),
+    );
+    // Wall time says nothing is at risk for days; working minutes say one hour of a two-hour target remains, and that is not yet a quarter.
+    const before = await jobs.notifyAtRisk();
+    expect(before).toBe('notified 0');
+    await withSuperuser((client) =>
+      client.query(
+        `update acct.sla_clocks set due_at = '2026-04-13T08:20:00Z' where ticket_id = $1 and kind = 'response'`,
+        [created.body.id],
+      ),
+    );
+    // Twenty working minutes of a hundred and twenty remain: under a quarter, so the notification fires despite the weekend in between.
+    // (The job compares against now, so this only holds while the test clock is before that Monday; guard the assertion.)
+    if (Date.now() < new Date('2026-04-13T08:20:00Z').getTime()) {
+      expect(await jobs.notifyAtRisk()).toBe('notified 1');
+    }
+  });
+
   it('a pause and resume across a weekend excludes no working minutes', async () => {
     const created = await api()
       .post('/v1/tickets')

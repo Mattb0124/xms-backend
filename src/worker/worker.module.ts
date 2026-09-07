@@ -6,6 +6,7 @@ import { AiCoreModule } from '../modules/ai/ai.module.js';
 import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
 import { DigestService, IntegrityCoreModule } from '../modules/integrity/integrity.module.js';
+import { CalendarsCoreModule } from '../modules/calendars/calendars.module.js';
 import { ConnectorsCoreModule } from '../modules/connectors/connectors.module.js';
 import { SyncWorker } from '../modules/connectors/sync.worker.js';
 import { EmailService } from '../modules/email/email.service.js';
@@ -38,6 +39,7 @@ import { SlaJobs } from './sla-jobs.js';
     AiCoreModule,
     IntegrityCoreModule,
     ConnectorsCoreModule,
+    CalendarsCoreModule,
   ],
   providers: [
     {
