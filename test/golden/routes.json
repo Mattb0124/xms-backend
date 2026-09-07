@@ -30,10 +30,50 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/billing-periods",
+    "controller": "TimeController",
+    "handler": "billingPeriods",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/accounts/:accountId/billing-periods",
     "controller": "TimeController",
     "handler": "createBillingPeriod",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/approve",
+    "controller": "TimeController",
+    "handler": "approveBillingPeriod",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/export",
+    "controller": "TimeController",
+    "handler": "exportBillingPeriod",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/exports",
+    "controller": "TimeController",
+    "handler": "billingExports",
     "realm": "internal",
     "permission": "time:lock-period",
     "public": null,
@@ -46,6 +86,26 @@
     "handler": "lockBillingPeriod",
     "realm": "internal",
     "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/reopen",
+    "controller": "TimeController",
+    "handler": "reopenBillingPeriod",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/submit",
+    "controller": "TimeController",
+    "handler": "submitBillingPeriod",
+    "realm": "internal",
+    "permission": "contracts:manage",
     "public": null,
     "axel": false
   },

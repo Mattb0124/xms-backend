@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
+import type { BillingState, FinanceLine, PeriodSummary } from '../../domain/time/billing.js';
 
 export interface TimeEntryRow {
   id: string;
@@ -54,6 +55,41 @@ export interface ContractPeriodRow {
   locked: boolean;
   thresholds_fired: number[];
   version: number;
+}
+
+export interface BillingPeriodRow {
+  id: string;
+  account_id: string;
+  starts_on: string;
+  ends_on: string;
+  status: BillingState;
+  submitted_at: string | null;
+  submitted_by: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+  locked_at: string | null;
+  locked_by: string | null;
+  auto_lock_at: string | null;
+  summary: PeriodSummary | null;
+  checksum: string | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingExportRow {
+  id: string;
+  account_id: string;
+  billing_period_id: string;
+  format: 'xlsx' | 'csv';
+  template_version: string;
+  object_key: string;
+  checksum: string;
+  row_count: number;
+  produced_by: string;
+  produced_at: string;
+  delivered_at: string | null;
+  delivery_ref: string | null;
 }
 
 export interface RateCardRow {
@@ -595,6 +631,124 @@ export class TimeRepository extends RepositoryBase {
     );
   }
 
+  billingPeriodsOf(tx: Tx, accountId: string): Promise<BillingPeriodRow[]> {
+    return this.many<BillingPeriodRow>(
+      tx,
+      'select * from acct.billing_periods where account_id = $1 order by starts_on desc',
+      [accountId],
+    );
+  }
+
+  billingPeriod(tx: Tx, id: string): Promise<BillingPeriodRow> {
+    return this.one<BillingPeriodRow>(tx, 'billing_period', 'select * from acct.billing_periods where id = $1', [id]);
+  }
+
+  updateBillingPeriod(
+    tx: Tx,
+    id: string,
+    version: number,
+    assignments: Record<string, unknown>,
+  ): Promise<BillingPeriodRow> {
+    const values: Record<string, unknown> = { ...assignments };
+    if ('summary' in values && values.summary !== null) values.summary = JSON.stringify(values.summary);
+    return this.updateVersioned<BillingPeriodRow>(tx, 'billing_period', 'acct.billing_periods', id, version, values);
+  }
+
+  /** Every entry and adjustment dated in the range, joined to the names the finance file carries (TB-14). */
+  financeLines(tx: Tx, accountId: string, from: string, to: string): Promise<FinanceLine[]> {
+    return this.many<{
+      kind: 'entry' | 'adjustment';
+      id: string;
+      entry_id: string;
+      account_key: string;
+      contract_key: string;
+      person_id: string;
+      person_name: string;
+      role: string | null;
+      performed_on: string;
+      minutes: number;
+      activity_type: string;
+      billable_class: string;
+      rate_snapshot: string | null;
+      rate_multiplier: string;
+      currency: string;
+      ticket_key: string | null;
+      after_hours_class: string;
+      reason: string | null;
+    }>(
+      tx,
+      `select 'entry' as kind, e.id, e.id as entry_id, a.key as account_key, c.key as contract_key,
+              e.person_id, e.person_name, p.role, e.performed_on::text as performed_on, e.minutes, e.activity_type,
+              e.billable_class, e.rate_snapshot, e.rate_multiplier, c.currency,
+              case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end as ticket_key,
+              e.after_hours_class, null::text as reason, e.created_at
+         from acct.time_entries e
+         join acct.contracts c on c.id = e.contract_id
+         join op.accounts a on a.id = e.account_id
+         left join acct.tickets t on t.id = e.ticket_id
+         left join op.people p on p.user_id::text = e.person_id
+        where e.account_id = $1 and e.performed_on between $2 and $3
+       union all
+       select 'adjustment' as kind, adj.id, e.id as entry_id, a.key, c.key,
+              e.person_id, e.person_name, p.role, adj.performed_on::text, adj.delta_minutes, e.activity_type,
+              coalesce(adj.new_billable_class, e.billable_class), e.rate_snapshot, e.rate_multiplier, c.currency,
+              case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end,
+              e.after_hours_class, adj.reason, adj.created_at
+         from acct.time_adjustments adj
+         join acct.time_entries e on e.id = adj.entry_id
+         join acct.contracts c on c.id = adj.contract_id
+         join op.accounts a on a.id = adj.account_id
+         left join acct.tickets t on t.id = e.ticket_id
+         left join op.people p on p.user_id::text = e.person_id
+        where adj.account_id = $1 and adj.performed_on between $2 and $3
+       order by performed_on, created_at`,
+      [accountId, from, to],
+    ).then((rows) =>
+      rows.map((row) => ({
+        ...row,
+        rate_snapshot: row.rate_snapshot === null ? null : Number(row.rate_snapshot),
+        rate_multiplier: Number(row.rate_multiplier),
+      })),
+    );
+  }
+
+  insertBillingExport(
+    tx: Tx,
+    input: {
+      accountId: string;
+      periodId: string;
+      format: 'xlsx' | 'csv';
+      objectKey: string;
+      checksum: string;
+      rowCount: number;
+      producedBy: string;
+    },
+  ): Promise<BillingExportRow> {
+    return this.one<BillingExportRow>(
+      tx,
+      'billing_export',
+      `insert into acct.billing_exports (account_id, billing_period_id, format, object_key, checksum, row_count, produced_by)
+       values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+      [
+        input.accountId,
+        input.periodId,
+        input.format,
+        input.objectKey,
+        input.checksum,
+        input.rowCount,
+        input.producedBy,
+      ],
+    );
+  }
+
+  billingExportsOf(tx: Tx, periodId: string): Promise<BillingExportRow[]> {
+    return this.many<BillingExportRow>(
+      tx,
+      'select * from acct.billing_exports where billing_period_id = $1 order by produced_at desc',
+      [periodId],
+    );
+  }
+
   billingPeriodFor(tx: Tx, accountId: string, on: string): Promise<{ id: string; status: string } | undefined> {
     return this.maybeOne(
       tx,
@@ -614,15 +768,6 @@ export class TimeRepository extends RepositoryBase {
       'billing_period',
       `insert into acct.billing_periods (account_id, starts_on, ends_on) values ($1, $2, $3) returning id, status, version`,
       [accountId, startsOn, endsOn],
-    );
-  }
-
-  lockBillingPeriod(tx: Tx, id: string, lockedBy: string): Promise<{ id: string; status: string }> {
-    return this.one(
-      tx,
-      'billing_period',
-      `update acct.billing_periods set status = 'locked', locked_at = now(), locked_by = $2 where id = $1 and status <> 'exported' returning id, status`,
-      [id, lockedBy],
     );
   }
 }

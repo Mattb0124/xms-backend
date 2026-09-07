@@ -13,9 +13,12 @@ import {
   Post,
   Put,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
+import ExcelJS from 'exceljs';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -46,6 +49,18 @@ import { position, type BillableClassSpec, type ContractPosition } from '../../d
 import { DEFAULT_PERSON_CALENDAR, unloggedByDay, weekBounds } from '../../domain/time/unlogged.js';
 import { classifyPerformed, multiplierFor } from '../../domain/calendar/after-hours.js';
 import { amountOf, carryOver, forecast, overageDecision, rateFor, thresholdsToFire } from '../../domain/time/budget.js';
+import {
+  billingTransition,
+  FINANCE_COLUMNS,
+  financeRows,
+  periodSummary,
+  toCsv,
+  type BillingAction,
+} from '../../domain/time/billing.js';
+import { SecurityEventsService } from '../../common/events/security-events.service.js';
+import { OBJECT_STORE, StorageModule } from '../../common/storage/storage.module.js';
+import type { ObjectStore } from '../../common/storage/object-store.js';
+import { Inject } from '@nestjs/common';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
 import type { ContractRow } from '../contracts/contracts.module.js';
 import type { Calendar } from '../../domain/sla/engine.js';
@@ -166,6 +181,12 @@ export class CreateRateCardDto {
   entries!: RateEntryDto[];
 }
 
+export class VersionDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+}
+
 export class AdjustTimeDto {
   @IsUUID('4')
   entry_id!: string;
@@ -239,6 +260,8 @@ export class TimeService {
     private readonly outbox: OutboxService,
     private readonly calendars: CalendarService,
     private readonly notifications: NotificationsRepository,
+    private readonly security: SecurityEventsService,
+    @Inject(OBJECT_STORE) private readonly store: ObjectStore,
   ) {}
 
   async logOnTicket(principal: Principal, ctx: RequestContext, key: string, dto: LogTimeDto): Promise<TimeEntryRow> {
@@ -395,11 +418,20 @@ export class TimeService {
         (await this.time.adjustmentsOfEntry(tx, entry.id)).reduce((sum, row) => sum + row.delta_minutes, 0);
       if (adjusted + dto.delta_minutes < 0)
         throw new ConflictException({ code: 'adjustment_below_zero', current: adjusted });
+      // Functional 5.7: a correction to an entry in an approved or later period is dated in the current open period.
+      const entryPeriod = await this.time.billingPeriodFor(tx, entry.account_id, entry.performed_on);
+      const closed = entryPeriod && entryPeriod.status !== 'open' && entryPeriod.status !== 'submitted';
+      const performedOn = closed ? new Date().toISOString().slice(0, 10) : entry.performed_on;
+      if (closed) {
+        const todayPeriod = await this.time.billingPeriodFor(tx, entry.account_id, performedOn);
+        if (todayPeriod && todayPeriod.status !== 'open' && todayPeriod.status !== 'submitted')
+          throw new ConflictException({ code: 'billing_period_locked', status: todayPeriod.status });
+      }
       const row = await this.time.insertAdjustment(tx, {
         accountId: entry.account_id,
         entryId: entry.id,
         contractId: entry.contract_id,
-        performedOn: entry.performed_on,
+        performedOn,
         deltaMinutes: dto.delta_minutes,
         kind: dto.kind,
         newBillableClass: dto.new_billable_class,
@@ -530,19 +562,176 @@ export class TimeService {
     });
   }
 
-  lockBillingPeriod(principal: Principal, ctx: RequestContext, accountId: string, periodId: string) {
+  billingPeriods(principal: Principal, accountId: string) {
+    return this.uow.run(principal, (tx) => this.time.billingPeriodsOf(tx, accountId));
+  }
+
+  /**
+   * Functional 5.7: the period moves through open, submitted, approved,
+   * locked and exported; submit and lock refresh the summary the export
+   * must match to the cent; lock writes the outbox event the finance
+   * connector will deliver (INT-02).
+   */
+  transitionBillingPeriod(
+    principal: Principal,
+    ctx: RequestContext,
+    accountId: string,
+    periodId: string,
+    action: BillingAction,
+    version: number,
+  ) {
     return this.uow.run(principal, async (tx) => {
-      const period = await this.time.lockBillingPeriod(tx, periodId, principal.userId);
+      const before = await this.time.billingPeriod(tx, periodId);
+      if (before.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'billing_period' });
+      const step = billingTransition(before.status, action);
+      if (!step.ok) throw new ConflictException({ code: step.code, status: before.status, allowed: step.allowed });
+      const now = new Date();
+      const assignments: Record<string, unknown> = { status: step.to };
+      if (action === 'submit') {
+        assignments.submitted_at = now;
+        assignments.submitted_by = principal.userId;
+        assignments.summary = periodSummary(
+          await this.time.financeLines(tx, accountId, before.starts_on, before.ends_on),
+        );
+      }
+      if (action === 'approve') {
+        assignments.approved_at = now;
+        assignments.approved_by = principal.userId;
+        assignments.auto_lock_at = new Date(now.getTime() + 5 * 86_400_000);
+      }
+      if (action === 'lock') {
+        assignments.locked_at = now;
+        assignments.locked_by = principal.userId;
+        assignments.summary = periodSummary(
+          await this.time.financeLines(tx, accountId, before.starts_on, before.ends_on),
+        );
+      }
+      const after = await this.time.updateBillingPeriod(tx, periodId, version, assignments);
       await this.audit.account(tx, accountId, actorOf(principal), ctx, [
         {
           entityKind: 'billing_period',
-          entityId: period.id,
+          entityId: periodId,
           eventType: 'updated',
           field: 'status',
-          newValue: 'locked',
+          oldValue: before.status,
+          newValue: after.status,
         },
       ]);
-      return period;
+      if (action === 'lock')
+        await this.outbox.write(tx, {
+          accountId,
+          aggregate: 'billing_period',
+          aggregateId: periodId,
+          eventType: 'billing_period.locked',
+          correlationId: ctx.requestId ?? randomUUID(),
+          origin: ctx.origin,
+          payload: { starts_on: after.starts_on, ends_on: after.ends_on, summary: after.summary },
+        });
+      return after;
+    });
+  }
+
+  /** Kept for the route table: lock is one transition of the period. */
+  lockBillingPeriod(principal: Principal, ctx: RequestContext, accountId: string, periodId: string, version?: number) {
+    return this.uow.run(principal, async (tx) => {
+      const before = await this.time.billingPeriod(tx, periodId);
+      return this.transitionBillingPeriod(principal, ctx, accountId, periodId, 'lock', version ?? before.version);
+    });
+  }
+
+  billingExports(principal: Principal, accountId: string, periodId: string) {
+    return this.uow.run(principal, async (tx) => {
+      const period = await this.time.billingPeriod(tx, periodId);
+      if (period.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'billing_period' });
+      return this.time.billingExportsOf(tx, periodId);
+    });
+  }
+
+  /**
+   * TB-14: the finance file for a locked period, one row per entry or
+   * adjustment in the THG finance layout; stored, checksummed on the
+   * period and recorded as an append-only export row.
+   */
+  exportBillingPeriod(
+    principal: Principal,
+    ctx: RequestContext,
+    accountId: string,
+    periodId: string,
+    format: 'xlsx' | 'csv',
+  ): Promise<{ fileName: string; contentType: string; body: Buffer; rows: number; checksum: string }> {
+    return this.uow.run(principal, async (tx) => {
+      const period = await this.time.billingPeriod(tx, periodId);
+      if (period.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'billing_period' });
+      if (period.status !== 'locked' && period.status !== 'exported')
+        throw new ConflictException({ code: 'period_not_locked', status: period.status });
+      const lines = await this.time.financeLines(tx, accountId, period.starts_on, period.ends_on);
+      const label = period.starts_on.slice(0, 7);
+      const rows = financeRows(lines, label);
+      let body: Buffer;
+      if (format === 'csv') body = Buffer.from(toCsv(FINANCE_COLUMNS, rows), 'utf8');
+      else {
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Finance');
+        sheet.addRow([...FINANCE_COLUMNS]);
+        for (const row of rows)
+          sheet.addRow(row.map((value) => (typeof value === 'string' && /^[=+\-@]/.test(value) ? `'${value}` : value)));
+        sheet.getRow(1).font = { bold: true };
+        body = Buffer.from(await workbook.xlsx.writeBuffer());
+      }
+      const checksum = createHash('sha256').update(body).digest('hex');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const objectKey = `accounts/${accountId}/billing/${periodId}/finance-${stamp}.${format}`;
+      await this.store.putObject(
+        objectKey,
+        body,
+        format === 'csv'
+          ? 'text/csv; charset=utf-8'
+          : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      const record = await this.time.insertBillingExport(tx, {
+        accountId,
+        periodId,
+        format,
+        objectKey,
+        checksum,
+        rowCount: rows.length,
+        producedBy: principal.userId,
+      });
+      const summary = periodSummary(lines);
+      await this.time.updateBillingPeriod(tx, periodId, period.version, { checksum, summary });
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'billing_period',
+          entityId: periodId,
+          eventType: 'updated',
+          field: 'export',
+          newValue: { export_id: record.id, format, rows: rows.length, checksum },
+        },
+      ]);
+      await this.security.write(
+        {
+          type: 'data.export.produced',
+          outcome: 'success',
+          accountId,
+          actorKind: 'user',
+          actorId: principal.userId,
+          actorName: principal.displayName,
+          principalKind: principal.kind,
+          requestId: ctx.requestId,
+          attrs: { kind: 'finance', format, rows: rows.length, checksum, period: label },
+        },
+        tx,
+      );
+      return {
+        fileName: `finance-${label}-${accountId.slice(0, 8)}.${format}`,
+        contentType:
+          format === 'csv'
+            ? 'text/csv; charset=utf-8'
+            : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        body,
+        rows: rows.length,
+        checksum,
+      };
     });
   }
 
@@ -571,9 +760,10 @@ export class TimeService {
     if (dto.performed_on > today) throw new BadRequestException({ code: 'future_date' });
     const period = await this.time.periodFor(tx, target.contractId, dto.performed_on);
     if (period?.locked) throw new ConflictException({ code: 'contract_period_locked' });
+    // Functional 5.7: an approved period refuses entries dated inside it; the database trigger holds the same line.
     const billing = await this.time.billingPeriodFor(tx, target.accountId, dto.performed_on);
-    if (billing && (billing.status === 'locked' || billing.status === 'exported'))
-      throw new ConflictException({ code: 'billing_period_locked' });
+    if (billing && billing.status !== 'open' && billing.status !== 'submitted')
+      throw new ConflictException({ code: 'billing_period_locked', status: billing.status });
     // After-hours class from the account calendar, handling from the contract (TB-13); both frozen on the row.
     const contract = await this.contracts.byId(tx, target.contractId);
     const calendar = await this.calendars.forAccount(tx, target.accountId);
@@ -1081,6 +1271,82 @@ export class TimeController {
   ) {
     return this.time.lockBillingPeriod(principal, ctx, accountId, periodId);
   }
+
+  @Get('accounts/:accountId/billing-periods')
+  @RequirePermission('tickets:view')
+  billingPeriods(@CurrentPrincipal() principal: Principal, @Param('accountId', ParseUUIDPipe) accountId: string) {
+    return this.time.billingPeriods(principal, accountId);
+  }
+
+  @Post('accounts/:accountId/billing-periods/:periodId/submit')
+  @RequirePermission('contracts:manage')
+  submitBillingPeriod(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+    @Body() dto: VersionDto,
+  ) {
+    return this.time.transitionBillingPeriod(principal, ctx, accountId, periodId, 'submit', dto.version);
+  }
+
+  @Post('accounts/:accountId/billing-periods/:periodId/reopen')
+  @RequirePermission('contracts:manage')
+  reopenBillingPeriod(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+    @Body() dto: VersionDto,
+  ) {
+    return this.time.transitionBillingPeriod(principal, ctx, accountId, periodId, 'reopen', dto.version);
+  }
+
+  @Post('accounts/:accountId/billing-periods/:periodId/approve')
+  @RequirePermission('time:lock-period')
+  approveBillingPeriod(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+    @Body() dto: VersionDto,
+  ) {
+    return this.time.transitionBillingPeriod(principal, ctx, accountId, periodId, 'approve', dto.version);
+  }
+
+  @Get('accounts/:accountId/billing-periods/:periodId/exports')
+  @RequirePermission('time:lock-period')
+  billingExports(
+    @CurrentPrincipal() principal: Principal,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+  ) {
+    return this.time.billingExports(principal, accountId, periodId);
+  }
+
+  @Get('accounts/:accountId/billing-periods/:periodId/export')
+  @RequirePermission('time:lock-period')
+  async exportBillingPeriod(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Res() response: Response,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('periodId', ParseUUIDPipe) periodId: string,
+    @Query('format') format?: string,
+  ) {
+    const result = await this.time.exportBillingPeriod(
+      principal,
+      ctx,
+      accountId,
+      periodId,
+      format === 'csv' ? 'csv' : 'xlsx',
+    );
+    response.setHeader('content-type', result.contentType);
+    response.setHeader('content-disposition', `attachment; filename="${result.fileName}"`);
+    response.setHeader('x-row-count', String(result.rows));
+    response.setHeader('x-checksum', result.checksum);
+    response.send(result.body);
+  }
 }
 
 function dateOr(value: string | undefined, offsetDays: number): string {
@@ -1089,7 +1355,7 @@ function dateOr(value: string | undefined, offsetDays: number): string {
 }
 
 @Module({
-  imports: [TicketsCoreModule, CalendarsCoreModule],
+  imports: [TicketsCoreModule, CalendarsCoreModule, StorageModule],
   controllers: [TimeController],
   providers: [TimeService, TimeRepository],
   exports: [TimeService],
