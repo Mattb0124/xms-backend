@@ -34,6 +34,8 @@ export const CurrentPrincipal = createParamDecorator((_: unknown, context: Execu
 
 export interface RequestContext {
   readonly requestId: string;
+  /** Outbox origin for the change (`user` by default; `sync:<instance id>` for connector apply, `ai`, `system`). */
+  readonly origin?: string;
   readonly ipHash?: string;
   readonly userAgentFamily?: string;
 }

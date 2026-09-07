@@ -6,6 +6,8 @@ import { AiCoreModule } from '../modules/ai/ai.module.js';
 import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
 import { DigestService, IntegrityCoreModule } from '../modules/integrity/integrity.module.js';
+import { ConnectorsCoreModule } from '../modules/connectors/connectors.module.js';
+import { SyncWorker } from '../modules/connectors/sync.worker.js';
 import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
 import { DbModule } from '../db/db.module.js';
@@ -35,6 +37,7 @@ import { SlaJobs } from './sla-jobs.js';
     ReportingCoreModule,
     AiCoreModule,
     IntegrityCoreModule,
+    ConnectorsCoreModule,
   ],
   providers: [
     {
@@ -56,6 +59,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly snapshots: SnapshotJob,
     private readonly suggestions: SuggestionService,
     private readonly digests: DigestService,
+    private readonly sync: SyncWorker,
   ) {}
 
   onModuleInit(): void {
@@ -76,5 +80,8 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.suggestions.expiryJob());
     this.runner.schedule(this.digests.digestJob());
     this.runner.schedule(this.digests.verifyJob());
+    this.runner.schedule(this.sync.pollJob());
+    this.runner.schedule(this.sync.applyJob());
+    this.runner.schedule(this.sync.healthJob());
   }
 }

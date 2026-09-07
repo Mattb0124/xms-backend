@@ -161,6 +161,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/connectors",
+    "controller": "ConnectorsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:id/connectors/servicenow",
+    "controller": "ConnectorsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/reports",
     "controller": "ReportingController",
     "handler": "runs",
@@ -860,6 +880,156 @@
     "axel": false
   },
   {
+    "method": "PATCH",
+    "path": "/v1/connectors/:instanceId",
+    "controller": "ConnectorsController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/connectors/:instanceId/:kind",
+    "controller": "ConnectorsController",
+    "handler": "maps",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/:kind",
+    "controller": "ConnectorsController",
+    "handler": "createMap",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/connectors/:instanceId/:kind/:mapId",
+    "controller": "ConnectorsController",
+    "handler": "updateMap",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/:kind/:mapId/activate",
+    "controller": "ConnectorsController",
+    "handler": "activateMap",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/:kind/:mapId/validate",
+    "controller": "ConnectorsController",
+    "handler": "validateMap",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/connectors/:instanceId/dead-letters",
+    "controller": "ConnectorsController",
+    "handler": "deadLetters",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/dead-letters/discard",
+    "controller": "ConnectorsController",
+    "handler": "discard",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/dead-letters/replay",
+    "controller": "ConnectorsController",
+    "handler": "replay",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/kill-switch",
+    "controller": "ConnectorsController",
+    "handler": "killSwitch",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/connectors/:instanceId/runs",
+    "controller": "ConnectorsController",
+    "handler": "runs",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/samples",
+    "controller": "ConnectorsController",
+    "handler": "samples",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/test-connection",
+    "controller": "ConnectorsController",
+    "handler": "testConnection",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/watermark",
+    "controller": "ConnectorsController",
+    "handler": "watermark",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/connectors/health",
+    "controller": "ConnectorsController",
+    "handler": "health",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/csp-report",
     "controller": "CspReportController",
@@ -1236,6 +1406,16 @@
     "handler": "create",
     "realm": "internal",
     "permission": "tickets:create",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:id/sync",
+    "controller": "TicketSyncController",
+    "handler": "sync",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },

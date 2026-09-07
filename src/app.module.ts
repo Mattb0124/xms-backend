@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from './common/auth/auth.module.js';
 import { CommonModule } from './common/common.module.js';
 import { RateLimitModule } from './common/rate-limit/rate-limit.middleware.js';
+import { ConnectorsModule } from './modules/connectors/connectors.module.js';
 import { CspModule } from './modules/security/csp.module.js';
 import { StorageModule } from './common/storage/storage.module.js';
 import { DbModule } from './db/db.module.js';
@@ -46,6 +47,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     AiModule,
     IntegrityModule,
     CspModule,
+    ConnectorsModule,
   ],
 })
 export class AppModule {}

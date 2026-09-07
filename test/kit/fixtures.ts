@@ -48,6 +48,8 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   // Withheld rows are the only ones an account without the AI switch may hold.
   'acct.ai_suggestions': { status_initial: 'withheld', withheld_reason: 'switch_off' },
   'acct.ai_feedback': { rating: 3 },
+  // The connector type is an operator catalog row, not an account row.
+  'acct.connector_instances': { type: 'servicenow' },
   // A link needs two distinct tickets; the second is created outside the cache.
   'acct.ticket_links': {
     to_ticket_id: (client: pg.Client, accountId: string) =>

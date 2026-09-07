@@ -120,6 +120,15 @@ export const AUDIT_EVENT_TYPES = [
   'ai.suggestion.applied',
   'ai.suggestion.rejected',
   'ai.suggestion.expired',
+  'connector.created',
+  'connector.updated',
+  'connector.mode_changed',
+  'connector.kill_switch',
+  'connector.map.activated',
+  'connector.watermark_rewound',
+  'connector.dead_letter.replayed',
+  'connector.dead_letter.discarded',
+  'sync.applied',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

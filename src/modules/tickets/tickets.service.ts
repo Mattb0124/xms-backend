@@ -372,6 +372,7 @@ export class TicketsService {
         aggregateId: row.id,
         eventType: 'ticket.created',
         correlationId,
+        origin: ctx.origin,
         payload: { key: ticketKey(row.number), type: row.type, priority: row.priority },
       });
       if (assignee && assignee.id !== principal.userId) {
@@ -528,6 +529,7 @@ export class TicketsService {
         aggregateId: before.id,
         eventType: 'ticket.updated',
         correlationId,
+        origin: ctx.origin,
         payload: { fields: entries.map((entry) => entry.field).filter(Boolean) },
       });
       if (newAssignee) {
@@ -757,6 +759,7 @@ export class TicketsService {
           aggregateId: before.id,
           eventType: event.type,
           correlationId,
+          origin: ctx.origin,
           payload: event.payload,
         });
       }
@@ -807,7 +810,7 @@ export class TicketsService {
         authorId: principal.userId,
         authorName: principal.displayName,
         body: dto.body,
-        source: principal.kind === 'portal' ? 'portal' : 'internal',
+        source: ctx.origin?.startsWith('sync:') ? 'sync' : principal.kind === 'portal' ? 'portal' : 'internal',
         isFirstResponse: firstResponse,
       });
       const entries: AuditEntry[] = [
@@ -861,6 +864,7 @@ export class TicketsService {
         aggregateId: ticket.id,
         eventType: 'comment.created',
         correlationId,
+        origin: ctx.origin,
         payload: { comment_id: comment.id, source: comment.source },
       });
       await this.tickets.ensureWatcher(tx, ticket.account_id, ticket.id, principal.userId, 'commenter');
@@ -906,6 +910,7 @@ export class TicketsService {
         aggregateId: ticket.id,
         eventType: 'work_note.created',
         correlationId,
+        origin: ctx.origin,
         payload: { work_note_id: note.id },
       });
       await this.tickets.ensureWatcher(tx, ticket.account_id, ticket.id, principal.userId, 'commenter');

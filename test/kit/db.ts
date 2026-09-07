@@ -42,7 +42,7 @@ export async function resetDatabase(): Promise<void> {
          from pg_class c join pg_namespace n on n.oid = c.relnamespace
         where c.relkind in ('r', 'p') and n.nspname in ('op', 'acct', 'sys', 'rpt')
           and not exists (select 1 from pg_inherits where inhrelid = c.oid)
-          and (n.nspname || '.' || c.relname) not in ('rpt.portal_visible_measures', 'op.report_templates')`,
+          and (n.nspname || '.' || c.relname) not in ('rpt.portal_visible_measures', 'op.report_templates', 'op.connector_types')`,
     );
     if (tables.rows.length === 0) return;
     const list = tables.rows.map((row) => `"${row.schema}"."${row.name}"`).join(', ');
