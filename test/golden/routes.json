@@ -161,6 +161,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/calendars",
+    "controller": "CalendarsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:id/calendars",
+    "controller": "CalendarsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/connectors",
     "controller": "ConnectorsController",
     "handler": "list",
@@ -861,6 +881,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/calendars/:id",
+    "controller": "CalendarsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/calendars/:id",
+    "controller": "CalendarsController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/calendars/:id/preview",
+    "controller": "CalendarsController",
+    "handler": "preview",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/catalogs",
     "controller": "CatalogsController",
     "handler": "catalogs",
@@ -1116,6 +1166,26 @@
     "handler": "groups",
     "realm": "internal",
     "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/holiday-calendars",
+    "controller": "CalendarsController",
+    "handler": "holidayCalendars",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/holiday-calendars",
+    "controller": "CalendarsController",
+    "handler": "createHolidayCalendar",
+    "realm": "internal",
+    "permission": "admin:config",
     "public": null,
     "axel": false
   },

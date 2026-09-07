@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { OutboxService } from '../../common/outbox/outbox.service.js';
 import { AdminCoreModule } from '../admin/admin.module.js';
 import { ContractsCoreModule } from '../contracts/contracts.module.js';
+import { CalendarsCoreModule } from '../calendars/calendars.module.js';
 import { NotificationsController, NotificationsService } from '../notifications/notifications.controller.js';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
 import { CatalogsController } from './catalogs.controller.js';
@@ -14,7 +15,7 @@ import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
 
 /** Providers only, shared by the API and the worker (the worker never mounts controllers). */
 @Module({
-  imports: [AdminCoreModule, ContractsCoreModule],
+  imports: [AdminCoreModule, ContractsCoreModule, CalendarsCoreModule],
   providers: [
     TicketsRepository,
     TicketsService,

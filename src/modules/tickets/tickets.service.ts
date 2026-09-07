@@ -21,6 +21,7 @@ import {
   startClocks,
   view as clockView,
   WALL_CLOCK,
+  type Calendar,
   type Clock,
   type ClockView,
 } from '../../domain/sla/engine.js';
@@ -32,6 +33,7 @@ import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
 import type { Level, Priority } from '../../domain/tickets/priority-matrix.js';
 import type { StateMachine } from '../../domain/tickets/state-machine.js';
 import { ConfigService } from '../admin/config/config.service.js';
+import { CalendarService } from '../calendars/calendars.module.js';
 import { UsersRepository } from '../admin/users/users.repository.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
@@ -131,6 +133,7 @@ export class TicketsService {
     private readonly views: ViewsRepository,
     private readonly time: TimeRepository,
     private readonly knowledge: KnowledgeRepository,
+    private readonly calendars: CalendarService,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -176,6 +179,7 @@ export class TicketsService {
         page.rows.map((row) => row.id),
       );
       const now = new Date();
+      const calendars = await this.calendars.forClocks(tx, clocks);
       const machines = new Map<string, StateMachine>();
       const items: TicketView[] = [];
       for (const row of page.rows) {
@@ -187,6 +191,7 @@ export class TicketsService {
             machine,
             null,
             now,
+            calendars,
           ),
         );
       }
@@ -211,7 +216,10 @@ export class TicketsService {
       const clocks = await this.tickets.clocksOf(tx, row.id);
       const watchers = await this.tickets.watchersOf(tx, row.id);
       const watching = watchers.some((watcher) => watcher.user_id === principal.userId && !watcher.muted_at);
-      return { ...this.toView(row, clocks, machine, requester ?? null, new Date()), watching };
+      return {
+        ...this.toView(row, clocks, machine, requester ?? null, new Date(), await this.calendars.forClocks(tx, clocks)),
+        watching,
+      };
     });
   }
 
@@ -338,7 +346,8 @@ export class TicketsService {
       const now = new Date();
       const targets = await this.targetsFor(tx, contract.sla_policy, dto.account_id, dto.type, priority);
       const policyRef = contract.sla_policy ? `contract:${contract.id}` : targets.policyRef;
-      for (const clock of startClocks(targets.targets, policyRef, WALL_CLOCK, now)) {
+      const calendar = await this.calendars.forAccount(tx, dto.account_id);
+      for (const clock of startClocks(targets.targets, policyRef, calendar, now)) {
         await this.tickets.insertClock(tx, row.account_id, row.id, clock);
       }
       await this.tickets.ensureWatcher(tx, row.account_id, row.id, principal.userId, 'creator');
@@ -379,7 +388,7 @@ export class TicketsService {
         await this.notifyAssignment(tx, row, assignee.id, principal.displayName, correlationId);
       }
       const clocks = await this.tickets.clocksOf(tx, row.id);
-      return this.toView(row, clocks, machine, requester ?? null, now);
+      return this.toView(row, clocks, machine, requester ?? null, now, await this.calendars.forClocks(tx, clocks));
     });
   }
 
@@ -519,7 +528,12 @@ export class TicketsService {
           const target =
             clockRow.kind === 'response' ? targets.targets.response_minutes : targets.targets.resolution_minutes;
           if (!target) continue;
-          const restamped = restampForPriority(toClock(clockRow), target, WALL_CLOCK, now);
+          const restamped = restampForPriority(
+            toClock(clockRow),
+            target,
+            await this.calendars.byId(tx, clockRow.calendar_id),
+            now,
+          );
           await this.tickets.saveClock(tx, clockRow.id, restamped);
         }
       }
@@ -538,7 +552,15 @@ export class TicketsService {
           await this.notifyAssignment(tx, after, newAssignee.id, principal.displayName, correlationId);
       }
       const machine = await this.machineFor(tx, after, new Map());
-      return this.toView(after, await this.tickets.clocksOf(tx, before.id), machine, null, new Date());
+      const finalClocks = await this.tickets.clocksOf(tx, before.id);
+      return this.toView(
+        after,
+        finalClocks,
+        machine,
+        null,
+        new Date(),
+        await this.calendars.forClocks(tx, finalClocks),
+      );
     });
   }
 
@@ -631,7 +653,7 @@ export class TicketsService {
       if (fromEffects.pause && !toEffects.pause) {
         let excluded = 0;
         for (const [id, clock] of clocks) {
-          const result = resume(clock, WALL_CLOCK, now);
+          const result = resume(clock, await this.calendars.byId(tx, clock.calendarId), now);
           apply(id, result.clock);
           excluded = Math.max(excluded, result.excludedMinutes);
         }
@@ -786,7 +808,15 @@ export class TicketsService {
         ? await this.tickets.contactById(tx, after.requester_contact_id).catch(() => undefined)
         : undefined;
       if (principal.kind === 'portal') return this.toPortalView(after, machine, requester);
-      return this.toView(after, await this.tickets.clocksOf(tx, before.id), machine, requester ?? null, now);
+      const finalClocks = await this.tickets.clocksOf(tx, before.id);
+      return this.toView(
+        after,
+        finalClocks,
+        machine,
+        requester ?? null,
+        now,
+        await this.calendars.forClocks(tx, finalClocks),
+      );
     });
   }
 
@@ -1179,9 +1209,11 @@ export class TicketsService {
     machine: StateMachine,
     requester: { id: string; email: string; display_name: string } | null,
     now: Date,
+    calendars: Map<string, Calendar> = new Map(),
   ): TicketView {
     const sla: TicketView['sla'] = {};
-    for (const clockRow of clocks) sla[clockRow.kind] = clockView(toClock(clockRow), WALL_CLOCK, now);
+    for (const clockRow of clocks)
+      sla[clockRow.kind] = clockView(toClock(clockRow), calendars.get(clockRow.calendar_id) ?? WALL_CLOCK, now);
     return {
       id: row.id,
       key: ticketKey(row.number),
