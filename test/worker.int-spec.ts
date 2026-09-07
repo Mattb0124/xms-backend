@@ -94,8 +94,6 @@ async function createTicket(shortDescription: string): Promise<{ id: string; key
 
 describe('breach sweeper', () => {
   it('does not mount any HTTP route in the worker beyond health', () => {
-    const { collectRouteTable } =
-      require('../src/common/auth/route-table.js') as typeof import('../src/common/auth/route-table.js');
     const routes = collectRouteTable(worker).map((entry) => entry.path);
     expect(routes).toEqual(['/healthz', '/readyz']);
   });
