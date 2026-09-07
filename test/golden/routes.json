@@ -431,6 +431,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/admin/integrity/digests",
+    "controller": "IntegrityController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/integrity/status",
+    "controller": "IntegrityController",
+    "handler": "status",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/integrity/verify",
+    "controller": "IntegrityController",
+    "handler": "verify",
+    "realm": "internal",
+    "permission": "audit:export",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/me",
     "controller": "MeController",
     "handler": "me",

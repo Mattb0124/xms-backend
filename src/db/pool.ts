@@ -17,6 +17,8 @@ export interface DbPoolUrls {
 // trip through JSON without timezone surprises; the API formats dates itself.
 pg.types.setTypeParser(1184, (value) => new Date(value).toISOString());
 pg.types.setTypeParser(1114, (value) => new Date(`${value}Z`).toISOString());
+// DATE columns come back as their ISO day ('YYYY-MM-DD'), never a local-time Date.
+pg.types.setTypeParser(1082, (value) => value);
 // bigint and numeric come back as strings by default; keep that (money and
 // counters are formatted by the service layer).
 

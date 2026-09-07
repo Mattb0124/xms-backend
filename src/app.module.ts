@@ -9,6 +9,7 @@ import { AiModule } from './modules/ai/ai.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
 import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
+import { IntegrityModule } from './modules/integrity/integrity.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { PortalModule } from './modules/portal/portal.module.js';
 import { ReportingModule } from './modules/reporting/reporting.module.js';
@@ -40,6 +41,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     EmailModule,
     ReportingModule,
     AiModule,
+    IntegrityModule,
   ],
 })
 export class AppModule {}

@@ -5,6 +5,7 @@ import { StorageCoreModule } from '../common/storage/storage.module.js';
 import { AiCoreModule } from '../modules/ai/ai.module.js';
 import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
+import { DigestService, IntegrityCoreModule } from '../modules/integrity/integrity.module.js';
 import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
 import { DbModule } from '../db/db.module.js';
@@ -33,6 +34,7 @@ import { SlaJobs } from './sla-jobs.js';
     EmailCoreModule,
     ReportingCoreModule,
     AiCoreModule,
+    IntegrityCoreModule,
   ],
   providers: [
     {
@@ -53,6 +55,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly email: EmailService,
     private readonly snapshots: SnapshotJob,
     private readonly suggestions: SuggestionService,
+    private readonly digests: DigestService,
   ) {}
 
   onModuleInit(): void {
@@ -71,5 +74,7 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.sla.atRisk());
     this.runner.schedule(this.snapshots.job());
     this.runner.schedule(this.suggestions.expiryJob());
+    this.runner.schedule(this.digests.digestJob());
+    this.runner.schedule(this.digests.verifyJob());
   }
 }
