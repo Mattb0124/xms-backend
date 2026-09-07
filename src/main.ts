@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
 import { requestContextMiddleware } from './common/request-context.middleware.js';
+import { createLogger, httpLogger, PinoLoggerService } from './common/logging/pino-logger.js';
 import { loadEnv } from './config/env.js';
 
 /**
@@ -17,10 +18,12 @@ import { loadEnv } from './config/env.js';
  */
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const logger = createLogger(env, 'xms-api');
+  const app = await NestFactory.create(AppModule, { bufferLogs: true, logger: new PinoLoggerService(logger) });
 
   app.use(helmet());
   app.use(requestContextMiddleware);
+  app.use(httpLogger(logger));
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.useGlobalPipes(
     new ValidationPipe({
@@ -50,6 +53,7 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.listen(env.PORT);
+  logger.info({ port: env.PORT, version: env.APP_VERSION }, 'xms-api listening');
 }
 
 await bootstrap();

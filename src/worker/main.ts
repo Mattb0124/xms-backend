@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { createLogger, PinoLoggerService } from '../common/logging/pino-logger.js';
 import { loadEnv } from '../config/env.js';
 import { WorkerModule } from './worker.module.js';
 
@@ -10,9 +11,11 @@ import { WorkerModule } from './worker.module.js';
  */
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
-  const app = await NestFactory.create(WorkerModule, { bufferLogs: true });
+  const logger = createLogger(env, 'xms-worker');
+  const app = await NestFactory.create(WorkerModule, { bufferLogs: true, logger: new PinoLoggerService(logger) });
   app.enableShutdownHooks();
   await app.listen(env.PORT);
+  logger.info({ port: env.PORT, version: env.APP_VERSION }, 'xms-worker listening');
 }
 
 await bootstrap();
