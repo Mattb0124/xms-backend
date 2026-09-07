@@ -45,6 +45,9 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.article_versions': { published_at: (): Promise<unknown> => Promise.resolve(new Date().toISOString()) },
   // The portal policy on the audit stream admits state transitions only.
   'acct.audit_events': { event_type: 'ticket.transition', field: 'state' },
+  // Withheld rows are the only ones an account without the AI switch may hold.
+  'acct.ai_suggestions': { status_initial: 'withheld', withheld_reason: 'switch_off' },
+  'acct.ai_feedback': { rating: 3 },
   // A link needs two distinct tickets; the second is created outside the cache.
   'acct.ticket_links': {
     to_ticket_id: (client: pg.Client, accountId: string) =>

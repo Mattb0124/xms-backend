@@ -1,0 +1,24 @@
+{
+  "kill_switch": false,
+  "harness_regions": ["us"],
+  "agents": {
+    "classify": "xms-triage",
+    "prioritise": "xms-triage",
+    "duplicate": "xms-triage",
+    "summarise": "xms-desk-assistant",
+    "draft_reply": "xms-desk-assistant",
+    "wsr_narrative": "xms-narrative",
+    "time_entry": "xms-time-assistant",
+    "burn_anomaly": "xms-time-assistant"
+  },
+  "capabilities": {
+    "classify": { "enabled": true, "threshold": 0.7, "auto_apply": false, "auto_min": 0.95, "expires_minutes": 1440 },
+    "prioritise": { "enabled": true, "threshold": 0.7, "auto_apply": false, "auto_min": 0.95, "expires_minutes": 1440 },
+    "duplicate": { "enabled": true, "threshold": 0.75, "auto_apply": false, "auto_min": 0.98, "expires_minutes": 1440 },
+    "summarise": { "enabled": true, "threshold": 0, "auto_apply": false, "auto_min": 1, "expires_minutes": 240 },
+    "draft_reply": { "enabled": true, "threshold": 0, "auto_apply": false, "auto_min": 1, "expires_minutes": 120 },
+    "wsr_narrative": { "enabled": false, "threshold": 0, "auto_apply": false, "auto_min": 1, "expires_minutes": 10080 },
+    "time_entry": { "enabled": false, "threshold": 0.6, "auto_apply": false, "auto_min": 1, "expires_minutes": 2880 },
+    "burn_anomaly": { "enabled": false, "threshold": 0.6, "auto_apply": false, "auto_min": 1, "expires_minutes": 10080 }
+  }
+}

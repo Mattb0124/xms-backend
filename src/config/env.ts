@@ -65,6 +65,11 @@ const envSchema = z
     MAIL_DOMAIN: z.string().default('mail.xms.local'),
     SES_CONFIGURATION_SET: z.string().optional(),
     SNS_WEBHOOK_SECRET: z.string().min(16).optional(),
+    // Axel harness (AI Integration sections 2 and 3). Without a base URL every AI call is `unavailable`.
+    HARNESS_BASE_URL: z.string().url().optional(),
+    HARNESS_ORIGIN: z.string().url().default('http://localhost:3000'),
+    HARNESS_TENANT_SLUG: z.string().optional(),
+    AI_SERVICE_USER_EMAIL: z.string().email().default('axel-service@xms.local'),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production') {

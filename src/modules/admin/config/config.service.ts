@@ -10,6 +10,7 @@ import { RepositoryBase, type Tx } from '../../../db/repository.base.js';
 import { UnitOfWork } from '../../../db/unit-of-work.js';
 import { PriorityMatrix, validateMatrix, type PriorityMatrixBody } from '../../../domain/tickets/priority-matrix.js';
 import { StateMachine, validateMachine, type StateMachineBody } from '../../../domain/tickets/state-machine.js';
+import { validateAiDefaults } from '../../../contracts/ai.js';
 
 /**
  * Configuration catalogs as versioned data (Accounts & Administration
@@ -19,7 +20,13 @@ import { StateMachine, validateMachine, type StateMachineBody } from '../../../d
  * cached per process for 60 seconds.
  */
 export type ConfigKind =
-  'state_machine' | 'priority_matrix' | 'sla_policy' | 'activity_types' | 'billable_classes' | 'resolution_codes';
+  | 'state_machine'
+  | 'priority_matrix'
+  | 'sla_policy'
+  | 'activity_types'
+  | 'billable_classes'
+  | 'resolution_codes'
+  | 'ai';
 export const CONFIG_KINDS: readonly ConfigKind[] = [
   'state_machine',
   'priority_matrix',
@@ -27,6 +34,7 @@ export const CONFIG_KINDS: readonly ConfigKind[] = [
   'activity_types',
   'billable_classes',
   'resolution_codes',
+  'ai',
 ];
 export const TICKET_TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
 
@@ -157,6 +165,7 @@ export class ConfigService {
         ['activity_types', 'activity-types'],
         ['billable_classes', 'billable-classes'],
         ['resolution_codes', 'resolution-codes'],
+        ['ai', 'ai'],
       ];
       for (const [kind, file] of singles) {
         if (!(await this.repo.activeDefault(tx, kind, '*'))) {
@@ -279,6 +288,7 @@ export class ConfigService {
     let problems: string[] = [];
     if (kind === 'state_machine') problems = validateMachine(body as StateMachineBody);
     if (kind === 'priority_matrix') problems = validateMatrix(body as PriorityMatrixBody);
+    if (kind === 'ai') problems = validateAiDefaults(body);
     if (['activity_types', 'billable_classes', 'resolution_codes'].includes(kind)) {
       const items = (body as { items?: unknown[] })?.items;
       if (!Array.isArray(items) || items.length === 0) problems = ['items must be a non-empty array'];

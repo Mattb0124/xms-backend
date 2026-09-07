@@ -80,7 +80,7 @@ describe('bootstrap', () => {
     const defaults = await withSuperuser((client) =>
       client.query(`select kind, scope_key from op.config_defaults where status = 'active' order by 1, 2`),
     );
-    expect(defaults.rows).toHaveLength(10);
+    expect(defaults.rows).toHaveLength(11);
     const event = await withSuperuser((client) =>
       client.query(`select actor_id from sys.security_events where event_type = 'auth.bootstrap.completed'`),
     );

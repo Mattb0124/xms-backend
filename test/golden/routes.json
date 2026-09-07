@@ -141,6 +141,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/ai-settings",
+    "controller": "AiSettingsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "ai:configure",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/accounts/:id/ai-settings",
+    "controller": "AiSettingsController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "ai:configure",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/reports",
     "controller": "ReportingController",
     "handler": "runs",
@@ -666,6 +686,116 @@
     "handler": "search",
     "realm": "internal",
     "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/axel/accuracy",
+    "controller": "AxelController",
+    "handler": "accuracy",
+    "realm": "internal",
+    "permission": "ai:configure",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/axel/config/defaults",
+    "controller": "AiSettingsController",
+    "handler": "defaults",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/axel/config/defaults",
+    "controller": "AiSettingsController",
+    "handler": "setDefaults",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/proposals",
+    "controller": "AxelController",
+    "handler": "propose",
+    "realm": "internal",
+    "permission": "ai:use",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/suggest",
+    "controller": "AxelController",
+    "handler": "suggest",
+    "realm": "internal",
+    "permission": "ai:use",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/axel/suggestions",
+    "controller": "AxelController",
+    "handler": "open",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/suggestions/:id/decisions",
+    "controller": "AxelController",
+    "handler": "decide",
+    "realm": "internal",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/suggestions/:id/feedback",
+    "controller": "AxelController",
+    "handler": "feedback",
+    "realm": "internal",
+    "permission": "ai:use",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/axel/threads",
+    "controller": "AxelController",
+    "handler": "threads",
+    "realm": "internal",
+    "permission": "ai:use",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/turns",
+    "controller": "AxelController",
+    "handler": "turn",
+    "realm": "internal",
+    "permission": "ai:use",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/axel/turns/:streamId/cancel",
+    "controller": "AxelController",
+    "handler": "cancel",
+    "realm": "internal",
+    "permission": "ai:use",
     "public": null,
     "axel": false
   },

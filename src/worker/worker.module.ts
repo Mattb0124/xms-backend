@@ -2,6 +2,8 @@ import { Module, type OnModuleInit } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import { CommonModule } from '../common/common.module.js';
 import { StorageCoreModule } from '../common/storage/storage.module.js';
+import { AiCoreModule } from '../modules/ai/ai.module.js';
+import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
 import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
@@ -30,6 +32,7 @@ import { SlaJobs } from './sla-jobs.js';
     TicketsCoreModule,
     EmailCoreModule,
     ReportingCoreModule,
+    AiCoreModule,
   ],
   providers: [
     {
@@ -49,6 +52,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly dispatcher: OutboxDispatcher,
     private readonly email: EmailService,
     private readonly snapshots: SnapshotJob,
+    private readonly suggestions: SuggestionService,
   ) {}
 
   onModuleInit(): void {
@@ -57,9 +61,15 @@ export class WorkerModule implements OnModuleInit {
       (type) => ['comment.created', 'ticket.created', 'ticket.transitioned'].includes(type),
       (row) => this.email.handleOutbox(row),
     );
+    this.dispatcher.subscribe(
+      'axel.intake',
+      (type) => type === 'ticket.created',
+      (row) => this.suggestions.intake(row.account_id, row.aggregate_id).then(() => undefined),
+    );
     if (!this.pools.has('worker')) return;
     this.runner.schedule(this.sla.sweeper());
     this.runner.schedule(this.sla.atRisk());
     this.runner.schedule(this.snapshots.job());
+    this.runner.schedule(this.suggestions.expiryJob());
   }
 }

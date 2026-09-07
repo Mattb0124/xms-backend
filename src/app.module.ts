@@ -5,6 +5,7 @@ import { StorageModule } from './common/storage/storage.module.js';
 import { DbModule } from './db/db.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { AiModule } from './modules/ai/ai.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
 import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
@@ -38,6 +39,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     AttachmentsModule,
     EmailModule,
     ReportingModule,
+    AiModule,
   ],
 })
 export class AppModule {}

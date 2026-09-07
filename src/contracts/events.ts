@@ -114,6 +114,11 @@ export const AUDIT_EVENT_TYPES = [
   'article.published',
   'article.retired',
   'attachment.quarantined',
+  'ai.settings.changed',
+  'ai.suggestion.offered',
+  'ai.suggestion.applied',
+  'ai.suggestion.rejected',
+  'ai.suggestion.expired',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
