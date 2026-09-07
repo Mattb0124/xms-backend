@@ -563,7 +563,20 @@ export class TimeService {
   }
 
   billingPeriods(principal: Principal, accountId: string) {
-    return this.uow.run(principal, (tx) => this.time.billingPeriodsOf(tx, accountId));
+    return this.uow.run(principal, async (tx) => {
+      const rows = await this.time.billingPeriodsOf(tx, accountId);
+      const names = await this.time.userNames(
+        tx,
+        rows.flatMap((row) => [row.submitted_by, row.approved_by, row.locked_by]),
+      );
+      const nameOf = (id: string | null) => (id ? (names.get(id) ?? null) : null);
+      return rows.map((row) => ({
+        ...row,
+        submitted_by_name: nameOf(row.submitted_by),
+        approved_by_name: nameOf(row.approved_by),
+        locked_by_name: nameOf(row.locked_by),
+      }));
+    });
   }
 
   /**

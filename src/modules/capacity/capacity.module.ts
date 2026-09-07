@@ -189,7 +189,8 @@ export class CapacityRepository extends RepositoryBase {
       accountId: string;
       month: string;
       plannedMinutes: number;
-      note: string | null;
+      /** Omitted keeps the stored note; null clears it. */
+      note?: string | null;
       version?: number;
     },
     updatedBy: string,
@@ -201,6 +202,7 @@ export class CapacityRepository extends RepositoryBase {
     );
     if (existing && cell.version !== undefined && existing.version !== cell.version)
       throw new ConflictException({ code: 'stale_version', entity: 'allocation', current: existing.version });
+    const note = cell.note === undefined ? (existing?.note ?? null) : cell.note;
     if (cell.plannedMinutes === 0 && !cell.note) {
       if (existing) await tx.query('delete from op.allocations where id = $1', [existing.id]);
       return null;
@@ -211,14 +213,14 @@ export class CapacityRepository extends RepositoryBase {
         'allocation',
         `update op.allocations set planned_minutes = $2, note = $3, updated_by = $4, version = version + 1
           where id = $1 returning *, period_month::text as period_month`,
-        [existing.id, cell.plannedMinutes, cell.note, updatedBy],
+        [existing.id, cell.plannedMinutes, note, updatedBy],
       );
     return this.one(
       tx,
       'allocation',
       `insert into op.allocations (person_id, account_id, period_month, planned_minutes, note, updated_by)
        values ($1, $2, $3, $4, $5, $6) returning *, period_month::text as period_month`,
-      [cell.personId, cell.accountId, cell.month, cell.plannedMinutes, cell.note, updatedBy],
+      [cell.personId, cell.accountId, cell.month, cell.plannedMinutes, note, updatedBy],
     );
   }
 
@@ -551,8 +553,9 @@ export class CapacityService {
             available_minutes: sum.available_minutes + row.month.available_minutes,
             allocated_minutes: sum.allocated_minutes + row.month.allocated_minutes,
             actual_minutes: sum.actual_minutes + row.month.actual_minutes,
+            remaining_minutes: sum.remaining_minutes + row.month.remaining_minutes,
           }),
-          { available_minutes: 0, allocated_minutes: 0, actual_minutes: 0 },
+          { available_minutes: 0, allocated_minutes: 0, actual_minutes: 0, remaining_minutes: 0 },
         ),
       };
     });
@@ -829,7 +832,7 @@ export class CapacityService {
             accountId: cell.account_id,
             month: cell.month,
             plannedMinutes: cell.planned_minutes,
-            note: cell.note ?? null,
+            note: cell.note,
             version: cell.version,
           },
           principal.userId,
@@ -906,6 +909,7 @@ export class CapacityService {
         totals: {
           planned_minutes: lines.reduce((sum, line) => sum + line.planned_minutes, 0),
           actual_minutes: lines.reduce((sum, line) => sum + line.actual_minutes, 0),
+          variance_minutes: lines.reduce((sum, line) => sum + line.variance_minutes, 0),
         },
       };
     });

@@ -631,6 +631,22 @@ export class TimeRepository extends RepositoryBase {
     );
   }
 
+  /** Display names for user ids on billing periods; unknown ids are absent and 'system' names itself. */
+  async userNames(tx: Tx, ids: Iterable<string | null | undefined>): Promise<Map<string, string>> {
+    const wanted = [
+      ...new Set([...ids].filter((id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id))),
+    ];
+    const names = new Map<string, string>([['system', 'System']]);
+    if (wanted.length === 0) return names;
+    const rows = await this.many<{ id: string; name: string }>(
+      tx,
+      `select id, trim(first_name || ' ' || last_name) as name from op.users where id = any($1::uuid[])`,
+      [wanted],
+    );
+    for (const row of rows) names.set(row.id, row.name || row.id);
+    return names;
+  }
+
   billingPeriodsOf(tx: Tx, accountId: string): Promise<BillingPeriodRow[]> {
     return this.many<BillingPeriodRow>(
       tx,
