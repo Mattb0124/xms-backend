@@ -34,7 +34,7 @@ import { OutboxService } from '../../common/outbox/outbox.service.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { position, type BillableClassSpec, type ContractPosition } from '../../domain/time/burn.js';
-import { unloggedByDay, weekBounds } from '../../domain/time/unlogged.js';
+import { DEFAULT_PERSON_CALENDAR, unloggedByDay, weekBounds } from '../../domain/time/unlogged.js';
 import { ConfigService } from '../admin/config/config.service.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
@@ -222,9 +222,10 @@ export class TimeService {
     const bounds = weekBounds(week ?? new Date().toISOString().slice(0, 10));
     return this.uow.run(principal, async (tx) => {
       const entries = await this.time.entriesOfPerson(tx, principal.userId, bounds.from, bounds.to);
-      const days = await this.unloggedDays(tx, principal, bounds.from, bounds.to, entries);
+      const { days, calendar } = await this.unloggedDays(tx, principal, bounds.from, bounds.to, entries);
       return {
         ...bounds,
+        calendar,
         days: days.map((day) => ({ ...day, entries: entries.filter((entry) => entry.performed_on === day.date) })),
         total_minutes: entries.reduce((sum, entry) => sum + Number(entry.adjusted_minutes ?? entry.minutes), 0),
         unlogged_minutes: days.reduce((sum, day) => sum + day.unlogged_minutes, 0),
@@ -236,8 +237,8 @@ export class TimeService {
   unlogged(principal: Principal, from: string, to: string) {
     return this.uow.run(principal, async (tx) => {
       const entries = await this.time.entriesOfPerson(tx, principal.userId, from, to);
-      const days = await this.unloggedDays(tx, principal, from, to, entries);
-      return { from, to, days, unlogged_minutes: days.reduce((sum, day) => sum + day.unlogged_minutes, 0) };
+      const { days, calendar } = await this.unloggedDays(tx, principal, from, to, entries);
+      return { from, to, calendar, days, unlogged_minutes: days.reduce((sum, day) => sum + day.unlogged_minutes, 0) };
     });
   }
 
@@ -255,13 +256,19 @@ export class TimeService {
         entry.performed_on,
         (logged.get(entry.performed_on) ?? 0) + Number(entry.adjusted_minutes ?? entry.minutes),
       );
-    return unloggedByDay({
-      from,
-      to,
-      calendar: calendar ? { workingDays: calendar.workingDays, hoursPerDay: calendar.hoursPerDay } : null,
-      holidays: new Set(calendar?.holidays ?? []),
-      logged,
-    });
+    const spec = calendar
+      ? { workingDays: calendar.workingDays, hoursPerDay: calendar.hoursPerDay }
+      : DEFAULT_PERSON_CALENDAR;
+    return {
+      /** What produced the expectation, so the timesheet can say so. */
+      calendar: {
+        source: calendar ? 'person' : 'default',
+        hours_per_day: spec.hoursPerDay,
+        working_days: [...spec.workingDays],
+        holiday_calendar_name: calendar?.holidayCalendarName ?? null,
+      },
+      days: unloggedByDay({ from, to, calendar: spec, holidays: new Set(calendar?.holidays ?? []), logged }),
+    };
   }
 
   ofAccount(principal: Principal, accountId: string, from: string, to: string) {

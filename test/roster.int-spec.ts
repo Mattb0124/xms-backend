@@ -149,7 +149,7 @@ describe('a person record', () => {
     personVersion = created.body.version;
     expect(created.body).toMatchObject({
       email: 'chloe.martin@example.test',
-      fte_percent: '80.00',
+      fte_percent: 80,
       is_active: true,
       user_id: null,
     });
@@ -173,8 +173,8 @@ describe('a person record', () => {
       .send({ version: personVersion, fte_percent: 60, hours_base_per_week: 37.5, start_date: '2026-10-01' })
       .expect(200);
     expect(patched.body).toMatchObject({
-      fte_percent: '60.00',
-      hours_base_per_week: '37.50',
+      fte_percent: 60,
+      hours_base_per_week: 37.5,
       start_date: '2026-10-01',
       version: personVersion + 1,
     });

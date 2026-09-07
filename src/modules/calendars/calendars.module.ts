@@ -401,6 +401,10 @@ export class CalendarService {
   }
 
   createHolidayCalendar(principal: Principal, ctx: RequestContext, dto: CreateHolidayCalendarDto) {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const holiday of dto.holidays) (seen.has(holiday.date) ? duplicates : seen).add(holiday.date);
+    if (duplicates.size > 0) throw new BadRequestException({ code: 'duplicate_holiday', dates: [...duplicates] });
     return this.uow.operator(async (tx) => {
       const row = await this.repo.insertHolidayCalendar(tx, {
         country: dto.country.toUpperCase(),

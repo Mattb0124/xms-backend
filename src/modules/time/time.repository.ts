@@ -153,15 +153,20 @@ export class TimeRepository extends RepositoryBase {
   async personCalendarOfUser(
     tx: Tx,
     userId: string,
-  ): Promise<{ workingDays: number[]; hoursPerDay: number; holidays: string[] } | undefined> {
+  ): Promise<
+    { workingDays: number[]; hoursPerDay: number; holidays: string[]; holidayCalendarName: string | null } | undefined
+  > {
     const row = await this.maybeOne<{
       working_days: number[];
       hours_per_day: string;
       holiday_calendar_id: string | null;
+      holiday_calendar_name: string | null;
     }>(
       tx,
-      `select c.working_days, c.hours_per_day, p.holiday_calendar_id
-         from op.people p left join op.person_calendars c on c.person_id = p.id
+      `select c.working_days, c.hours_per_day, p.holiday_calendar_id, h.name as holiday_calendar_name
+         from op.people p
+         left join op.person_calendars c on c.person_id = p.id
+         left join op.holiday_calendars h on h.id = p.holiday_calendar_id
         where p.user_id = $1 and p.is_active`,
       [userId],
     );
@@ -175,6 +180,7 @@ export class TimeRepository extends RepositoryBase {
       workingDays: row.working_days,
       hoursPerDay: Number(row.hours_per_day),
       holidays: holidays.map((h) => h.date),
+      holidayCalendarName: row.holiday_calendar_name,
     };
   }
 

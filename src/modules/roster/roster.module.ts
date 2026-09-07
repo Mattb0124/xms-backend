@@ -54,9 +54,9 @@ export interface PersonRow {
   display_name: string;
   email: string;
   role: string;
-  fte_percent: string;
-  hours_base_per_week: string;
-  admin_overhead_percent: string | null;
+  fte_percent: number;
+  hours_base_per_week: number;
+  admin_overhead_percent: number | null;
   currency: string;
   country: string | null;
   time_zone: string;
@@ -106,13 +106,25 @@ export interface CertificationRow {
   expires_on: string | null;
 }
 
+/** Postgres returns numeric columns as strings; the API speaks numbers (Capacity technical section 4). */
+function numeric<T extends { fte_percent: unknown; hours_base_per_week: unknown; admin_overhead_percent: unknown }>(
+  row: T,
+): T {
+  return {
+    ...row,
+    fte_percent: Number(row.fte_percent),
+    hours_base_per_week: Number(row.hours_base_per_week),
+    admin_overhead_percent: row.admin_overhead_percent === null ? null : Number(row.admin_overhead_percent),
+  };
+}
+
 @Injectable()
 export class RosterRepository extends RepositoryBase {
   list(
     tx: Tx,
     filter: { active?: boolean; role?: string; group?: string; skill?: string; q?: string },
   ): Promise<(PersonRow & { skills: PersonSkillRow[] })[]> {
-    return this.many(
+    return this.many<PersonRow & { skills: PersonSkillRow[] }>(
       tx,
       `select p.*,
               coalesce((select json_agg(json_build_object('skill_id', s.id, 'code', s.code, 'name', s.name, 'kind', s.kind, 'level', ps.level, 'assessed_on', ps.assessed_on, 'assessed_by', ps.assessed_by) order by s.name)
@@ -125,29 +137,31 @@ export class RosterRepository extends RepositoryBase {
           and ($5::text is null or p.display_name ilike '%' || $5 || '%' or p.email ilike '%' || $5 || '%')
         order by p.display_name`,
       [filter.active ?? null, filter.role ?? null, filter.group ?? null, filter.skill ?? null, filter.q ?? null],
-    );
+    ).then((rows) => rows.map(numeric));
   }
 
   person(tx: Tx, id: string): Promise<PersonRow> {
-    return this.one(tx, 'person', 'select * from op.people where id = $1', [id]);
+    return this.one<PersonRow>(tx, 'person', 'select * from op.people where id = $1', [id]).then(numeric);
   }
 
   byEmail(tx: Tx, email: string): Promise<PersonRow | undefined> {
-    return this.maybeOne(tx, 'select * from op.people where email = $1', [email]);
+    return this.maybeOne<PersonRow>(tx, 'select * from op.people where email = $1', [email]).then((row) =>
+      row ? numeric(row) : undefined,
+    );
   }
 
   insert(tx: Tx, values: Record<string, unknown>): Promise<PersonRow> {
     const keys = Object.keys(values);
-    return this.one(
+    return this.one<PersonRow>(
       tx,
       'person',
       `insert into op.people (${keys.map((key) => `"${key}"`).join(', ')}) values (${keys.map((_, index) => `$${index + 1}`).join(', ')}) returning *`,
       keys.map((key) => values[key]),
-    );
+    ).then(numeric);
   }
 
   update(tx: Tx, id: string, version: number, assignments: Record<string, unknown>): Promise<PersonRow> {
-    return this.updateVersioned(tx, 'person', 'op.people', id, version, assignments);
+    return this.updateVersioned<PersonRow>(tx, 'person', 'op.people', id, version, assignments).then(numeric);
   }
 
   /** Internal users without a person row, with their highest system role name. */
