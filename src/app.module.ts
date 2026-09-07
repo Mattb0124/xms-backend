@@ -7,6 +7,7 @@ import { AdminModule } from './modules/admin/admin.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
 import { PortalModule } from './modules/portal/portal.module.js';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
+import { TimeModule } from './modules/time/time.module.js';
 import { TicketsModule } from './modules/tickets/tickets.module.js';
 
 /**
@@ -26,6 +27,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     ContractsModule,
     TicketsModule,
     PortalModule,
+    TimeModule,
   ],
 })
 export class AppModule {}

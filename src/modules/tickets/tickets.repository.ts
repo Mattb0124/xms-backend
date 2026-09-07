@@ -93,6 +93,7 @@ export interface ListFilters {
   groupId?: string;
   unassigned?: boolean;
   open?: boolean;
+  breached?: boolean;
   q?: string;
   requesterContactId?: string;
   /** Translated condition set; called with the current bind offset. */
@@ -190,6 +191,7 @@ export class TicketsRepository extends RepositoryBase {
     if (filters.groupId) add('group_id = ?', filters.groupId);
     if (filters.requesterContactId) add('requester_contact_id = ?', filters.requesterContactId);
     if (filters.unassigned) where.push('assignee_id is null');
+    if (filters.breached) where.push('(sla_response_breached or sla_resolution_breached)');
     if (filters.open) where.push(`state not in ('closed', 'cancelled')`);
     if (filters.q) {
       const number = parseTicketKey(filters.q.trim());

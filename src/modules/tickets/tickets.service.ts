@@ -27,6 +27,7 @@ import {
 import { checkRequirements } from '../../domain/tickets/close-discipline.js';
 import { translate, type ConditionSet } from './conditions.js';
 import { ViewsRepository } from './views.js';
+import { TimeRepository } from '../time/time.repository.js';
 import type { Level, Priority } from '../../domain/tickets/priority-matrix.js';
 import type { StateMachine } from '../../domain/tickets/state-machine.js';
 import { ConfigService } from '../admin/config/config.service.js';
@@ -78,6 +79,8 @@ export interface TicketView {
   closed_at: string | null;
   cancelled_at: string | null;
   sla: { response?: ClockView; resolution?: ClockView };
+  /** Whether the reading principal follows this ticket (unmuted watcher). */
+  watching?: boolean;
   created_by: string;
   created_by_name: string;
   created_at: string;
@@ -125,6 +128,7 @@ export class TicketsService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly views: ViewsRepository,
+    private readonly time: TimeRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -160,6 +164,7 @@ export class TicketsService {
           groupId: query.group_id,
           unassigned: query.unassigned,
           open: query.open,
+          breached: query.breached,
           q: query.q,
         },
         { limit, sort: sort ?? 'updated_desc', cursor: decodeCursor(query.cursor) },
@@ -202,7 +207,9 @@ export class TicketsService {
         : undefined;
       if (principal.kind === 'portal') return this.toPortalView(row, machine, requester);
       const clocks = await this.tickets.clocksOf(tx, row.id);
-      return this.toView(row, clocks, machine, requester ?? null, new Date());
+      const watchers = await this.tickets.watchersOf(tx, row.id);
+      const watching = watchers.some((watcher) => watcher.user_id === principal.userId && !watcher.muted_at);
+      return { ...this.toView(row, clocks, machine, requester ?? null, new Date()), watching };
     });
   }
 
@@ -564,7 +571,11 @@ export class TicketsService {
             timeExemptionReason: dto.resolution.time_exemption_reason,
           },
         },
-        { loggedMinutes: 0, noSolutionCodes: codes.noSolution, knownCodes: codes.known },
+        {
+          loggedMinutes: await this.time.loggedMinutes(tx, before.id),
+          noSolutionCodes: codes.noSolution,
+          knownCodes: codes.known,
+        },
       );
       // Requirements the month does not enforce yet (approval, plans, windows, workaround) are recorded, not blocking.
       if (missing.length > 0) throw new ConflictException({ code: 'missing_requirements', items: missing });

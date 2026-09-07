@@ -80,6 +80,16 @@ async function main(): Promise<void> {
         },
       ]);
       await tx.query(`update op.accounts set status = 'active' where id = $1`, [account.id]);
+      const contract = await tx.query<{ id: string }>(
+        `insert into acct.contracts (account_id, key, name, model, period_hours, status)
+         values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), 'Managed services retainer', 'retainer', 40, 'active') returning id`,
+        [account.id],
+      );
+      await tx.query(
+        `insert into acct.contract_periods (account_id, contract_id, starts_on, ends_on, contracted_minutes)
+         values ($1, $2, date_trunc('month', current_date)::date, (date_trunc('month', current_date) + interval '1 month - 1 day')::date, 2400)`,
+        [account.id, contract.rows[0].id],
+      );
     });
     console.log(`account ${seed.key} created`);
   }

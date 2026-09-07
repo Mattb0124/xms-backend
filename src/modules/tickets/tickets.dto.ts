@@ -248,6 +248,11 @@ export class ListTicketsQueryDto {
   mine?: boolean;
 
   @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  breached?: boolean;
+
+  @IsOptional()
   @IsString()
   @MaxLength(200)
   q?: string;

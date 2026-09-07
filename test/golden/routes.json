@@ -30,6 +30,56 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/billing-periods",
+    "controller": "TimeController",
+    "handler": "createBillingPeriod",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/billing-periods/:periodId/lock",
+    "controller": "TimeController",
+    "handler": "lockBillingPeriod",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/buckets",
+    "controller": "TimeController",
+    "handler": "buckets",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/buckets",
+    "controller": "TimeController",
+    "handler": "createBucket",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/buckets/:bucketId/time",
+    "controller": "TimeController",
+    "handler": "logOnBucket",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/accounts/:accountId/contracts",
     "controller": "ContractsController",
@@ -46,6 +96,46 @@
     "handler": "create",
     "realm": "internal",
     "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/contracts/:contractId/periods",
+    "controller": "TimeController",
+    "handler": "periods",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/contracts/:contractId/periods",
+    "controller": "TimeController",
+    "handler": "createPeriod",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/contracts/:contractId/position",
+    "controller": "TimeController",
+    "handler": "position",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/time",
+    "controller": "TimeController",
+    "handler": "ofAccount",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },
@@ -391,6 +481,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/catalogs",
+    "controller": "CatalogsController",
+    "handler": "catalogs",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/catalogs/state-machine",
+    "controller": "CatalogsController",
+    "handler": "stateMachine",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/groups",
     "controller": "DirectoryController",
     "handler": "groups",
@@ -621,6 +731,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/tickets/:key/time",
+    "controller": "TimeController",
+    "handler": "ofTicket",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/time",
+    "controller": "TimeController",
+    "handler": "logOnTicket",
+    "realm": "internal",
+    "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/tickets/:key/timeline",
     "controller": "TicketsController",
     "handler": "timeline",
@@ -676,6 +806,26 @@
     "handler": "addWorkNote",
     "realm": "internal",
     "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/time/adjustments",
+    "controller": "TimeController",
+    "handler": "adjust",
+    "realm": "internal",
+    "permission": "time:adjust",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/time/mine",
+    "controller": "TimeController",
+    "handler": "mine",
+    "realm": "internal",
+    "permission": "time:log",
     "public": null,
     "axel": false
   },

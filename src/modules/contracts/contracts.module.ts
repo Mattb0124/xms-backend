@@ -140,6 +140,14 @@ export class ContractsService {
   create(principal: Principal, ctx: RequestContext, accountId: string, dto: CreateContractDto): Promise<ContractRow> {
     return this.uow.run(principal, async (tx) => {
       const contract = await this.contracts.insert(tx, { accountId, ...dto });
+      const startsOn = dto.period_starts_on ?? new Date().toISOString().slice(0, 8) + '01';
+      const endsOn =
+        dto.period_ends_on ??
+        new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 0)).toISOString().slice(0, 10);
+      await tx.query(
+        `insert into acct.contract_periods (account_id, contract_id, starts_on, ends_on, contracted_minutes) values ($1, $2, $3, $4, $5)`,
+        [accountId, contract.id, startsOn, endsOn, Math.round((dto.period_hours ?? 0) * 60)],
+      );
       await this.audit.account(tx, accountId, actorOf(principal), ctx, [
         {
           entityKind: 'contract',

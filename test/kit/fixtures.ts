@@ -33,6 +33,11 @@ type OverrideValue = unknown | ((client: pg.Client, accountId: string, cache: Ma
 
 const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.calendar_hours': { weekday: 1, start_minute: 540, end_minute: 1020 },
+  // Exactly one of ticket_id or bucket_id must be set.
+  'acct.time_entries': {
+    ticket_id: (client: pg.Client, accountId: string, cache: Map<string, string>) =>
+      parentId(client, 'acct.tickets', accountId, cache),
+  },
   // The portal policy on the audit stream admits state transitions only.
   'acct.audit_events': { event_type: 'ticket.transition', field: 'state' },
   // A link needs two distinct tickets; the second is created outside the cache.
