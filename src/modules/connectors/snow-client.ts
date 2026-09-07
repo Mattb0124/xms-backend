@@ -41,6 +41,8 @@ export interface SnowClient {
   journal(sysId: string, since: Date | null): Promise<JournalEntry[]>;
   dictionary(table: string): Promise<DictionaryEntry[]>;
   recent(table: string, limit: number): Promise<SnowRecord[]>;
+  /** Records opened inside a date range, paged by offset in sys_id order (the migration extractor). */
+  range(table: string, from: Date, to: Date, offset: number, limit: number): Promise<SnowRecord[]>;
   create(table: string, body: Record<string, unknown>): Promise<SnowRecord>;
   update(table: string, sysId: string, body: Record<string, unknown>): Promise<SnowRecord>;
   addJournal(table: string, sysId: string, element: 'comments' | 'work_notes', text: string): Promise<JournalEntry>;
@@ -137,6 +139,16 @@ export class HttpSnowClient implements SnowClient {
     const result = await this.request<{ result: SnowRecord[] }>('GET', `/api/now/table/${table}`, {
       sysparm_query: 'ORDERBYDESCsys_updated_on',
       sysparm_limit: String(limit),
+      sysparm_display_value: 'all',
+    });
+    return result.result;
+  }
+
+  async range(table: string, from: Date, to: Date, offset: number, limit: number): Promise<SnowRecord[]> {
+    const result = await this.request<{ result: SnowRecord[] }>('GET', `/api/now/table/${table}`, {
+      sysparm_query: `sys_created_on>=${toSnowTime(from)}^sys_created_on<=${toSnowTime(to)}^ORDERBYsys_id`,
+      sysparm_limit: String(limit),
+      sysparm_offset: String(offset),
       sysparm_display_value: 'all',
     });
     return result.result;

@@ -1201,6 +1201,96 @@
   },
   {
     "method": "GET",
+    "path": "/v1/migration/batches",
+    "controller": "MigrationController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/migration/batches",
+    "controller": "MigrationController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/migration/batches/:id",
+    "controller": "MigrationController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/migration/batches/:id/records",
+    "controller": "MigrationController",
+    "handler": "records",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/migration/batches/:id/records/:recordId",
+    "controller": "MigrationController",
+    "handler": "record",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/migration/batches/:id/run",
+    "controller": "MigrationController",
+    "handler": "run",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/migration/reconciliation",
+    "controller": "MigrationController",
+    "handler": "reports",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/migration/reconciliation/:id/lines/:line/explain",
+    "controller": "MigrationController",
+    "handler": "explain",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/migration/reconciliation/:id/sign-off",
+    "controller": "MigrationController",
+    "handler": "signOff",
+    "realm": "internal",
+    "permission": "admin:migration",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/notifications",
     "controller": "NotificationsController",
     "handler": "feed",

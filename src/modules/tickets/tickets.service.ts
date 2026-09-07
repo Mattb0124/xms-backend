@@ -117,6 +117,14 @@ interface ResolutionCodesBody {
   items: { key: string; label: string; no_solution: boolean }[];
 }
 
+/** Import-only message fields (Data Migration technical section 3): the source author and time, and whether it counted as an operator response. */
+export interface MessageOverrides {
+  readonly createdAt?: Date;
+  readonly authorKind?: string;
+  readonly authorName?: string;
+  readonly operatorResponse?: boolean;
+}
+
 const OPEN_STATES_EXCLUDED = ['closed', 'cancelled'];
 
 @Injectable()
@@ -344,11 +352,15 @@ export class TicketsService {
       });
 
       const now = new Date();
-      const targets = await this.targetsFor(tx, contract.sla_policy, dto.account_id, dto.type, priority);
-      const policyRef = contract.sla_policy ? `contract:${contract.id}` : targets.policyRef;
-      const calendar = await this.calendars.forAccount(tx, dto.account_id);
-      for (const clock of startClocks(targets.targets, policyRef, calendar, now)) {
-        await this.tickets.insertClock(tx, row.account_id, row.id, clock);
+      // Import mode (Data Migration technical section 3): no clocks, no outbox, no notifications; the source dates win.
+      const importing = ctx.origin === 'import';
+      if (!importing) {
+        const targets = await this.targetsFor(tx, contract.sla_policy, dto.account_id, dto.type, priority);
+        const policyRef = contract.sla_policy ? `contract:${contract.id}` : targets.policyRef;
+        const calendar = await this.calendars.forAccount(tx, dto.account_id);
+        for (const clock of startClocks(targets.targets, policyRef, calendar, now)) {
+          await this.tickets.insertClock(tx, row.account_id, row.id, clock);
+        }
       }
       await this.tickets.ensureWatcher(tx, row.account_id, row.id, principal.userId, 'creator');
       if (assignee) await this.tickets.ensureWatcher(tx, row.account_id, row.id, assignee.id, 'assignee');
@@ -375,17 +387,28 @@ export class TicketsService {
             ]
           : []),
       ]);
-      await this.outbox.write(tx, {
-        accountId: row.account_id,
-        aggregate: 'ticket',
-        aggregateId: row.id,
-        eventType: 'ticket.created',
-        correlationId,
-        origin: ctx.origin,
-        payload: { key: ticketKey(row.number), type: row.type, priority: row.priority },
-      });
-      if (assignee && assignee.id !== principal.userId) {
-        await this.notifyAssignment(tx, row, assignee.id, principal.displayName, correlationId);
+      if (!importing) {
+        await this.outbox.write(tx, {
+          accountId: row.account_id,
+          aggregate: 'ticket',
+          aggregateId: row.id,
+          eventType: 'ticket.created',
+          correlationId,
+          origin: ctx.origin,
+          payload: { key: ticketKey(row.number), type: row.type, priority: row.priority },
+        });
+        if (assignee && assignee.id !== principal.userId) {
+          await this.notifyAssignment(tx, row, assignee.id, principal.displayName, correlationId);
+        }
+      }
+      const sourceCreatedAt = (dto as { created_at?: string }).created_at;
+      if (importing && sourceCreatedAt) {
+        await tx.query(`update acct.tickets set created_at = $2, updated_at = $2 where id = $1`, [
+          row.id,
+          sourceCreatedAt,
+        ]);
+        row.created_at = new Date(sourceCreatedAt).toISOString();
+        row.updated_at = row.created_at;
       }
       const clocks = await this.tickets.clocksOf(tx, row.id);
       return this.toView(row, clocks, machine, requester ?? null, now, await this.calendars.forClocks(tx, clocks));
@@ -537,15 +560,16 @@ export class TicketsService {
           await this.tickets.saveClock(tx, clockRow.id, restamped);
         }
       }
-      await this.outbox.write(tx, {
-        accountId: before.account_id,
-        aggregate: 'ticket',
-        aggregateId: before.id,
-        eventType: 'ticket.updated',
-        correlationId,
-        origin: ctx.origin,
-        payload: { fields: entries.map((entry) => entry.field).filter(Boolean) },
-      });
+      if (ctx.origin !== 'import')
+        await this.outbox.write(tx, {
+          accountId: before.account_id,
+          aggregate: 'ticket',
+          aggregateId: before.id,
+          eventType: 'ticket.updated',
+          correlationId,
+          origin: ctx.origin,
+          payload: { fields: entries.map((entry) => entry.field).filter(Boolean) },
+        });
       if (newAssignee) {
         await this.tickets.ensureWatcher(tx, before.account_id, before.id, newAssignee.id, 'assignee');
         if (newAssignee.id !== principal.userId)
@@ -826,23 +850,35 @@ export class TicketsService {
     idOrKey: string,
     dto: MessageDto,
     bound?: Tx,
+    overrides?: MessageOverrides,
   ): Promise<unknown> {
     const correlationId = ctx.requestId ?? randomUUID();
+    const importing = ctx.origin === 'import';
     return this.inTx(principal, bound, async (tx) => {
       const ticket = await this.lock(tx, idOrKey);
-      const isOperator = principal.kind === 'internal' || principal.kind === 'api_client';
+      const isOperator = importing
+        ? (overrides?.operatorResponse ?? false)
+        : principal.kind === 'internal' || principal.kind === 'api_client';
       const firstResponse = isOperator && !ticket.first_response_at;
-      const now = new Date();
+      const now = overrides?.createdAt ?? new Date();
       const comment = await this.tickets.insertComment(tx, {
         accountId: ticket.account_id,
         ticketId: ticket.id,
-        authorKind: actorKindOf(principal),
+        authorKind: overrides?.authorKind ?? actorKindOf(principal),
         authorId: principal.userId,
-        authorName: principal.displayName,
+        authorName: overrides?.authorName ?? principal.displayName,
         body: dto.body,
-        source: ctx.origin?.startsWith('sync:') ? 'sync' : principal.kind === 'portal' ? 'portal' : 'internal',
+        source: importing
+          ? 'import'
+          : ctx.origin?.startsWith('sync:')
+            ? 'sync'
+            : principal.kind === 'portal'
+              ? 'portal'
+              : 'internal',
         isFirstResponse: firstResponse,
       });
+      if (overrides?.createdAt)
+        await tx.query('update acct.comments set created_at = $2 where id = $1', [comment.id, overrides.createdAt]);
       const entries: AuditEntry[] = [
         {
           entityKind: 'comment',
@@ -888,6 +924,7 @@ export class TicketsService {
         { requestId: ctx.requestId, correlationId },
         entries,
       );
+      if (importing) return comment;
       await this.outbox.write(tx, {
         accountId: ticket.account_id,
         aggregate: 'ticket',
@@ -916,7 +953,9 @@ export class TicketsService {
     idOrKey: string,
     dto: MessageDto,
     bound?: Tx,
+    overrides?: MessageOverrides,
   ): Promise<unknown> {
+    const importing = ctx.origin === 'import';
     if (principal.kind === 'portal') throw new ForbiddenException({ code: 'wrong_realm' });
     const correlationId = ctx.requestId ?? randomUUID();
     return this.inTx(principal, bound, async (tx) => {
@@ -924,15 +963,18 @@ export class TicketsService {
       const note = await this.tickets.insertWorkNote(tx, {
         accountId: ticket.account_id,
         ticketId: ticket.id,
-        authorKind: 'user',
+        authorKind: overrides?.authorKind ?? 'user',
         authorId: principal.userId,
-        authorName: principal.displayName,
+        authorName: overrides?.authorName ?? principal.displayName,
         body: dto.body,
-        source: 'internal',
+        source: importing ? 'import' : ctx.origin?.startsWith('sync:') ? 'sync' : 'internal',
       });
+      if (overrides?.createdAt)
+        await tx.query('update acct.work_notes set created_at = $2 where id = $1', [note.id, overrides.createdAt]);
       await this.audit.account(tx, ticket.account_id, actorOf(principal), { requestId: ctx.requestId, correlationId }, [
         { entityKind: 'work_note', entityId: note.id, ticketId: ticket.id, eventType: 'work_note.created' },
       ]);
+      if (importing) return note;
       // Work notes never produce a public-direction outbox event (Security section 5).
       await this.outbox.write(tx, {
         accountId: ticket.account_id,
@@ -945,6 +987,58 @@ export class TicketsService {
       });
       await this.tickets.ensureWatcher(tx, ticket.account_id, ticket.id, principal.userId, 'commenter');
       return note;
+    });
+  }
+
+  /**
+   * Import only (Data Migration technical section 3): places a migrated ticket
+   * in its historical state without the close discipline, clocks, outbox or
+   * notifications, stamping resolved and closed times from the source. The
+   * state must exist in the ticket's machine; the audit event records it as
+   * a transition by the migration actor.
+   */
+  async importState(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    input: { state: string; at?: Date; resolutionCode?: string },
+    bound?: Tx,
+  ): Promise<TicketView> {
+    if (ctx.origin !== 'import') throw new ForbiddenException({ code: 'import_only' });
+    return this.inTx(principal, bound, async (tx) => {
+      const before = await this.lock(tx, idOrKey);
+      const { machine } = await this.config.stateMachine(tx, before.type, before.account_id);
+      const definition = machine.state(input.state);
+      if (!definition) throw new BadRequestException({ code: 'unknown_state', state: input.state });
+      if (before.state === input.state) {
+        const clocks = await this.tickets.clocksOf(tx, before.id);
+        return this.toView(before, clocks, machine, null, new Date(), new Map());
+      }
+      const at = input.at ?? new Date();
+      const assignments: Record<string, unknown> = { state: input.state };
+      if (definition.effects?.resolve) {
+        assignments.resolved_at = at;
+        if (input.resolutionCode) assignments.resolution_code = input.resolutionCode;
+      }
+      if (definition.effects?.close) {
+        assignments.resolved_at = before.resolved_at ?? at;
+        assignments.closed_at = at;
+      }
+      if (definition.effects?.cancel) assignments.cancelled_at = at;
+      const after = await this.tickets.update(tx, before.id, before.version, assignments);
+      await this.audit.account(tx, before.account_id, actorOf(principal), { requestId: ctx.requestId }, [
+        {
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.transition',
+          field: 'state',
+          oldValue: before.state,
+          newValue: input.state,
+        },
+      ]);
+      const clocks = await this.tickets.clocksOf(tx, before.id);
+      return this.toView(after, clocks, machine, null, new Date(), new Map());
     });
   }
 

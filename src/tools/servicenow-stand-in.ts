@@ -198,6 +198,7 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
       const [, table, sysId] = match;
       const query = url.searchParams.get('sysparm_query') ?? '';
       const limit = Number(url.searchParams.get('sysparm_limit') ?? 200);
+      const offset = Number(url.searchParams.get('sysparm_offset') ?? 0);
 
       if (table === 'sys_dictionary' && request.method === 'GET') {
         const name = /name=([a-z0-9_]+)/i.exec(query)?.[1] ?? '';
@@ -225,7 +226,7 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
         return;
       }
       if (request.method === 'GET') {
-        json(200, { result: applyQuery([...rows.values()], query).slice(0, limit) });
+        json(200, { result: applyQuery([...rows.values()], query).slice(offset, offset + limit) });
         return;
       }
       if (request.method === 'POST') {
@@ -292,15 +293,15 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
 export function applyQuery(rows: Record<string, unknown>[], query: string): Record<string, unknown>[] {
   const parts = query.split('^').filter(Boolean);
   const orders: { field: string; desc: boolean }[] = [];
-  const groups: { or: boolean; field: string; op: '>' | '='; value: string }[] = [];
+  const groups: { or: boolean; field: string; op: '>' | '<' | '>=' | '<=' | '='; value: string }[] = [];
   for (const part of parts) {
     if (part.startsWith('ORDERBYDESC')) orders.push({ field: part.slice(11), desc: true });
     else if (part.startsWith('ORDERBY')) orders.push({ field: part.slice(7), desc: false });
     else {
       const or = part.startsWith('OR');
       const condition = or ? part.slice(2) : part;
-      const match = condition.match(/^([a-z0-9_.]+)(>|=)(.*)$/i);
-      if (match) groups.push({ or, field: match[1], op: match[2] as '>' | '=', value: match[3] });
+      const match = condition.match(/^([a-z0-9_.]+)(>=|<=|>|<|=)(.*)$/i);
+      if (match) groups.push({ or, field: match[1], op: match[2] as '>' | '<' | '>=' | '<=' | '=', value: match[3] });
     }
   }
   // Conditions joined by ^ are AND; ^OR starts an alternative branch: (a AND b) OR (c AND d).
@@ -311,7 +312,18 @@ export function applyQuery(rows: Record<string, unknown>[], query: string): Reco
   }
   const holds = (row: Record<string, unknown>, condition: (typeof groups)[number]): boolean => {
     const value = String(row[condition.field] ?? '');
-    return condition.op === '>' ? value > condition.value : value === condition.value;
+    switch (condition.op) {
+      case '>':
+        return value > condition.value;
+      case '<':
+        return value < condition.value;
+      case '>=':
+        return value >= condition.value;
+      case '<=':
+        return value <= condition.value;
+      default:
+        return value === condition.value;
+    }
   };
   let result =
     branches.length === 0 ? rows : rows.filter((row) => branches.some((branch) => branch.every((c) => holds(row, c))));

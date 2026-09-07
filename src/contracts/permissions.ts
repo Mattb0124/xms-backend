@@ -34,6 +34,7 @@ export const OPERATOR_PERMISSIONS = {
   'admin:users': 'Manage users, roles, grants and groups',
   'admin:config': 'Manage catalogs, calendars and configuration versions',
   'admin:connectors': 'Manage connectors and replay dead letters',
+  'admin:migration': 'Run imports, reconcile and sign off migrations',
 } as const;
 
 export const PORTAL_PERMISSIONS = {
@@ -131,6 +132,7 @@ export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>
       'admin:users',
       'admin:config',
       'admin:connectors',
+      'admin:migration',
     ],
     Consultant: ['tickets:resolve', 'time:log', 'kb:author', 'ai:use'],
     Dispatcher: ['tickets:work', 'tickets:override-priority', 'reports:view-portfolio', 'capacity:view', 'ai:use'],

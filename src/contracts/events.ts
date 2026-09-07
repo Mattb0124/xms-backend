@@ -136,6 +136,11 @@ export const AUDIT_EVENT_TYPES = [
   'roster.skills.updated',
   'roster.certification.added',
   'roster.certification.removed',
+  'imported',
+  'migration.batch.created',
+  'migration.batch.run',
+  'migration.report.explained',
+  'migration.report.signed',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];
