@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -136,9 +138,36 @@ export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | undefined;
 
+/**
+ * Local development reads `.env` from the working directory (never in
+ * production, where the task definition is the only source). Values
+ * already present in the process environment win, so a shell override
+ * still works. Deliberately minimal: KEY=VALUE lines, `#` comments, optional
+ * surrounding quotes; no interpolation.
+ */
+export function applyDotEnv(target: NodeJS.ProcessEnv = process.env, file = join(process.cwd(), '.env')): string[] {
+  // Never in production (the task definition is the source) and never under the test runner (a developer's
+  // .env must not leak into a suite that sets its own environment).
+  if (target.NODE_ENV === 'production' || target.NODE_ENV === 'test' || target.VITEST !== undefined) return [];
+  if (!existsSync(file)) return [];
+  const applied: string[] = [];
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!match) continue;
+    const [, key, rawValue] = match;
+    if (target[key] !== undefined) continue;
+    target[key] = rawValue.trim().replace(/^(['"])(.*)\1$/, '$2');
+    applied.push(key);
+  }
+  return applied;
+}
+
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   if (cached) return cached;
-  const parsed = envSchema.safeParse(source);
+  if (source === process.env) applyDotEnv(source);
+  // An empty value (KEY= in .env or the task definition) means "unset", never an empty URL or secret.
+  const cleaned = Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined && value !== ''));
+  const parsed = envSchema.safeParse(cleaned);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
     throw new Error(`Invalid environment: ${issues}`);

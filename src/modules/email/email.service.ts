@@ -586,10 +586,8 @@ export class EmailService {
   thread(principal: Principal, key: string) {
     return this.uow.run(principal, async (tx) => {
       const ticket = await this.loadTicket(tx, key);
-      const [inbound, outbound] = await Promise.all([
-        this.email.inboundOfTicket(tx, ticket.id),
-        this.email.outboundOfTicket(tx, ticket.id),
-      ]);
+      const inbound = await this.email.inboundOfTicket(tx, ticket.id);
+      const outbound = await this.email.outboundOfTicket(tx, ticket.id);
       return {
         inbound: inbound.map((row) => ({ ...row, raw_s3_key: undefined })),
         outbound: outbound.map((row) => ({ ...row, rendered_s3_key: undefined })),

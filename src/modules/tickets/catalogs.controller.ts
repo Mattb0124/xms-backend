@@ -24,11 +24,9 @@ export class CatalogsController {
   async catalogs(@CurrentPrincipal() principal: Principal, @Query('account_id') accountId?: string) {
     const scope = accountId && principal.accountIds.includes(accountId) ? accountId : undefined;
     return this.uow.run(principal, async (tx) => {
-      const [resolutionCodes, activityTypes, billableClasses] = await Promise.all([
-        this.config.resolve<{ items: unknown[] }>(tx, 'resolution_codes', '*', scope),
-        this.config.resolve<{ items: unknown[] }>(tx, 'activity_types', '*', scope),
-        this.config.resolve<{ items: unknown[] }>(tx, 'billable_classes', '*', scope),
-      ]);
+      const resolutionCodes = await this.config.resolve<{ items: unknown[] }>(tx, 'resolution_codes', '*', scope);
+      const activityTypes = await this.config.resolve<{ items: unknown[] }>(tx, 'activity_types', '*', scope);
+      const billableClasses = await this.config.resolve<{ items: unknown[] }>(tx, 'billable_classes', '*', scope);
       return {
         resolution_codes: resolutionCodes.body.items,
         activity_types: activityTypes.body.items,

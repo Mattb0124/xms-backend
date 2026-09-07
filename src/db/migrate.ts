@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { applyDotEnv } from '../config/env.js';
 
 /**
  * SQL-first migration runner (Data Model section 6).
@@ -104,6 +105,7 @@ export async function migrate(
 
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (invokedDirectly) {
+  applyDotEnv();
   const url = process.env.DATABASE_URL_MIGRATOR;
   if (!url) {
     console.error('DATABASE_URL_MIGRATOR is required');

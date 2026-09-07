@@ -1,5 +1,8 @@
 import { SignJWT } from 'jose';
 import { DEV_ISSUER } from '../common/auth/token-verifier.js';
+import { applyDotEnv } from '../config/env.js';
+
+applyDotEnv();
 
 /**
  * Mints a development token for local sign-in while the XMS Clerk

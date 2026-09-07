@@ -74,11 +74,10 @@ export class UsersService {
   async get(id: string): Promise<UserRecord & { roles: unknown[]; grants: unknown[]; groups: unknown[] }> {
     return this.uow.operator(async (tx) => {
       const user = await this.users.byId(tx, id);
-      const [roles, grants, groups] = await Promise.all([
-        this.users.assignmentsOf(tx, id),
-        this.users.grantsOf(tx, id),
-        this.users.groupsOfUser(tx, id),
-      ]);
+      // One client, one query at a time (pg refuses concurrent queries on a client from version 9).
+      const roles = await this.users.assignmentsOf(tx, id);
+      const grants = await this.users.grantsOf(tx, id);
+      const groups = await this.users.groupsOfUser(tx, id);
       return { ...user, roles, grants, groups };
     });
   }

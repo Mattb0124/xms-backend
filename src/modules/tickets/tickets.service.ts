@@ -240,12 +240,10 @@ export class TicketsService {
     return this.inTx(principal, bound, async (tx) => {
       const row = await this.load(tx, idOrKey);
       if (principal.kind === 'portal') return this.tickets.publicTimeline(tx, row.id);
-      const [comments, notes, audit, pauses] = await Promise.all([
-        this.tickets.commentsOf(tx, row.id),
-        this.tickets.workNotesOf(tx, row.id),
-        this.tickets.auditOf(tx, row.id),
-        this.tickets.pausesOf(tx, row.id),
-      ]);
+      const comments = await this.tickets.commentsOf(tx, row.id);
+      const notes = await this.tickets.workNotesOf(tx, row.id);
+      const audit = await this.tickets.auditOf(tx, row.id);
+      const pauses = await this.tickets.pausesOf(tx, row.id);
       const items = [
         ...comments.map((comment) => ({
           kind: 'comment',

@@ -576,11 +576,9 @@ export class KnowledgeService {
     return this.uow.run(principal, async (tx) => {
       const ticket = await this.loadTicket(tx, key);
       const query = ticket.short_description;
-      const [articles, similar, linked] = await Promise.all([
-        this.knowledge.search(tx, query, { publishedOnly: true, limit: 8 }),
-        this.knowledge.similarTickets(tx, query, ticket.id, 8),
-        this.knowledge.solutionsOf(tx, ticket.id),
-      ]);
+      const articles = await this.knowledge.search(tx, query, { publishedOnly: true, limit: 8 });
+      const similar = await this.knowledge.similarTickets(tx, query, ticket.id, 8);
+      const linked = await this.knowledge.solutionsOf(tx, ticket.id);
       return { articles, similar_tickets: similar.map((row) => ({ ...row, key: ticketKey(row.number) })), linked };
     });
   }
@@ -655,11 +653,9 @@ export class KnowledgeService {
   // Helpers -------------------------------------------------------------------
 
   private async view(tx: Tx, article: ArticleRow): Promise<ArticleView> {
-    const [versions, visibility, feedback] = await Promise.all([
-      this.knowledge.versionsOf(tx, article.id),
-      this.knowledge.visibilityOf(tx, article.id),
-      this.knowledge.feedbackSummary(tx, article.id),
-    ]);
+    const versions = await this.knowledge.versionsOf(tx, article.id);
+    const visibility = await this.knowledge.visibilityOf(tx, article.id);
+    const feedback = await this.knowledge.feedbackSummary(tx, article.id);
     return {
       ...article,
       draft: versions.find((version) => version.published_at === null) ?? null,
