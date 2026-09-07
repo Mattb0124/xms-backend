@@ -10,6 +10,8 @@ pnpm db:up            # PostgreSQL 16 with pgvector on port 5433, MailHog on 802
 cp .env.example .env  # fill DATABASE_URL_* and BOOTSTRAP_ADMIN_EMAILS
 pnpm db:migrate       # applies src/db/migrations/*.sql with the migrator role
 pnpm seed:dev         # roles, defaults, team, two accounts, 200 tickets (SEED_TICKETS=20 for a small set)
+pnpm standin          # a local ServiceNow stand-in on 3005 (basic xms.integration / stand-in) with one seeded case
+# SEED_SERVICENOW_URL=http://127.0.0.1:3005 pnpm seed:dev also creates a Brookfield connector instance in ingest-only mode
 pnpm dev:token --email admin@example.test   # a development bearer token (refused in production)
 pnpm start:dev        # API on 3001, Swagger at /docs
 pnpm start:worker:dev # jobs and the outbox dispatcher

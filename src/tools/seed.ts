@@ -7,6 +7,7 @@ import { loadEnv } from '../config/env.js';
 import { expandPermissions, OPERATOR_PERMISSIONS, type Permission } from '../contracts/permissions.js';
 import { UnitOfWork } from '../db/unit-of-work.js';
 import { AiSettingsService } from '../modules/ai/ai-settings.service.js';
+import { ConnectorsService } from '../modules/connectors/connectors.service.js';
 import { AccountsRepository } from '../modules/admin/accounts/accounts.repository.js';
 import { BootstrapService } from '../modules/admin/bootstrap.service.js';
 import { ConfigService } from '../modules/admin/config/config.service.js';
@@ -37,6 +38,7 @@ export interface SeedSummary {
   readonly users: number;
   readonly ticketsCreated: number;
   readonly articlesCreated: number;
+  readonly connectorsCreated: number;
   readonly elapsedMs: number;
 }
 
@@ -82,6 +84,52 @@ const SUBJECTS = [
   ['Slow report rendering on month end', 'The P&L takes four minutes; usually thirty seconds.'],
 ] as const;
 
+const SEED_FIELD_MAP = [
+  { external: 'short_description', xms: 'short_description', direction: 'both' },
+  { external: 'description', xms: 'description', direction: 'both' },
+  { external: 'contact.email', xms: 'requester_email', direction: 'in' },
+  { external: 'contact', xms: 'requester_name', direction: 'in' },
+  { external: 'number', xms: 'client_reference', direction: 'in' },
+  {
+    external: 'impact',
+    xms: 'impact',
+    direction: 'in',
+    transform: { kind: 'lookup', values: { '1': 'high', '2': 'medium', '3': 'low' }, fallback: 'medium' },
+  },
+  {
+    external: 'urgency',
+    xms: 'urgency',
+    direction: 'in',
+    transform: { kind: 'lookup', values: { '1': 'high', '2': 'medium', '3': 'low' }, fallback: 'medium' },
+  },
+  { external: 'category', xms: 'category', direction: 'both' },
+];
+
+const SEED_STATE_MAP = {
+  incident: {
+    inbound: {
+      '1': 'new',
+      '10': 'in_progress',
+      '18': 'awaiting_client',
+      '6': 'resolved',
+      '3': 'closed',
+      '7': 'cancelled',
+    },
+    outbound: {
+      new: '1',
+      assigned: '1',
+      in_progress: '10',
+      awaiting_client: '18',
+      awaiting_third_party: '18',
+      resolved: '6',
+      closed: '3',
+      cancelled: '7',
+    },
+    accept_inbound: ['cancelled', 'in_progress', 'awaiting_client'],
+    fallback: { '1': 'new', '18': 'awaiting_client' },
+  },
+};
+
 const CATEGORIES = ['Network / VPN', 'Access', 'Finance close', 'Reporting', 'Hardware', 'Integration'] as const;
 const LEVELS = ['high', 'medium', 'low'] as const;
 const ACTIVITIES = ['analysis', 'development', 'testing', 'client_meeting', 'documentation'] as const;
@@ -113,6 +161,7 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
   const time = app.get(TimeService);
   const knowledge = app.get(KnowledgeService);
   const aiSettings = app.get(AiSettingsService);
+  const connectors = app.get(ConnectorsService);
   const random = generator(20260907);
   const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
   const between = (low: number, high: number): number => low + Math.floor(random() * (high - low + 1));
@@ -481,6 +530,38 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
     });
   }
 
+  // A ServiceNow instance against the local stand-in, when one is reachable ------
+  let connectorsCreated = 0;
+  if (process.env.SEED_SERVICENOW_URL) {
+    const brkId = accountIds.get('BRK')!;
+    const existing = await connectors.list(principal, brkId);
+    if (existing.length === 0) {
+      const instance = await connectors.create(principal, ctx, brkId, {
+        name: 'Brookfield CSM (stand-in)',
+        base_url: process.env.SEED_SERVICENOW_URL,
+        auth_kind: 'basic',
+        credential: { username: 'xms.integration', password: 'stand-in' },
+        profile: 'csm',
+        poll_interval_seconds: 30,
+      });
+      const fieldMap = await connectors.createMap(principal, ctx, 'field', instance.id, SEED_FIELD_MAP);
+      await connectors.samples(principal, instance.id, fieldMap.id).catch(() => undefined);
+      const fieldReport = await connectors.validateMap(principal, 'field', instance.id, fieldMap.id);
+      if (fieldReport.ok) await connectors.activateMap(principal, ctx, 'field', instance.id, fieldMap.id);
+      const stateMap = await connectors.createMap(principal, ctx, 'state', instance.id, SEED_STATE_MAP);
+      const stateReport = await connectors.validateMap(principal, 'state', instance.id, stateMap.id);
+      if (stateReport.ok) await connectors.activateMap(principal, ctx, 'state', instance.id, stateMap.id);
+      if (fieldReport.ok) {
+        const fresh = (await connectors.list(principal, brkId)).find((row) => row.id === instance.id)!;
+        await connectors.update(principal, ctx, instance.id, { version: fresh.version, mode: 'ingest_only' });
+      }
+      connectorsCreated += 1;
+      log(
+        `connector ${instance.name} ${fieldReport.ok ? 'in ingest-only mode' : 'created; field map did not validate: ' + fieldReport.problems.join('; ')}`,
+      );
+    }
+  }
+
   // AI switch on the first account ------------------------------------------
   const brk = accountIds.get('BRK')!;
   const current = await aiSettings.get(principal, brk);
@@ -498,6 +579,7 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
     users: usersCreated,
     ticketsCreated,
     articlesCreated,
+    connectorsCreated,
     elapsedMs: Date.now() - started,
   };
   log(

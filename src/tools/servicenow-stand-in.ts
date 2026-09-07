@@ -17,6 +17,8 @@ export interface StandInOptions {
   readonly autoEcho?: boolean;
   readonly profile?: 'csm' | 'itsm';
   readonly now?: () => Date;
+  /** 0 (the default) picks a free port; the CLI uses STANDIN_PORT or 3005. */
+  readonly port?: number;
 }
 
 export interface Fault {
@@ -260,7 +262,7 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(options.port ?? 0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
     server,
@@ -332,7 +334,12 @@ function safeJson(raw: string): unknown {
 }
 
 if (process.argv[1] && /servicenow-stand-in\.(ts|js)$/.test(process.argv[1])) {
-  const standIn = await startStandIn({ username: 'xms.integration', password: 'stand-in', profile: 'csm' });
+  const standIn = await startStandIn({
+    username: 'xms.integration',
+    password: 'stand-in',
+    profile: 'csm',
+    port: Number(process.env.STANDIN_PORT ?? 3005),
+  });
   const seeded = standIn.seed('sn_customerservice_case', {
     short_description: 'Consolidation run fails at step 4',
     description: 'Error CE-4102 on the close.',
