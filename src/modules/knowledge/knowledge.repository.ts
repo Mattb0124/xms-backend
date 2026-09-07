@@ -85,7 +85,7 @@ export class KnowledgeRepository extends RepositoryBase {
   ): Promise<
     Pick<ArticleRow, 'id' | 'display_key' | 'title' | 'kind' | 'categories' | 'self_service' | 'published_version_id'>
   > {
-    const byKey = /^KBd{6,}$/i.test(idOrKey);
+    const byKey = /^KB\d{6,}$/i.test(idOrKey);
     return this.one(
       tx,
       'article',
