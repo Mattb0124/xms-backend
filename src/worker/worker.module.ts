@@ -1,4 +1,5 @@
 import { Module, type OnModuleInit } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
 import { CommonModule } from '../common/common.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
@@ -16,7 +17,7 @@ import { SlaJobs } from './sla-jobs.js';
  * attachments scan, email and snapshots land with their modules.
  */
 @Module({
-  imports: [DbModule, CommonModule, HealthModule, TicketsCoreModule],
+  imports: [DiscoveryModule, DbModule, CommonModule, HealthModule, TicketsCoreModule],
   providers: [
     {
       provide: OutboxDispatcher,
