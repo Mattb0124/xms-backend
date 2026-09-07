@@ -51,6 +51,16 @@ export class UnitOfWork {
     return withSession(this.pools, 'app', { binding: { kind: 'none' } }, fn);
   }
 
+  /**
+   * A request with no principal acting on accounts it named itself, such
+   * as the survey link whose token is the credential: the app role bound to
+   * exactly those accounts. Callers derive the ids from a security-definer
+   * lookup, never from the request body.
+   */
+  system<T>(accountIds: readonly string[], fn: Work<T>): Promise<T> {
+    return withSession(this.pools, 'app', { binding: { kind: 'operator', accountIds: [...accountIds] } }, fn);
+  }
+
   /** Worker jobs bind the accounts of the work they claimed. */
   worker<T>(accountIds: readonly string[], fn: Work<T>): Promise<T> {
     return withSession(this.pools, 'worker', { binding: { kind: 'operator', accountIds: [...accountIds] } }, fn);

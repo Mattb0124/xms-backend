@@ -221,6 +221,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/csat",
+    "controller": "AccountCsatController",
+    "handler": "ofAccount",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/rate-cards",
     "controller": "TimeController",
     "handler": "rateCards",
@@ -1311,6 +1321,16 @@
   },
   {
     "method": "POST",
+    "path": "/v1/csat/:id/answer",
+    "controller": "CsatLinkController",
+    "handler": "answer",
+    "realm": "internal",
+    "permission": null,
+    "public": "csat one-time link; the token is the credential",
+    "axel": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/csp-report",
     "controller": "CspReportController",
     "handler": "report",
@@ -1644,6 +1664,26 @@
     "path": "/v1/portal/me",
     "controller": "PortalController",
     "handler": "me",
+    "realm": "portal",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/surveys",
+    "controller": "PortalSurveysController",
+    "handler": "mine",
+    "realm": "portal",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/surveys/:id/answer",
+    "controller": "PortalSurveysController",
+    "handler": "answer",
     "realm": "portal",
     "permission": "authenticated",
     "public": null,

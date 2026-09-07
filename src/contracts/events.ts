@@ -145,6 +145,8 @@ export const AUDIT_EVENT_TYPES = [
   'capacity.demand.added',
   'capacity.demand.removed',
   'capacity.demand.imported',
+  'csat.survey.sent',
+  'csat.answered',
   'imported',
   'migration.batch.created',
   'migration.batch.run',

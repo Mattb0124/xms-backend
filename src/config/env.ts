@@ -38,6 +38,8 @@ const envSchema = z
     DATABASE_URL_WORKER: z.string().url().optional(),
     DATABASE_URL_PORTAL: z.string().url().optional(),
     DATABASE_URL_MIGRATOR: z.string().url().optional(),
+    /** Where the web app lives, for links in outbound mail (survey prompts, report packs). */
+    WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
     // Identity (Security & Tenancy section 2). The XMS Clerk application;
     // authorised parties are the web hosts; the agents audience names the
     // long-lived template accepted only on Axel routes.

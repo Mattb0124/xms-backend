@@ -12,6 +12,7 @@ import { SyncWorker } from '../modules/connectors/sync.worker.js';
 import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
 import { ReportSchedulesCoreModule, SchedulesService } from '../modules/reporting/schedules.module.js';
+import { CsatCoreModule, CsatService } from '../modules/portal/csat.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
@@ -40,6 +41,7 @@ import { RosterJobs } from './roster-jobs.js';
     EmailCoreModule,
     ReportingCoreModule,
     ReportSchedulesCoreModule,
+    CsatCoreModule,
     AiCoreModule,
     IntegrityCoreModule,
     ConnectorsCoreModule,
@@ -72,6 +74,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly roster: RosterJobs,
     private readonly archive: ArchiveService,
     private readonly schedules: SchedulesService,
+    private readonly csat: CsatService,
   ) {}
 
   onModuleInit(): void {
@@ -79,6 +82,11 @@ export class WorkerModule implements OnModuleInit {
       'email.outbound',
       (type) => ['comment.created', 'ticket.created', 'ticket.transitioned'].includes(type),
       (row) => this.email.handleOutbox(row),
+    );
+    this.dispatcher.subscribe(
+      'portal.csat',
+      (type) => type === 'ticket.transitioned',
+      (row) => this.csat.onOutbox(row),
     );
     this.dispatcher.subscribe(
       'axel.intake',
@@ -99,5 +107,6 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.roster.certificationExpiry());
     this.runner.schedule(this.archive.archiveJob());
     this.runner.schedule(this.schedules.scheduleJob());
+    this.runner.schedule(this.csat.reminderJob());
   }
 }

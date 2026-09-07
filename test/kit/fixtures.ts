@@ -51,6 +51,12 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
       Promise.resolve(new Date(Date.UTC(2020, 0, 1) + nextFixtureDay++ * 86_400_000).toISOString().slice(0, 10)),
   },
   'acct.threshold_alert_events': { percent: 50, consumed_minutes_at_fire: 0, available_minutes: 0 },
+  // A ticket-close survey names its ticket; the quarterly kind names a period instead.
+  'acct.csat_surveys': {
+    kind: 'ticket_close',
+    // One survey per ticket and contact: every fixture row takes a fresh ticket.
+    ticket_id: (client: pg.Client, accountId: string) => insertFixtureRow(client, 'acct.tickets', accountId, new Map()),
+  },
   // A roster person referenced by capacity rows needs a role code and a unique email.
   'op.people': {
     role: 'consultant',
