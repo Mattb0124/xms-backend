@@ -1350,6 +1350,46 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/demand",
+    "controller": "CapacityController",
+    "handler": "demand",
+    "realm": "internal",
+    "permission": "capacity:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/demand",
+    "controller": "CapacityController",
+    "handler": "addDemand",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/demand/:id",
+    "controller": "CapacityController",
+    "handler": "removeDemand",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/demand/import",
+    "controller": "CapacityController",
+    "handler": "importDemand",
+    "realm": "internal",
+    "permission": "capacity:manage",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/dev/email/inbound",
     "controller": "EmailController",

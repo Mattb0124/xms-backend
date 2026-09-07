@@ -42,6 +42,7 @@ import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { monthBounds, monthOf, personMonth, variance, type PersonMonth } from '../../domain/capacity/capacity.js';
 import { coverage, heatMap, SPOF_LEVEL, type SkillHolder } from '../../domain/capacity/skills.js';
+import { demandTotals, parseDemandCsv, type DemandLine } from '../../domain/capacity/demand.js';
 import { RosterCoreModule, RosterRepository, type PersonRow } from '../roster/roster.module.js';
 
 /**
@@ -78,6 +79,15 @@ export interface AllocationRow {
   updated_by: string;
   updated_at: string;
   version: number;
+}
+
+export interface DemandRow extends DemandLine {
+  id: string;
+  role: string | null;
+  skill_id: string | null;
+  note: string;
+  entered_by: string;
+  created_at: string;
 }
 
 interface CapacityPeriodRow extends PersonMonth {
@@ -304,6 +314,66 @@ export class CapacityRepository extends RepositoryBase {
     );
   }
 
+  demandOf(
+    tx: Tx,
+    filter: { from: string; to: string; accountId?: string },
+  ): Promise<(DemandRow & { account_key: string | null })[]> {
+    return this.many(
+      tx,
+      `select d.*, d.period_month::text as period_month, d.hours::float8 as hours, d.probability::float8 as probability, a.key as account_key
+         from op.pipeline_demand d left join op.accounts a on a.id = d.account_id
+        where d.period_month between $1 and $2 and ($3::uuid is null or d.account_id = $3)
+        order by d.period_month, a.key nulls last, d.prospect_name`,
+      [filter.from, filter.to, filter.accountId ?? null],
+    );
+  }
+
+  insertDemand(
+    tx: Tx,
+    input: {
+      source: 'pipeline' | 'project' | 'import';
+      accountId: string | null;
+      prospectName: string | null;
+      month: string;
+      hours: number;
+      probability: number;
+      role: string | null;
+      note: string;
+      enteredBy: string;
+    },
+  ): Promise<DemandRow> {
+    return this.one(
+      tx,
+      'demand',
+      `insert into op.pipeline_demand (source, account_id, prospect_name, period_month, hours, probability, role, note, entered_by)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       returning *, period_month::text as period_month, hours::float8 as hours, probability::float8 as probability`,
+      [
+        input.source,
+        input.accountId,
+        input.prospectName,
+        input.month,
+        input.hours,
+        input.probability,
+        input.role,
+        input.note,
+        input.enteredBy,
+      ],
+    );
+  }
+
+  deleteDemand(tx: Tx, id: string): Promise<DemandRow | undefined> {
+    return this.maybeOne(
+      tx,
+      'delete from op.pipeline_demand where id = $1 returning *, period_month::text as period_month, hours::float8 as hours, probability::float8 as probability',
+      [id],
+    );
+  }
+
+  accountIdsByKey(tx: Tx, keys: string[]): Promise<{ id: string; key: string }[]> {
+    return this.many(tx, 'select id, key from op.accounts where key = any ($1::text[])', [keys]);
+  }
+
   periodsOf(tx: Tx, month: string): Promise<CapacityPeriodRow[]> {
     return this.many(
       tx,
@@ -321,6 +391,21 @@ export class CreatePtoDto {
   @IsIn(['vacation', 'sick', 'other']) kind!: 'vacation' | 'sick' | 'other';
   @IsOptional() @IsNumber() @Min(0.25) @Max(1) fraction?: number;
   @IsOptional() @IsString() @MaxLength(200) note?: string;
+}
+
+export class CreateDemandDto {
+  @IsIn(['pipeline', 'project']) source!: 'pipeline' | 'project';
+  @IsOptional() @IsUUID('4') account_id?: string | null;
+  @IsOptional() @IsString() @MaxLength(160) prospect_name?: string | null;
+  @Matches(/^\d{4}-\d{2}(-01)?$/) month!: string;
+  @IsNumber() @Min(0) @Max(100000) hours!: number;
+  @IsOptional() @IsNumber() @Min(0.01) @Max(1) probability?: number;
+  @IsOptional() @Matches(/^[a-z][a-z0-9_]{1,39}$/) role?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) note?: string;
+}
+
+export class ImportDemandDto {
+  @IsString() @MaxLength(2_000_000) content!: string;
 }
 
 export class AllocationCellDto {
@@ -438,6 +523,9 @@ export class CapacityService {
   ) {
     return this.uow.run(principal, async (tx) => {
       const rows = await this.computeMonth(tx, principal, month, filter.personIds);
+      const demandRows = (await this.repo.demandOf(tx, { from: month, to: month, accountId: filter.account })).filter(
+        (row) => row.account_id === null || principal.accountIds.includes(row.account_id),
+      );
       const visible = rows.filter(
         (row) =>
           (!filter.role || row.person.role === filter.role) &&
@@ -447,6 +535,17 @@ export class CapacityService {
       return {
         month,
         people: visible,
+        demand: {
+          ...demandTotals(demandRows),
+          by_subject: demandRows.map((row) => ({
+            account_id: row.account_id,
+            account_key: row.account_key,
+            prospect_name: row.prospect_name,
+            source: row.source,
+            hours: row.hours,
+            probability: row.probability,
+          })),
+        },
         totals: visible.reduce(
           (sum, row) => ({
             available_minutes: sum.available_minutes + row.month.available_minutes,
@@ -606,6 +705,98 @@ export class CapacityService {
           };
         }),
       };
+    });
+  }
+
+  // Forward demand (CAP-08) ------------------------------------------------------
+
+  demand(principal: Principal, filter: { from: string; to: string; account?: string }) {
+    return this.uow.run(principal, async (tx) => {
+      const rows = (
+        await this.repo.demandOf(tx, { from: filter.from, to: filter.to, accountId: filter.account })
+      ).filter((row) => row.account_id === null || principal.accountIds.includes(row.account_id));
+      return { ...filter, rows, totals: demandTotals(rows) };
+    });
+  }
+
+  addDemand(principal: Principal, ctx: RequestContext, dto: CreateDemandDto) {
+    if (!dto.account_id && !dto.prospect_name) throw new BadRequestException({ code: 'subject_required' });
+    if (dto.account_id && !principal.accountIds.includes(dto.account_id))
+      throw new ForbiddenException({ code: 'forbidden', account_id: dto.account_id });
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.repo.insertDemand(tx, {
+        source: dto.source,
+        accountId: dto.account_id ?? null,
+        prospectName: dto.account_id ? null : (dto.prospect_name ?? null),
+        month: `${dto.month.slice(0, 7)}-01`,
+        hours: dto.hours,
+        probability: dto.source === 'project' ? 1 : (dto.probability ?? 1),
+        role: dto.role ?? null,
+        note: dto.note ?? '',
+        enteredBy: principal.userId,
+      });
+      await this.audit.operator(tx, actorOf(principal), ctx, [
+        {
+          entityKind: 'demand',
+          entityId: row.id,
+          eventType: 'capacity.demand.added',
+          newValue: { source: row.source, month: row.period_month, hours: row.hours, probability: row.probability },
+        },
+      ]);
+      return row;
+    });
+  }
+
+  removeDemand(principal: Principal, ctx: RequestContext, id: string) {
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.repo.deleteDemand(tx, id);
+      if (!row) throw new NotFoundException({ code: 'not_found', entity: 'demand' });
+      await this.audit.operator(tx, actorOf(principal), ctx, [
+        {
+          entityKind: 'demand',
+          entityId: row.id,
+          eventType: 'capacity.demand.removed',
+          oldValue: { month: row.period_month, hours: row.hours },
+        },
+      ]);
+      return { removed: row.id };
+    });
+  }
+
+  /** The spreadsheet template as CSV text; every problem is reported and nothing imports until the file is clean. */
+  importDemand(principal: Principal, ctx: RequestContext, content: string) {
+    const parsed = parseDemandCsv(content);
+    if (parsed.problems.length > 0)
+      throw new BadRequestException({ code: 'invalid_import', problems: parsed.problems });
+    return this.uow.run(principal, async (tx) => {
+      const keys = [...new Set(parsed.rows.map((row) => row.account_key).filter((key): key is string => !!key))];
+      const accounts = new Map((await this.repo.accountIdsByKey(tx, keys)).map((row) => [row.key, row.id]));
+      const unknown = keys.filter((key) => !accounts.has(key) || !principal.accountIds.includes(accounts.get(key)!));
+      if (unknown.length > 0) throw new BadRequestException({ code: 'unknown_account', keys: unknown });
+      const rows: DemandRow[] = [];
+      for (const row of parsed.rows)
+        rows.push(
+          await this.repo.insertDemand(tx, {
+            source: row.source,
+            accountId: row.account_key ? accounts.get(row.account_key)! : null,
+            prospectName: row.account_key ? null : row.prospect_name,
+            month: row.period_month,
+            hours: row.hours,
+            probability: row.probability,
+            role: row.role,
+            note: `imported line ${row.line}`,
+            enteredBy: principal.userId,
+          }),
+        );
+      await this.audit.operator(tx, actorOf(principal), ctx, [
+        {
+          entityKind: 'demand',
+          entityId: rows[0]?.id ?? 'none',
+          eventType: 'capacity.demand.imported',
+          newValue: { rows: rows.length },
+        },
+      ]);
+      return { imported: rows.length, rows };
     });
   }
 
@@ -816,6 +1007,44 @@ export class CapacityController {
     @Query('person') person?: string,
   ) {
     return this.capacity.variance(principal, monthOr(month), { account, person });
+  }
+
+  @Get('demand')
+  @RequirePermission('capacity:view')
+  demand(
+    @CurrentPrincipal() principal: Principal,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('account') account?: string,
+  ) {
+    return this.capacity.demand(principal, { from: monthOr(from), to: to ? monthOr(to) : monthOr(from), account });
+  }
+
+  @Post('demand')
+  @RequirePermission('capacity:manage')
+  addDemand(@CurrentPrincipal() principal: Principal, @RequestCtx() ctx: RequestContext, @Body() dto: CreateDemandDto) {
+    return this.capacity.addDemand(principal, ctx, dto);
+  }
+
+  @Post('demand/import')
+  @RequirePermission('capacity:manage')
+  importDemand(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Body() dto: ImportDemandDto,
+  ) {
+    return this.capacity.importDemand(principal, ctx, dto.content);
+  }
+
+  @Delete('demand/:id')
+  @HttpCode(200)
+  @RequirePermission('capacity:manage')
+  removeDemand(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.capacity.removeDemand(principal, ctx, id);
   }
 
   @Get('allocations')
