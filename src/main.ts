@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
+import { requestContextMiddleware } from './common/request-context.middleware.js';
 import { loadEnv } from './config/env.js';
 
 /**
@@ -18,6 +19,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   app.use(helmet());
+  app.use(requestContextMiddleware);
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.useGlobalPipes(
     new ValidationPipe({

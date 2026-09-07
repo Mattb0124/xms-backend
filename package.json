@@ -30,7 +30,8 @@
     "db:down": "docker compose down",
     "db:migrate": "node --experimental-strip-types src/db/migrate.ts",
     "test:int": "vitest run --config ./vitest.config.integration.ts",
-    "test:all": "pnpm test && pnpm test:int && pnpm test:e2e"
+    "test:all": "pnpm test && pnpm test:int && pnpm test:e2e",
+    "dev:token": "node --experimental-strip-types src/tools/dev-token.ts"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

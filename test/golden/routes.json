@@ -1,0 +1,22 @@
+[
+  {
+    "method": "GET",
+    "path": "/healthz",
+    "controller": "HealthController",
+    "handler": "liveness",
+    "realm": "internal",
+    "permission": null,
+    "public": "health",
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/readyz",
+    "controller": "HealthController",
+    "handler": "readiness",
+    "realm": "internal",
+    "permission": null,
+    "public": "health",
+    "axel": false
+  }
+]

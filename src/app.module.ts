@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from './common/auth/auth.module.js';
+import { DbModule } from './db/db.module.js';
 import { HealthModule } from './health/health.module.js';
 
 /**
@@ -8,6 +10,6 @@ import { HealthModule } from './health/health.module.js';
  * worker/worker.module.ts so every business rule exists once.
  */
 @Module({
-  imports: [HealthModule],
+  imports: [DbModule, AuthModule, HealthModule],
 })
 export class AppModule {}
