@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { CommonModule } from '../common/common.module.js';
 import { DbModule } from '../db/db.module.js';
+import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
+import { OutboxDispatcher } from './outbox-dispatcher.js';
 
 /**
  * Worker root module. Handlers land per Implementation Plan item: outbox
@@ -11,5 +13,12 @@ import { HealthModule } from '../health/health.module.js';
  */
 @Module({
   imports: [DbModule, CommonModule, HealthModule],
+  providers: [
+    {
+      provide: OutboxDispatcher,
+      useFactory: (pools: DbPools): OutboxDispatcher => new OutboxDispatcher(pools),
+      inject: [DbPools],
+    },
+  ],
 })
 export class WorkerModule {}

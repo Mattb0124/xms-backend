@@ -4,6 +4,9 @@ import { CommonModule } from './common/common.module.js';
 import { DbModule } from './db/db.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { ContractsModule } from './modules/contracts/contracts.module.js';
+import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
+import { TicketsModule } from './modules/tickets/tickets.module.js';
 
 /**
  * Root module of the API. Feature modules are added one per spec module
@@ -12,6 +15,15 @@ import { AdminModule } from './modules/admin/admin.module.js';
  * worker/worker.module.ts so every business rule exists once.
  */
 @Module({
-  imports: [DbModule, CommonModule, AuthModule, HealthModule, AdminModule],
+  imports: [
+    DbModule,
+    CommonModule,
+    AuthModule,
+    HealthModule,
+    TelemetryModule,
+    AdminModule,
+    ContractsModule,
+    TicketsModule,
+  ],
 })
 export class AppModule {}

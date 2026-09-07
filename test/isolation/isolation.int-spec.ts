@@ -142,14 +142,20 @@ describe.each(tablesForEach())('%s', (qualified) => {
   });
 
   it('lets account A update or delete nothing of account B', async () => {
-    const updated = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
-      tx.query(`update ${qualified} set account_id = account_id where id = $1`, [ids().b]),
-    );
-    expect(updated.rowCount).toBe(0);
-    const deleted = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
-      tx.query(`delete from ${qualified} where id = $1`, [ids().b]),
-    );
-    expect(deleted.rowCount).toBe(0);
+    // Either the policy filters the row (zero rows) or the role has no
+    // update/delete privilege at all (append-only streams); both are safe.
+    const zeroRowsOrDenied = async (text: string): Promise<void> => {
+      try {
+        const result = await withSession(pools(), 'app', { binding: { kind: 'operator', accountIds: [A] } }, (tx) =>
+          tx.query(text, [ids().b]),
+        );
+        expect(result.rowCount).toBe(0);
+      } catch (error) {
+        expect((error as { code?: string }).code).toBe('42501');
+      }
+    };
+    await zeroRowsOrDenied(`update ${qualified} set account_id = account_id where id = $1`);
+    await zeroRowsOrDenied(`delete from ${qualified} where id = $1`);
   });
 
   it('refuses an insert for account B from a session bound to A', async () => {

@@ -1,0 +1,268 @@
+import { Transform, Type } from 'class-transformer';
+import {
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Matches,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
+
+const TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
+const LEVELS = ['high', 'medium', 'low'] as const;
+const PRIORITIES = ['p1', 'p2', 'p3', 'p4'] as const;
+
+export class CreateTicketDto {
+  @IsUUID('4')
+  account_id!: string;
+
+  @IsIn(TYPES)
+  type!: (typeof TYPES)[number];
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  short_description!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50000)
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  category?: string;
+
+  @IsOptional()
+  @IsIn(LEVELS)
+  impact?: (typeof LEVELS)[number];
+
+  @IsOptional()
+  @IsIn(LEVELS)
+  urgency?: (typeof LEVELS)[number];
+
+  @IsOptional()
+  @IsUUID('4')
+  group_id?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  assignee_id?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  contract_id?: string;
+
+  @IsOptional()
+  @IsEmail()
+  requester_email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  requester_name?: string;
+
+  @IsOptional()
+  @IsIn(['internal', 'api'])
+  source?: 'internal' | 'api';
+}
+
+export class PatchTicketDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(300)
+  short_description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50000)
+  description?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  category?: string | null;
+
+  @IsOptional()
+  @IsIn(LEVELS)
+  impact?: (typeof LEVELS)[number] | null;
+
+  @IsOptional()
+  @IsIn(LEVELS)
+  urgency?: (typeof LEVELS)[number] | null;
+
+  /** Direct priority; requires tickets:override-priority and is audited with the matrix value it replaced. */
+  @IsOptional()
+  @IsIn(PRIORITIES)
+  priority?: (typeof PRIORITIES)[number];
+
+  @IsOptional()
+  @IsUUID('4')
+  group_id?: string | null;
+
+  @IsOptional()
+  @IsUUID('4')
+  assignee_id?: string | null;
+
+  @IsOptional()
+  @IsUUID('4')
+  contract_id?: string;
+
+  @IsOptional()
+  @IsObject()
+  external_refs?: Record<string, string>;
+}
+
+export class ResolutionDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  code?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(10000)
+  notes?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  solution_article_id?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  solution_candidate?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  time_exemption_reason?: string;
+}
+
+export class TransitionDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  @IsString()
+  @Matches(/^[a-z][a-z0-9_]*$/)
+  to!: string;
+
+  @IsOptional()
+  @IsIn(['awaiting_client', 'awaiting_third_party', 'scheduled_window', 'blocked'])
+  pause_reason?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ResolutionDto)
+  resolution?: ResolutionDto;
+}
+
+export class MessageDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(50000)
+  body!: string;
+}
+
+export class LinkDto {
+  @IsUUID('4')
+  to_ticket_id!: string;
+
+  @IsIn(['parent', 'related', 'duplicate', 'blocks'])
+  type!: 'parent' | 'related' | 'duplicate' | 'blocks';
+}
+
+export class WatchDto {
+  @IsBoolean()
+  muted!: boolean;
+}
+
+const toList = ({ value }: { value: unknown }): string[] | undefined =>
+  value === undefined ? undefined : Array.isArray(value) ? value.map(String) : String(value).split(',').filter(Boolean);
+
+export class ListTicketsQueryDto {
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @IsUUID('4', { each: true })
+  account_id?: string[];
+
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @IsString({ each: true })
+  state?: string[];
+
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @IsIn(TYPES, { each: true })
+  type?: string[];
+
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @IsIn(PRIORITIES, { each: true })
+  priority?: string[];
+
+  @IsOptional()
+  @IsUUID('4')
+  assignee_id?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  group_id?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  unassigned?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  open?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  mine?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  q?: string;
+
+  @IsOptional()
+  @IsIn(['updated_desc', 'created_desc', 'priority'])
+  sort?: 'updated_desc' | 'created_desc' | 'priority';
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  limit?: number;
+
+  @IsOptional()
+  @IsString()
+  cursor?: string;
+}

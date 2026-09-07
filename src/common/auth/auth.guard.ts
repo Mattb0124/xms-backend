@@ -85,7 +85,8 @@ export class AuthGuard implements CanActivate {
       : await this.resolveToken(token, axelRoute, base);
 
     const realm = this.reflector.getAllAndOverride<Realm | undefined>(REALM_KEY, targets) ?? 'internal';
-    const realmOk = realm === 'portal' ? principal.kind === 'portal' : principal.kind !== 'portal';
+    const realmOk =
+      realm === 'any' ? true : realm === 'portal' ? principal.kind === 'portal' : principal.kind !== 'portal';
     if (!realmOk) {
       await this.deny({
         ...base,

@@ -48,7 +48,7 @@ describe('route and permission snapshot', () => {
 
   it('keeps portal routes under /v1/portal and internal routes outside it', () => {
     for (const entry of table) {
-      if (entry.public) continue;
+      if (entry.public || entry.realm === 'any') continue;
       const underPortal = entry.path.startsWith('/v1/portal');
       expect(entry.realm === 'portal', `${entry.method} ${entry.path} realm ${entry.realm}`).toBe(underPortal);
     }

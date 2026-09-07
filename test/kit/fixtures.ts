@@ -29,8 +29,17 @@ export interface TableInfo {
   readonly generatedColumns: string[];
 }
 
-const OVERRIDES: Record<string, Record<string, unknown>> = {
+type OverrideValue = unknown | ((client: pg.Client, accountId: string, cache: Map<string, string>) => Promise<unknown>);
+
+const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.calendar_hours': { weekday: 1, start_minute: 540, end_minute: 1020 },
+  // The portal policy on the audit stream admits state transitions only.
+  'acct.audit_events': { event_type: 'ticket.transition', field: 'state' },
+  // A link needs two distinct tickets; the second is created outside the cache.
+  'acct.ticket_links': {
+    to_ticket_id: (client: pg.Client, accountId: string) =>
+      insertFixtureRow(client, 'acct.tickets', accountId, new Map()),
+  },
 };
 
 export async function listAccountScopedTables(client: pg.Client): Promise<TableInfo[]> {
@@ -63,6 +72,9 @@ export async function listAccountScopedTables(client: pg.Client): Promise<TableI
     ]);
     const privileges = await client.query<{ privilege_type: string }>(
       `select privilege_type from information_schema.role_table_grants
+        where grantee = 'xms_portal' and table_schema = $1 and table_name = $2
+       union
+       select distinct privilege_type from information_schema.role_column_grants
         where grantee = 'xms_portal' and table_schema = $1 and table_name = $2`,
       [row.schema, row.name],
     );
@@ -139,7 +151,8 @@ export async function insertFixtureRow(
       continue;
     }
     if (column.name in overrides) {
-      values[column.name] = overrides[column.name];
+      const override = overrides[column.name];
+      values[column.name] = typeof override === 'function' ? await override(client, accountId, cache) : override;
       continue;
     }
     const fk = foreignKeys.find((candidate) => candidate.column === column.name);

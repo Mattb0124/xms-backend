@@ -12,7 +12,7 @@ export const AXEL_ROUTE_KEY = 'xms:axelRoute';
  * only. A route is internal unless its controller says otherwise; a portal
  * token on an internal route is a 403 before any lookup.
  */
-export type Realm = 'internal' | 'portal';
+export type Realm = 'internal' | 'portal' | 'any';
 
 /** Declares the permission a route requires. Every non-public route must carry one. */
 export const RequirePermission = (permission: Permission): MethodDecorator & ClassDecorator =>

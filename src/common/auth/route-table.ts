@@ -17,7 +17,7 @@ export interface RouteEntry {
   readonly path: string;
   readonly controller: string;
   readonly handler: string;
-  readonly realm: 'internal' | 'portal';
+  readonly realm: 'internal' | 'portal' | 'any';
   readonly permission: string | null;
   readonly public: string | null;
   readonly axel: boolean;
@@ -49,7 +49,7 @@ export function collectRouteTable(app: INestApplicationContext | ModuleRef): Rou
         path: `${prefix}${join(controllerPath, routePath)}`,
         controller: metatype.name,
         handler: name,
-        realm: reflector.getAllAndOverride<'internal' | 'portal' | undefined>(REALM_KEY, targets) ?? 'internal',
+        realm: reflector.getAllAndOverride<'internal' | 'portal' | 'any' | undefined>(REALM_KEY, targets) ?? 'internal',
         permission: reflector.getAllAndOverride<string | undefined>(PERMISSION_KEY, targets) ?? null,
         public: reflector.getAllAndOverride<string | undefined>(IS_PUBLIC_KEY, targets) ?? null,
         axel: Boolean(reflector.getAllAndOverride<boolean | undefined>(AXEL_ROUTE_KEY, targets)),

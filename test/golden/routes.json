@@ -31,6 +31,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/contracts",
+    "controller": "ContractsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/contracts",
+    "controller": "ContractsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/accounts",
     "controller": "AdminAccountsController",
     "handler": "list",
@@ -376,6 +396,206 @@
     "handler": "groups",
     "realm": "internal",
     "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/notifications",
+    "controller": "NotificationsController",
+    "handler": "feed",
+    "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/notifications/:id/read",
+    "controller": "NotificationsController",
+    "handler": "read",
+    "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/notifications/read-all",
+    "controller": "NotificationsController",
+    "handler": "readAll",
+    "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/notifications/unread-count",
+    "controller": "NotificationsController",
+    "handler": "unreadCount",
+    "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/telemetry",
+    "controller": "TelemetryController",
+    "handler": "ingest",
+    "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets",
+    "controller": "TicketsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets",
+    "controller": "TicketsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "tickets:create",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key",
+    "controller": "TicketsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/tickets/:key",
+    "controller": "TicketsController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/comments",
+    "controller": "TicketsController",
+    "handler": "comments",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/comments",
+    "controller": "TicketsController",
+    "handler": "addComment",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/links",
+    "controller": "TicketsController",
+    "handler": "links",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/links",
+    "controller": "TicketsController",
+    "handler": "addLink",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/tickets/:key/links/:linkId",
+    "controller": "TicketsController",
+    "handler": "removeLink",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/timeline",
+    "controller": "TicketsController",
+    "handler": "timeline",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/transitions",
+    "controller": "TicketsController",
+    "handler": "transitions",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/transitions",
+    "controller": "TicketsController",
+    "handler": "transition",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/tickets/:key/watchers/me",
+    "controller": "TicketsController",
+    "handler": "watch",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/work-notes",
+    "controller": "TicketsController",
+    "handler": "workNotes",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/work-notes",
+    "controller": "TicketsController",
+    "handler": "addWorkNote",
+    "realm": "internal",
+    "permission": "tickets:work",
     "public": null,
     "axel": false
   },
