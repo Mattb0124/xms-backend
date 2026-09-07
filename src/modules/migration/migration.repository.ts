@@ -217,6 +217,20 @@ export class MigrationRepository extends RepositoryBase {
     );
   }
 
+  /** Display names for user ids on batches and reports; unknown ids are simply absent. */
+  async userNames(tx: Tx, ids: Iterable<string | null | undefined>): Promise<Map<string, string>> {
+    const wanted = [
+      ...new Set([...ids].filter((id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id))),
+    ];
+    if (wanted.length === 0) return new Map();
+    const rows = await this.many<{ id: string; name: string }>(
+      tx,
+      `select id, trim(first_name || ' ' || last_name) as name from op.users where id = any($1::uuid[])`,
+      [wanted],
+    );
+    return new Map(rows.map((row) => [row.id, row.name || row.id]));
+  }
+
   reports(tx: Tx, accountId: string, scope?: string): Promise<ReportRow[]> {
     return this.many(
       tx,

@@ -11,6 +11,7 @@ import { UnitOfWork } from '../../../db/unit-of-work.js';
 import { PriorityMatrix, validateMatrix, type PriorityMatrixBody } from '../../../domain/tickets/priority-matrix.js';
 import { StateMachine, validateMachine, type StateMachineBody } from '../../../domain/tickets/state-machine.js';
 import { validateAiDefaults } from '../../../contracts/ai.js';
+import { validateSlaPolicy } from '../../../domain/sla/policy.js';
 
 /**
  * Configuration catalogs as versioned data (Accounts & Administration
@@ -331,11 +332,14 @@ export class ConfigService {
 
   /** The account view: what resolves today (default or override), the override history, and the operator default. */
   describeForAccount(principal: Principal, accountId: string, kind: ConfigKind, scopeKey: string) {
-    return this.uow.run(principal, async (tx) => ({
-      effective: await this.resolveUncached(tx, kind, scopeKey, accountId),
-      default: await this.repo.activeDefault(tx, kind, scopeKey),
-      overrides: await this.repo.overrideVersions(tx, accountId, kind, scopeKey),
-    }));
+    return this.uow.run(principal, async (tx) => {
+      const fallback = await this.repo.activeDefault(tx, kind, scopeKey);
+      const overrides = await this.repo.overrideVersions(tx, accountId, kind, scopeKey);
+      // No default and no override is a view with nothing effective, not a failure.
+      const active = overrides.find((row) => row.status === 'active');
+      const effective = active || fallback ? await this.resolveUncached(tx, kind, scopeKey, accountId) : null;
+      return { effective, default: fallback ?? null, overrides };
+    });
   }
 
   /** Activates a new override version for the account (P2.9.2); validated like a default; audited on the account. */
@@ -425,6 +429,7 @@ export class ConfigService {
     if (kind === 'state_machine') problems = validateMachine(body as StateMachineBody);
     if (kind === 'priority_matrix') problems = validateMatrix(body as PriorityMatrixBody);
     if (kind === 'ai') problems = validateAiDefaults(body);
+    if (kind === 'sla_policy') problems = validateSlaPolicy(body);
     if (['activity_types', 'billable_classes', 'resolution_codes'].includes(kind)) {
       const items = (body as { items?: unknown[] })?.items;
       if (!Array.isArray(items) || items.length === 0) problems = ['items must be a non-empty array'];

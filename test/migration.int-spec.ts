@@ -404,6 +404,11 @@ describe('reconciliation sign-off (DM-03)', () => {
       .expect(200);
     const report = reports.body.find((row: { batch_id: string }) => row.batch_id === batchId);
     expect(report.status).toBe('open');
+    // The runner sees the four-eyes answer up front; the batch carries the runner's name.
+    expect(report).toMatchObject({ can_sign: false, sign_blocker: 'signer_ran_batch' });
+    const batchView = await api().get(`/v1/migration/batches/${batchId}`).set(bearer(adminToken)).expect(200);
+    expect(typeof batchView.body.run_by_name).toBe('string');
+    expect(batchView.body.report).toMatchObject({ id: report.id, can_sign: false });
     const self = await api()
       .post(`/v1/migration/reconciliation/${report.id}/sign-off`)
       .set(bearer(adminToken))

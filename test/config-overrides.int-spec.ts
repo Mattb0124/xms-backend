@@ -133,6 +133,16 @@ describe('account configuration overrides', () => {
     expect(security.rows[0].attrs).toMatchObject({ scope: 'override', version: 1 });
   });
 
+  it('refuses a malformed SLA policy with worded problems', async () => {
+    const bad = await api()
+      .put(`/v1/accounts/${accountId}/config/sla_policy/override`)
+      .set(bearer(adminToken))
+      .send({ body: { targets: { incident: { p1: { response_minutes: 500, resolution_minutes: 240 } } } } })
+      .expect(400);
+    expect(bad.body.code).toBe('invalid_config');
+    expect(bad.body.problems).toEqual(['targets.incident.p1: response cannot be later than resolution']);
+  });
+
   it('refuses an invalid body before writing, and a second override retires the first', async () => {
     const bad = await api()
       .put(`/v1/accounts/${accountId}/config/state_machine/override?scope=incident`)

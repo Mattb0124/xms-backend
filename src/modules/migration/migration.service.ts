@@ -68,16 +68,64 @@ export class MigrationService {
   // Batches ------------------------------------------------------------------
 
   list(principal: Principal, filter: { account_id?: string; object_kind?: string; status?: string }) {
-    return this.uow.run(principal, (tx) =>
-      this.repo.batches(tx, { accountId: filter.account_id, objectKind: filter.object_kind, status: filter.status }),
-    );
+    return this.uow.run(principal, async (tx) => {
+      const rows = await this.repo.batches(tx, {
+        accountId: filter.account_id,
+        objectKind: filter.object_kind,
+        status: filter.status,
+      });
+      const names = await this.repo.userNames(
+        tx,
+        rows.map((row) => row.run_by),
+      );
+      return rows.map((row) => ({ ...row, run_by_name: row.run_by ? (names.get(row.run_by) ?? null) : null }));
+    });
   }
 
   get(principal: Principal, id: string) {
-    return this.uow.run(principal, async (tx) => ({
-      ...(await this.repo.batch(tx, id)),
-      report: (await this.repo.reportOfBatch(tx, id)) ?? null,
-    }));
+    return this.uow.run(principal, async (tx) => {
+      const batch = await this.repo.batch(tx, id);
+      const report = (await this.repo.reportOfBatch(tx, id)) ?? null;
+      const names = await this.repo.userNames(tx, [
+        batch.run_by,
+        report?.signed_by,
+        ...(report?.lines.map((line) => line.explained_by) ?? []),
+      ]);
+      return {
+        ...batch,
+        run_by_name: batch.run_by ? (names.get(batch.run_by) ?? null) : null,
+        report: report ? this.decorateReport(report, batch, names, principal) : null,
+      };
+    });
+  }
+
+  /**
+   * Names beside the ids on a report and the four-eyes answer up front:
+   * `can_sign` is false for the person who ran the batch, for a signed
+   * report, and while a delta is open, so a screen can say why before the
+   * request is made (the service still enforces every rule on sign-off).
+   */
+  private decorateReport(report: ReportRow, batch: BatchRow | null, names: Map<string, string>, principal: Principal) {
+    const deltaOpen = report.lines.some((line) => line.status === 'delta_open');
+    const ranBatch = batch?.run_by === principal.userId;
+    const blocker =
+      report.status === 'signed_off'
+        ? 'report_signed'
+        : ranBatch
+          ? 'signer_ran_batch'
+          : deltaOpen
+            ? 'delta_open'
+            : null;
+    return {
+      ...report,
+      signed_by_name: report.signed_by ? (names.get(report.signed_by) ?? null) : null,
+      lines: report.lines.map((line) => ({
+        ...line,
+        explained_by_name: line.explained_by ? (names.get(line.explained_by) ?? null) : null,
+      })),
+      can_sign: blocker === null,
+      sign_blocker: blocker,
+    };
   }
 
   create(principal: Principal, ctx: RequestContext, input: CreateBatchInput) {
@@ -536,7 +584,21 @@ export class MigrationService {
   // Reconciliation --------------------------------------------------------------
 
   reports(principal: Principal, accountId: string, scope?: string) {
-    return this.uow.run(principal, (tx) => this.repo.reports(tx, accountId, scope));
+    return this.uow.run(principal, async (tx) => {
+      const rows = await this.repo.reports(tx, accountId, scope);
+      const batches = new Map<string, BatchRow>();
+      for (const row of rows)
+        if (row.batch_id && !batches.has(row.batch_id))
+          batches.set(row.batch_id, await this.repo.batch(tx, row.batch_id));
+      const names = await this.repo.userNames(tx, [
+        ...rows.map((row) => row.signed_by),
+        ...rows.flatMap((row) => row.lines.map((line) => line.explained_by)),
+        ...[...batches.values()].map((batch) => batch.run_by),
+      ]);
+      return rows.map((row) =>
+        this.decorateReport(row, row.batch_id ? (batches.get(row.batch_id) ?? null) : null, names, principal),
+      );
+    });
   }
 
   explain(
