@@ -12,15 +12,17 @@ describe('loadEnv', () => {
   });
 
   it('splits CORS origins and rejects a malformed port', () => {
-    expect(loadEnv({ CORS_ORIGINS: 'https://xms.example, https://portal.example' }).CORS_ORIGINS).toEqual([
-      'https://xms.example',
-      'https://portal.example',
-    ]);
+    expect(
+      loadEnv({ CORS_ORIGINS: 'https://xms.example, https://portal.example' })
+        .CORS_ORIGINS,
+    ).toEqual(['https://xms.example', 'https://portal.example']);
     resetEnvForTests();
     expect(() => loadEnv({ PORT: 'eighty' })).toThrow(/PORT/);
   });
 
   it('rejects a database URL that is not a URL', () => {
-    expect(() => loadEnv({ DATABASE_URL_APP: 'not-a-url' })).toThrow(/DATABASE_URL_APP/);
+    expect(() => loadEnv({ DATABASE_URL_APP: 'not-a-url' })).toThrow(
+      /DATABASE_URL_APP/,
+    );
   });
 });

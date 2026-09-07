@@ -21,12 +21,21 @@ describe('health (e2e)', () => {
   });
 
   it('GET /healthz answers ok without a version prefix', () => {
-    return request(app.getHttpServer()).get('/healthz').expect(200).expect({ status: 'ok' });
+    return request(app.getHttpServer())
+      .get('/healthz')
+      .expect(200)
+      .expect({ status: 'ok' });
   });
 
   it('GET /readyz reports every dependency honestly', async () => {
-    const response = await request(app.getHttpServer()).get('/readyz').expect(200);
+    const response = await request(app.getHttpServer())
+      .get('/readyz')
+      .expect(200);
     expect(response.body.status).toBe('ok');
-    expect(response.body.checks).toEqual({ database: 'skipped', s3: 'skipped', sqs: 'skipped' });
+    expect(response.body.checks).toEqual({
+      database: 'skipped',
+      s3: 'skipped',
+      sqs: 'skipped',
+    });
   });
 });

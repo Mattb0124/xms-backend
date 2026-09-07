@@ -12,7 +12,11 @@ async function main(): Promise<void> {
   const app = await NestFactory.create(AppModule, { logger: false });
   const document = SwaggerModule.createDocument(
     app,
-    new DocumentBuilder().setTitle('XMS API').setVersion('0.1.0').addBearerAuth().build(),
+    new DocumentBuilder()
+      .setTitle('XMS API')
+      .setVersion('0.1.0')
+      .addBearerAuth()
+      .build(),
   );
   writeFileSync('openapi.json', JSON.stringify(document, null, 2));
   await app.close();

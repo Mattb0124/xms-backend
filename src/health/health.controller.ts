@@ -21,7 +21,10 @@ export class HealthController {
 
   @Public()
   @Get('readyz')
-  readiness(): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, 'ok' | 'skipped' | 'failed'> }> {
+  readiness(): Promise<{
+    status: 'ok' | 'degraded';
+    checks: Record<string, 'ok' | 'skipped' | 'failed'>;
+  }> {
     return this.health.readiness();
   }
 }

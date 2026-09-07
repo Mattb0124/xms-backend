@@ -15,8 +15,15 @@ export class HealthService {
     this.probes.set(name, probe);
   }
 
-  async readiness(): Promise<{ status: 'ok' | 'degraded'; checks: Record<string, CheckResult> }> {
-    const checks: Record<string, CheckResult> = { database: 'skipped', s3: 'skipped', sqs: 'skipped' };
+  async readiness(): Promise<{
+    status: 'ok' | 'degraded';
+    checks: Record<string, CheckResult>;
+  }> {
+    const checks: Record<string, CheckResult> = {
+      database: 'skipped',
+      s3: 'skipped',
+      sqs: 'skipped',
+    };
     await Promise.all(
       [...this.probes.entries()].map(async ([name, probe]) => {
         try {

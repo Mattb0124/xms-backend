@@ -6,7 +6,11 @@ describe('HealthService.readiness', () => {
     const service = new HealthService();
     const result = await service.readiness();
     expect(result.status).toBe('ok');
-    expect(result.checks).toEqual({ database: 'skipped', s3: 'skipped', sqs: 'skipped' });
+    expect(result.checks).toEqual({
+      database: 'skipped',
+      s3: 'skipped',
+      sqs: 'skipped',
+    });
   });
 
   it('reports degraded when any registered probe throws', async () => {

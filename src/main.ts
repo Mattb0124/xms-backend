@@ -34,7 +34,9 @@ async function bootstrap(): Promise<void> {
     app,
     new DocumentBuilder()
       .setTitle('XMS API')
-      .setDescription('Xelerated Managed Services API. Every route declares its permission; portal and internal realms never cross.')
+      .setDescription(
+        'Xelerated Managed Services API. Every route declares its permission; portal and internal realms never cross.',
+      )
       .setVersion('0.1.0')
       .addBearerAuth()
       .build(),
