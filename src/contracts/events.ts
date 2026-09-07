@@ -111,6 +111,8 @@ export const AUDIT_EVENT_TYPES = [
   'admin.config.override_removed',
   'time.logged',
   'time.adjusted',
+  'article.published',
+  'article.retired',
 ] as const;
 
 export type AuditEventType = (typeof AUDIT_EVENT_TYPES)[number];

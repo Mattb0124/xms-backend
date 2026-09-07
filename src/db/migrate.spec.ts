@@ -27,9 +27,11 @@ describe('migration files', () => {
     for (const file of listMigrations(MIGRATIONS_DIR)) {
       const created = [...file.sql.matchAll(/create table (acct\.[a-z_]+)/g)].map((match) => match[1]);
       for (const table of created) {
-        expect(file.sql, `${file.name} creates ${table} without sys.apply_account_isolation`).toContain(
-          `sys.apply_account_isolation('${table}'`,
-        );
+        const viaHelper = file.sql.includes(`sys.apply_account_isolation('${table}'`);
+        const explicit =
+          file.sql.includes(`create policy acct_isolation_operator on ${table}`) &&
+          file.sql.includes(`alter table ${table} force row level security`);
+        expect(viaHelper || explicit, `${file.name} creates ${table} without the isolation block`).toBe(true);
       }
     }
   });

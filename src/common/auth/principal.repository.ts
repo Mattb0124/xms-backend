@@ -4,6 +4,9 @@ import bcrypt from 'bcryptjs';
 import { expandPermissions, type Permission } from '../../contracts/permissions.js';
 import { DbPools } from '../../db/pool.js';
 
+/** The reserved operator account for global knowledge (migration 0007). */
+export const GLOBAL_ACCOUNT_ID = '00000000-0000-4000-8000-000000000001';
+
 /**
  * Reads the operator tables the guard needs (Accounts & Administration
  * technical 3.1). Operator tables carry no RLS, so these run on the app pool
@@ -132,7 +135,12 @@ export class PrincipalRepository {
     const keys = granted.rows.flatMap((row) =>
       row.account_id === null || accountIds.includes(row.account_id) ? row.permissions : [],
     );
-    return { user, accountIds: boundAccountIds, permissions: expandPermissions(keys) };
+    // Every internal principal reads the global knowledge account (Solution Knowledge Base 2.10).
+    const withGlobal =
+      user.kind === 'internal' && !boundAccountIds.includes(GLOBAL_ACCOUNT_ID)
+        ? [...boundAccountIds, GLOBAL_ACCOUNT_ID]
+        : boundAccountIds;
+    return { user, accountIds: withGlobal, permissions: expandPermissions(keys) };
   }
 
   async findApiClient(key: string): Promise<(ApiClientRow & { accountIds: string[] }) | undefined> {

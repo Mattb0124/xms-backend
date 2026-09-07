@@ -10,6 +10,7 @@ import { TicketsRepository } from './tickets.repository.js';
 import { TicketsService } from './tickets.service.js';
 import { ViewsController, ViewsRepository, ViewsService } from './views.js';
 import { TimeRepository } from '../time/time.repository.js';
+import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
 
 /** Providers only, shared by the API and the worker (the worker never mounts controllers). */
 @Module({
@@ -23,6 +24,7 @@ import { TimeRepository } from '../time/time.repository.js';
     ViewsRepository,
     ViewsService,
     TimeRepository,
+    KnowledgeRepository,
   ],
   exports: [
     TicketsService,
@@ -32,6 +34,7 @@ import { TimeRepository } from '../time/time.repository.js';
     OutboxService,
     ViewsService,
     TimeRepository,
+    KnowledgeRepository,
     AdminCoreModule,
     ContractsCoreModule,
   ],

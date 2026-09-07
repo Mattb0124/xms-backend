@@ -470,6 +470,106 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/articles",
+    "controller": "KnowledgeController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles",
+    "controller": "KnowledgeController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "kb:author",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/articles/:key",
+    "controller": "KnowledgeController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/articles/:key/draft",
+    "controller": "KnowledgeController",
+    "handler": "updateDraft",
+    "realm": "internal",
+    "permission": "kb:author",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles/:key/feedback",
+    "controller": "KnowledgeController",
+    "handler": "feedback",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles/:key/generalise",
+    "controller": "KnowledgeController",
+    "handler": "generalise",
+    "realm": "internal",
+    "permission": "kb:publish",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles/:key/publish",
+    "controller": "KnowledgeController",
+    "handler": "publish",
+    "realm": "internal",
+    "permission": "kb:publish",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles/:key/retire",
+    "controller": "KnowledgeController",
+    "handler": "retire",
+    "realm": "internal",
+    "permission": "kb:publish",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/articles/:key/submit",
+    "controller": "KnowledgeController",
+    "handler": "submit",
+    "realm": "internal",
+    "permission": "kb:author",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/articles/:key/visibility",
+    "controller": "KnowledgeController",
+    "handler": "visibility",
+    "realm": "internal",
+    "permission": "kb:publish",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/bootstrap",
     "controller": "BootstrapController",
@@ -545,6 +645,36 @@
     "controller": "NotificationsController",
     "handler": "unreadCount",
     "realm": "any",
+    "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/knowledge",
+    "controller": "PortalKnowledgeController",
+    "handler": "search",
+    "realm": "portal",
+    "permission": "portal:kb",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/knowledge/:key",
+    "controller": "PortalKnowledgeController",
+    "handler": "article",
+    "realm": "portal",
+    "permission": "portal:kb",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/portal/knowledge/:key/feedback",
+    "controller": "PortalKnowledgeController",
+    "handler": "feedback",
+    "realm": "portal",
     "permission": "authenticated",
     "public": null,
     "axel": false
@@ -630,6 +760,16 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/search/solutions",
+    "controller": "KnowledgeController",
+    "handler": "search",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/telemetry",
     "controller": "TelemetryController",
@@ -680,6 +820,16 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/tickets/:key/article-candidate",
+    "controller": "KnowledgeController",
+    "handler": "candidate",
+    "realm": "internal",
+    "permission": "kb:author",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/tickets/:key/comments",
     "controller": "TicketsController",
@@ -726,6 +876,26 @@
     "handler": "removeLink",
     "realm": "internal",
     "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/solutions",
+    "controller": "KnowledgeController",
+    "handler": "rail",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/solutions",
+    "controller": "KnowledgeController",
+    "handler": "link",
+    "realm": "internal",
+    "permission": "tickets:resolve",
     "public": null,
     "axel": false
   },

@@ -28,6 +28,7 @@ import { checkRequirements } from '../../domain/tickets/close-discipline.js';
 import { translate, type ConditionSet } from './conditions.js';
 import { ViewsRepository } from './views.js';
 import { TimeRepository } from '../time/time.repository.js';
+import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
 import type { Level, Priority } from '../../domain/tickets/priority-matrix.js';
 import type { StateMachine } from '../../domain/tickets/state-machine.js';
 import { ConfigService } from '../admin/config/config.service.js';
@@ -129,6 +130,7 @@ export class TicketsService {
     private readonly outbox: OutboxService,
     private readonly views: ViewsRepository,
     private readonly time: TimeRepository,
+    private readonly knowledge: KnowledgeRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -676,6 +678,30 @@ export class TicketsService {
       if (toEffects.responseMet && !before.first_response_at && actor.kind === 'internal') {
         assignments.first_response_at = now;
         for (const [id, clock] of clocks) if (clock.kind === 'response') apply(id, markMet(clock, now));
+      }
+      if (toEffects.resolve && dto.resolution?.solution_article_id) {
+        const article = await this.knowledge.byId(tx, dto.resolution.solution_article_id);
+        if (article.status !== 'published' || !article.published_version_id) {
+          throw new ConflictException({ code: 'article_not_published', article: article.display_key });
+        }
+        await this.knowledge.insertSolution(tx, {
+          accountId: before.account_id,
+          ticketId: before.id,
+          articleId: article.id,
+          versionId: article.published_version_id,
+          outcome: 'resolved_by',
+          actorKind: actorKindOf(principal),
+          actorId: principal.userId,
+          actorName: principal.displayName,
+        });
+        entries.push({
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.updated',
+          field: 'solution',
+          newValue: { article: article.display_key, outcome: 'resolved_by' },
+        });
       }
       if (toEffects.resolve) {
         assignments.resolved_at = now;

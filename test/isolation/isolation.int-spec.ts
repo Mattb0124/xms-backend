@@ -107,13 +107,20 @@ describe.each(tablesForEach())('%s', (qualified) => {
     expect(policy!.roles).toEqual(expect.arrayContaining(['xms_app', 'xms_worker']));
   });
 
-  it('has the portal policy exactly when the portal may read', () => {
+  it('has the portal policy exactly when the portal may read or write', () => {
     const policy = table().policies.find((candidate) => candidate.name === 'acct_isolation_portal');
+    const privileges = table().portalPrivileges;
     if (table().portalCanSelect) {
       expect(policy, 'portal has SELECT but no acct_isolation_portal policy').toBeDefined();
-      expect(policy!.using).toContain('account_id');
+      // Either bound to the account directly or through the article visibility function.
+      expect(policy!.using ?? '').toMatch(/account_id|article_visible/);
+    } else if (privileges.length > 0) {
+      // Insert-only surfaces (feedback): the policy must bind the account on write.
+      expect(privileges, 'portal write privileges beyond INSERT').toEqual(['INSERT']);
+      expect(policy, 'portal has INSERT but no acct_isolation_portal policy').toBeDefined();
+      expect(policy!.withCheck ?? '').toContain('account_id');
     } else {
-      expect(table().portalPrivileges, 'portal has privileges without a portal policy').toEqual([]);
+      expect(policy, 'portal policy without any privilege').toBeUndefined();
     }
   });
 

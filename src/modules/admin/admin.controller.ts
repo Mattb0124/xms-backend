@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { Authenticated, CurrentPrincipal, RequestCtx, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { Public } from '../../common/auth/public.decorator.js';
+import { GLOBAL_ACCOUNT_ID } from '../../common/auth/principal.repository.js';
 import { AccountsService } from './accounts/accounts.service.js';
 import { BootstrapService } from './bootstrap.service.js';
 
@@ -24,7 +25,7 @@ export class MeController {
         userId: principal.userId,
         email: principal.email,
         displayName: principal.displayName,
-        accountIds: principal.accountIds,
+        accountIds: principal.accountIds.filter((id) => id !== GLOBAL_ACCOUNT_ID),
         permissions: [...principal.permissions].sort(),
       },
       accounts,

@@ -47,6 +47,11 @@ export async function resetDatabase(): Promise<void> {
     const list = tables.rows.map((row) => `"${row.schema}"."${row.name}"`).join(', ');
     // Append-only triggers are BEFORE UPDATE OR DELETE; TRUNCATE is neither.
     await client.query(`truncate ${list} restart identity cascade`);
+    // System rows seeded by migrations are part of the schema, not test data.
+    await client.query(
+      `insert into op.accounts (id, key, name, status, default_time_zone)
+       values ('00000000-0000-4000-8000-000000000001', 'GLOBAL', 'Global knowledge', 'system', 'UTC') on conflict (key) do nothing`,
+    );
   });
 }
 

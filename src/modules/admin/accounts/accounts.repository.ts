@@ -82,16 +82,19 @@ export class AccountsRepository extends RepositoryBase {
       values.push(options.cursor);
       where.push(`key > $${values.length}`);
     }
-    const clause = where.length > 0 ? `where ${where.join(' and ')}` : '';
+    where.push(`status <> 'system'`);
+    const clause = `where ${where.join(' and ')}`;
     return this.many<AccountRow>(tx, `select * from op.accounts ${clause} order by key limit $1`, values);
   }
 
   /** Summary rows for the granted accounts (the non-admin picker). */
   summariesByIds(tx: Tx, ids: readonly string[]): Promise<Pick<AccountRow, 'id' | 'key' | 'name' | 'status'>[]> {
     if (ids.length === 0) return Promise.resolve([]);
-    return this.many(tx, `select id, key, name, status from op.accounts where id = any ($1::uuid[]) order by name`, [
-      ids,
-    ]);
+    return this.many(
+      tx,
+      `select id, key, name, status from op.accounts where id = any ($1::uuid[]) and status <> 'system' order by name`,
+      [ids],
+    );
   }
 
   byId(tx: Tx, id: string): Promise<AccountRow> {
