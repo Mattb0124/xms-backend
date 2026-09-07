@@ -11,6 +11,7 @@ import { ConnectorsCoreModule } from '../modules/connectors/connectors.module.js
 import { SyncWorker } from '../modules/connectors/sync.worker.js';
 import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
+import { ReportSchedulesCoreModule, SchedulesService } from '../modules/reporting/schedules.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
@@ -38,6 +39,7 @@ import { RosterJobs } from './roster-jobs.js';
     TicketsCoreModule,
     EmailCoreModule,
     ReportingCoreModule,
+    ReportSchedulesCoreModule,
     AiCoreModule,
     IntegrityCoreModule,
     ConnectorsCoreModule,
@@ -69,6 +71,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly periods: PeriodJobs,
     private readonly roster: RosterJobs,
     private readonly archive: ArchiveService,
+    private readonly schedules: SchedulesService,
   ) {}
 
   onModuleInit(): void {
@@ -95,5 +98,6 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.periods.autoLock());
     this.runner.schedule(this.roster.certificationExpiry());
     this.runner.schedule(this.archive.archiveJob());
+    this.runner.schedule(this.schedules.scheduleJob());
   }
 }

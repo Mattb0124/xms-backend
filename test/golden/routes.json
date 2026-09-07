@@ -1771,6 +1771,56 @@
   },
   {
     "method": "GET",
+    "path": "/v1/reporting/runs",
+    "controller": "SchedulesController",
+    "handler": "runs",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/reporting/schedules",
+    "controller": "SchedulesController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/reporting/schedules",
+    "controller": "SchedulesController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/reporting/schedules/:id",
+    "controller": "SchedulesController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/reporting/schedules/:id/run-now",
+    "controller": "SchedulesController",
+    "handler": "runNow",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/reports/packs/:id",
     "controller": "ReportingController",
     "handler": "pack",

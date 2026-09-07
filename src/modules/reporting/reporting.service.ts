@@ -482,6 +482,90 @@ export class ReportingService {
     });
   }
 
+  /**
+   * Builds a WSR pack for a period inside an open transaction: the run row,
+   * the frozen measures and notable tickets, the templated narrative, the
+   * rendered deck in the object store, the pack row and the audit event.
+   * The "generate now" route, the schedule's run-now and the schedule runner
+   * share it; the caller decides the actor and the transaction.
+   */
+  async buildWsr(
+    tx: Tx,
+    input: {
+      accountId: string;
+      period: Period;
+      requestedBy: string;
+      scheduleId?: string | null;
+      actor: Parameters<AuditService['account']>[2];
+      ctx: Parameters<AuditService['account']>[3];
+    },
+  ): Promise<{ run_id: string; pack_id: string; pptx_key: string; file_name: string }> {
+    const account = await this.accounts.byId(tx, input.accountId);
+    const period = input.period;
+    const reference = new Date();
+    const run = await this.reporting.insertRun(tx, {
+      accountId: input.accountId,
+      packType: 'wsr',
+      periodStart: iso(period.start),
+      periodEnd: iso(new Date(period.end.getTime() - 1)),
+      requestedBy: input.requestedBy,
+    });
+    if (input.scheduleId)
+      await tx.query('update acct.report_runs set schedule_id = $2 where id = $1', [run.id, input.scheduleId]);
+    try {
+      const facts = await this.reporting.ticketFacts(tx, [input.accountId], period.start);
+      const time = await this.reporting.timeFacts(
+        tx,
+        [input.accountId],
+        iso(period.start),
+        iso(period.end),
+        await this.consumingClasses(tx, input.accountId),
+      );
+      const measures = computeMeasures(facts, time, period, reference);
+      const notable = notableTickets(facts, reference, 5);
+      const narrative = templatedNarrative(account.name, period, measures);
+      const pptx = await renderWsr(account.name, period, measures, notable, narrative);
+      const key = `accounts/${input.accountId}/reports/${run.id}/wsr-${iso(period.start)}.pptx`;
+      await this.store.putObject(
+        key,
+        pptx,
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      );
+      const pack = await this.reporting.insertPack(tx, {
+        accountId: input.accountId,
+        runId: run.id,
+        periodStart: iso(period.start),
+        periodEnd: iso(new Date(period.end.getTime() - 1)),
+        measures,
+        notable,
+        narrative,
+        pptxKey: key,
+      });
+      await this.reporting.finishRun(tx, run.id, pack.id, null);
+      await this.audit.account(tx, input.accountId, input.actor, input.ctx, [
+        {
+          entityKind: 'report_pack',
+          entityId: pack.id,
+          eventType: 'created',
+          newValue: {
+            run_id: run.id,
+            schedule_id: input.scheduleId ?? null,
+            period: [iso(period.start), iso(period.end)],
+          },
+        },
+      ]);
+      return {
+        run_id: run.id,
+        pack_id: pack.id,
+        pptx_key: key,
+        file_name: `${account.key}-WSR-${iso(period.start)}.pptx`,
+      };
+    } catch (error) {
+      await this.reporting.finishRun(tx, run.id, null, (error as Error).message.slice(0, 500));
+      throw error;
+    }
+  }
+
   runs(principal: Principal, accountId: string) {
     if (!principal.accountIds.includes(accountId))
       throw new NotFoundException({ code: 'not_found', entity: 'account' });
