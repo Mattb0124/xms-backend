@@ -4,6 +4,7 @@ import { CommonModule } from '../common/common.module.js';
 import { StorageCoreModule } from '../common/storage/storage.module.js';
 import { EmailCoreModule } from '../modules/email/email.module.js';
 import { EmailService } from '../modules/email/email.service.js';
+import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
@@ -28,6 +29,7 @@ import { SlaJobs } from './sla-jobs.js';
     HealthModule,
     TicketsCoreModule,
     EmailCoreModule,
+    ReportingCoreModule,
   ],
   providers: [
     {
@@ -46,6 +48,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly pools: DbPools,
     private readonly dispatcher: OutboxDispatcher,
     private readonly email: EmailService,
+    private readonly snapshots: SnapshotJob,
   ) {}
 
   onModuleInit(): void {
@@ -57,5 +60,6 @@ export class WorkerModule implements OnModuleInit {
     if (!this.pools.has('worker')) return;
     this.runner.schedule(this.sla.sweeper());
     this.runner.schedule(this.sla.atRisk());
+    this.runner.schedule(this.snapshots.job());
   }
 }

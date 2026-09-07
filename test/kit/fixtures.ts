@@ -38,6 +38,8 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
     ticket_id: (client: pg.Client, accountId: string, cache: Map<string, string>) =>
       parentId(client, 'acct.tickets', accountId, cache),
   },
+  // The portal reads whitelisted measures only.
+  'rpt.daily_snapshots': { measure: 'open_tickets' },
   // The portal reads published articles and versions only.
   'acct.solution_articles': { status: 'published' },
   'acct.article_versions': { published_at: (): Promise<unknown> => Promise.resolve(new Date().toISOString()) },

@@ -10,6 +10,7 @@ import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { PortalModule } from './modules/portal/portal.module.js';
+import { ReportingModule } from './modules/reporting/reporting.module.js';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { TimeModule } from './modules/time/time.module.js';
 import { TicketsModule } from './modules/tickets/tickets.module.js';
@@ -36,6 +37,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     KnowledgeModule,
     AttachmentsModule,
     EmailModule,
+    ReportingModule,
   ],
 })
 export class AppModule {}

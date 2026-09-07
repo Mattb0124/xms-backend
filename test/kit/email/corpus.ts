@@ -92,7 +92,7 @@ export function appleMailReply(input: MessageInput, reply: string): Buffer {
 /** A ServiceNow style notification (bulk precedence, auto-submitted). */
 export function serviceNowNotification(input: MessageInput): Buffer {
   return envelope(
-    { ...input, headers: { 'Auto-Submitted': 'auto-generated', Precedence: 'bulk', ...(input.headers ?? {}) } },
+    { ...input, headers: { 'Auto-Submitted': 'auto-generated', Precedence: 'bulk', ...input.headers } },
     ['Content-Type: text/plain; charset="UTF-8"', '', 'INC0012345 has been updated.'].join('\r\n'),
   );
 }
@@ -103,7 +103,7 @@ export function outOfOffice(input: MessageInput): Buffer {
     {
       ...input,
       subject: `Automatic reply: ${input.subject}`,
-      headers: { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All', ...(input.headers ?? {}) },
+      headers: { 'Auto-Submitted': 'auto-replied', 'X-Auto-Response-Suppress': 'All', ...input.headers },
     },
     ['Content-Type: text/plain; charset="UTF-8"', '', 'I am out of the office until Monday.'].join('\r\n'),
   );

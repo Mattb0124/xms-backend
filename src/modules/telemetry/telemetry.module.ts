@@ -1,16 +1,15 @@
 import {
   Body,
-  CallHandler,
   Controller,
-  ExecutionContext,
   Injectable,
   Logger,
+  MiddlewareConsumer,
   Module,
-  NestInterceptor,
+  NestMiddleware,
+  NestModule,
   Post,
   type OnModuleDestroy,
 } from '@nestjs/common';
-import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -24,8 +23,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
-import type { Request, Response } from 'express';
-import { Observable, tap } from 'rxjs';
+import type { NextFunction, Request, Response } from 'express';
 import {
   Authenticated,
   CurrentPrincipal,
@@ -159,20 +157,28 @@ export class UsageEventsService implements OnModuleDestroy {
   }
 }
 
-/** One api.request usage row per request, after the response. */
+/**
+ * One api.request usage row per request, recorded when the response
+ * finishes. A middleware rather than an interceptor so that guard denials
+ * (401, 403) are counted as well; the principal is present only when the
+ * guard admitted the request.
+ */
 @Injectable()
-export class ApiRequestInterceptor implements NestInterceptor {
+export class ApiRequestMiddleware implements NestMiddleware {
   constructor(private readonly usage: UsageEventsService) {}
 
-  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  use(
+    request: Request & { principal?: Principal; requestContext?: RequestContext },
+    response: Response,
+    next: NextFunction,
+  ): void {
     const started = Date.now();
-    const http = context.switchToHttp();
-    const request = http.getRequest<Request & { principal?: Principal; requestContext?: RequestContext }>();
-    const response = http.getResponse<Response>();
-    const record = (): void => {
+    response.on('finish', () => {
+      const route = request.route?.path
+        ? `${request.method} ${request.baseUrl ?? ''}${request.route.path}`
+        : `${request.method} ${request.path.replace(/[0-9a-f]{8}-[0-9a-f-]{27}|CS\d{7,}|KB\d{6,}/gi, ':id')}`;
+      if (route.includes('/healthz') || route.includes('/readyz')) return;
       const principal = request.principal;
-      const route = request.route?.path ? `${request.method} ${request.route.path}` : `${request.method} ?`;
-      if (route.startsWith('GET /healthz') || route.startsWith('GET /readyz')) return;
       this.usage.record({
         type: 'api.request',
         actorKind: principal ? actorKindOf(principal) : 'anonymous',
@@ -190,13 +196,8 @@ export class ApiRequestInterceptor implements NestInterceptor {
         ipHash: request.requestContext?.ipHash,
         userAgentFamily: request.requestContext?.userAgentFamily,
       });
-    };
-    return next.handle().pipe(
-      tap({
-        next: () => record(),
-        error: () => record(),
-      }),
-    );
+    });
+    next();
   }
 }
 
@@ -316,7 +317,11 @@ function sanitiseAttrs(input: Record<string, unknown>): Record<string, unknown> 
 
 @Module({
   controllers: [TelemetryController],
-  providers: [UsageEventsService, { provide: APP_INTERCEPTOR, useClass: ApiRequestInterceptor }],
+  providers: [UsageEventsService, ApiRequestMiddleware],
   exports: [UsageEventsService],
 })
-export class TelemetryModule {}
+export class TelemetryModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(ApiRequestMiddleware).forRoutes('*');
+  }
+}

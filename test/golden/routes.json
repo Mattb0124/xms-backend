@@ -141,6 +141,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/reports",
+    "controller": "ReportingController",
+    "handler": "runs",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:id/reports/wsr",
+    "controller": "ReportingController",
+    "handler": "generate",
+    "realm": "internal",
+    "permission": "reports:view-portfolio",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/accounts",
     "controller": "AdminAccountsController",
     "handler": "list",
@@ -631,6 +651,26 @@
   },
   {
     "method": "POST",
+    "path": "/v1/audit/export",
+    "controller": "ReportingController",
+    "handler": "exportEvents",
+    "realm": "internal",
+    "permission": "audit:export",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/audit/search",
+    "controller": "ReportingController",
+    "handler": "search",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/bootstrap",
     "controller": "BootstrapController",
     "handler": "run",
@@ -660,6 +700,46 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/dashboards/accounts/:id",
+    "controller": "ReportingController",
+    "handler": "account",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/dashboards/operations",
+    "controller": "ReportingController",
+    "handler": "operations",
+    "realm": "internal",
+    "permission": "reports:view-portfolio",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/dashboards/security",
+    "controller": "ReportingController",
+    "handler": "security",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/dashboards/usage",
+    "controller": "ReportingController",
+    "handler": "usage",
+    "realm": "internal",
+    "permission": "analytics:read",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/dev/email/inbound",
     "controller": "EmailController",
@@ -674,6 +754,16 @@
     "path": "/v1/email/inbound/:id/raw",
     "controller": "EmailController",
     "handler": "raw",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/exports/tickets",
+    "controller": "ReportingController",
+    "handler": "exportTickets",
     "realm": "internal",
     "permission": "tickets:view",
     "public": null,
@@ -736,6 +826,16 @@
     "handler": "download",
     "realm": "portal",
     "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/dashboard",
+    "controller": "PortalDashboardController",
+    "handler": "dashboard",
+    "realm": "portal",
+    "permission": "authenticated",
     "public": null,
     "axel": false
   },
@@ -896,6 +996,16 @@
     "handler": "decide",
     "realm": "internal",
     "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/reports/packs/:id",
+    "controller": "ReportingController",
+    "handler": "pack",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },
