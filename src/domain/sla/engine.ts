@@ -1,6 +1,6 @@
 /**
  * The SLA engine (Ticket Management technical 3.2), ported from the studio
- * XMS proof of concept and generalised over a calendar. Pure: every function
+ * XMS proof of concept and generalized over a calendar. Pure: every function
  * takes the clock and the instant and returns the next clock. The service
  * persists what comes back and writes the pause rows as evidence.
  *

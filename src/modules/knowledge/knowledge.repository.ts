@@ -23,7 +23,7 @@ export interface ArticleRow {
   retired_at: string | null;
   retired_reason: string | null;
   source_ticket_id: string | null;
-  generalised_from_id: string | null;
+  generalized_from_id: string | null;
   created_at: string;
   updated_at: string;
   version: number;
@@ -150,7 +150,7 @@ export class KnowledgeRepository extends RepositoryBase {
       ownerName: string;
       sourceTicketId?: string | null;
       isGlobal?: boolean;
-      generalisedFromId?: string | null;
+      generalizedFromId?: string | null;
       selfService?: string;
       effortBand?: string | null;
     },
@@ -158,7 +158,7 @@ export class KnowledgeRepository extends RepositoryBase {
     return this.one<ArticleRow>(
       tx,
       'article',
-      `insert into acct.solution_articles (account_id, title, kind, categories, owner_user_id, owner_name, source_ticket_id, is_global, generalised_from_id, self_service, effort_band)
+      `insert into acct.solution_articles (account_id, title, kind, categories, owner_user_id, owner_name, source_ticket_id, is_global, generalized_from_id, self_service, effort_band)
        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, false), $9, coalesce($10, 'none'), $11) returning *`,
       [
         input.accountId,
@@ -169,7 +169,7 @@ export class KnowledgeRepository extends RepositoryBase {
         input.ownerName,
         input.sourceTicketId ?? null,
         input.isGlobal,
-        input.generalisedFromId ?? null,
+        input.generalizedFromId ?? null,
         input.selfService,
         input.effortBand ?? null,
       ],

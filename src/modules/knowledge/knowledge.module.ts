@@ -40,7 +40,7 @@ import { actorOf, AuditService } from '../../common/audit/audit.service.js';
 import { OutboxService } from '../../common/outbox/outbox.service.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
-import { checkGeneralisation, type Finding } from '../../domain/knowledge/generalisation-check.js';
+import { checkGeneralization, type Finding } from '../../domain/knowledge/generalization-check.js';
 import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
@@ -55,7 +55,7 @@ import {
 
 /**
  * Solution Knowledge Base (02-modules/knowledge-base, P2.14 cut: draft,
- * review, publish, retire, visibility set, generalise with the identifier
+ * review, publish, retire, visibility set, generalize with the identifier
  * checklist, retrieval v1, the resolution record, feedback; embeddings and
  * the Axel draft land with the AI module).
  */
@@ -400,7 +400,7 @@ export class KnowledgeService {
         });
       if (article.is_global) {
         const findings = await this.findings(tx, article, draft);
-        if (findings.length > 0) throw new ConflictException({ code: 'generalisation_findings', findings });
+        if (findings.length > 0) throw new ConflictException({ code: 'generalization_findings', findings });
       }
       const published = await this.knowledge.publishVersion(tx, draft.id);
       const after = await this.knowledge.update(tx, article.id, version, {
@@ -491,7 +491,7 @@ export class KnowledgeService {
   }
 
   /** Creates the global copy under GLOBAL; returns the checklist findings instead when the text still carries identifiers. */
-  generalise(
+  generalize(
     principal: Principal,
     ctx: RequestContext,
     idOrKey: string,
@@ -503,7 +503,7 @@ export class KnowledgeService {
       const source = article.published_version_id
         ? await this.knowledge.versionById(tx, article.published_version_id)
         : await this.knowledge.draftOf(tx, article.id);
-      if (!source) throw new ConflictException({ code: 'nothing_to_generalise' });
+      if (!source) throw new ConflictException({ code: 'nothing_to_generalize' });
       const text: Partial<Record<VersionSection, string>> = {};
       for (const section of VERSION_SECTIONS) text[section] = sections[section] ?? source[section];
       const findings = await this.findings(tx, article, text);
@@ -516,7 +516,7 @@ export class KnowledgeService {
         ownerId: principal.userId,
         ownerName: principal.displayName,
         isGlobal: true,
-        generalisedFromId: article.id,
+        generalizedFromId: article.id,
         selfService: article.self_service,
         effortBand: article.effort_band,
       });
@@ -533,7 +533,7 @@ export class KnowledgeService {
           entityKind: 'article',
           entityId: copy.id,
           eventType: 'created',
-          newValue: { key: copy.display_key, generalised_from: article.display_key },
+          newValue: { key: copy.display_key, generalized_from: article.display_key },
         },
       ]);
       return this.view(tx, copy);
@@ -634,7 +634,7 @@ export class KnowledgeService {
 
   portalArticle(principal: Principal, idOrKey: string) {
     return this.uow.run(principal, async (tx) => {
-      const article = await this.load(tx, idOrKey);
+      const article = await this.knowledge.clientArticle(tx, idOrKey);
       const version = article.published_version_id
         ? await this.knowledge.clientVersion(tx, article.published_version_id)
         : undefined;
@@ -699,8 +699,8 @@ export class KnowledgeService {
     sections: Partial<Record<VersionSection, string>>,
   ): Promise<Finding[]> {
     const sourceAccountId = article.is_global
-      ? article.generalised_from_id
-        ? (await this.knowledge.byId(tx, article.generalised_from_id).catch(() => undefined))?.account_id
+      ? article.generalized_from_id
+        ? (await this.knowledge.byId(tx, article.generalized_from_id).catch(() => undefined))?.account_id
         : undefined
       : article.account_id;
     if (!sourceAccountId) return [];
@@ -709,7 +709,7 @@ export class KnowledgeService {
     const hosts = await this.knowledge.hostnamesForCheck(tx, sourceAccountId);
     const text: Record<string, string> = {};
     for (const section of VERSION_SECTIONS) text[section] = sections[section] ?? '';
-    return checkGeneralisation(text, {
+    return checkGeneralization(text, {
       accountNames: [account.name, account.legal_name ?? ''].filter(Boolean),
       contactNames: contacts.map((contact) => contact.display_name),
       contactEmails: contacts.map((contact) => contact.email),
@@ -792,15 +792,15 @@ export class KnowledgeController {
     return this.knowledge.retire(principal, ctx, key, dto);
   }
 
-  @Post('articles/:key/generalise')
+  @Post('articles/:key/generalize')
   @RequirePermission('kb:publish')
-  generalise(
+  generalize(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,
     @Param('key') key: string,
     @Body() dto: SectionsDto,
   ) {
-    return this.knowledge.generalise(principal, ctx, key, dto);
+    return this.knowledge.generalize(principal, ctx, key, dto);
   }
 
   @Put('articles/:key/visibility')

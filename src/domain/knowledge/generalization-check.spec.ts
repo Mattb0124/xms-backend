@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkGeneralisation } from './generalisation-check.js';
+import { checkGeneralization } from './generalization-check.js';
 
 const context = {
   accountNames: ['Brookfield', 'Brookfield Asset Management'],
@@ -8,9 +8,9 @@ const context = {
   hostnames: ['brk-onestream-prd-01', 'reports.brookfield.internal'],
 };
 
-describe('generalisation check', () => {
+describe('generalization check', () => {
   it('finds account names, contacts, hostnames, emails, IPs and attachment references per section', () => {
-    const findings = checkGeneralisation(
+    const findings = checkGeneralization(
       {
         problem_statement: 'Brookfield users cannot open the consolidation report on brk-onestream-prd-01.',
         steps: 'Ask Pat Client (pat@client.test) to restart the service at 10.0.4.12, see attached screenshot.',
@@ -33,7 +33,7 @@ describe('generalisation check', () => {
 
   it('returns nothing for a clean article and ignores example addresses', () => {
     expect(
-      checkGeneralisation(
+      checkGeneralization(
         { steps: 'Renew the certificate on the application server; notify support@example.com.' },
         context,
       ),
@@ -41,7 +41,7 @@ describe('generalisation check', () => {
   });
 
   it('reports each identifier once per section', () => {
-    const findings = checkGeneralisation({ steps: 'Brookfield, Brookfield, brookfield' }, context);
+    const findings = checkGeneralization({ steps: 'Brookfield, Brookfield, brookfield' }, context);
     expect(findings).toEqual([{ section: 'steps', kind: 'account_name', value: 'Brookfield' }]);
   });
 });

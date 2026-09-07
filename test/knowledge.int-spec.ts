@@ -13,7 +13,7 @@ import { DEV_SECRET, devToken } from './kit/auth.js';
  * an article is account-scoped by visibility; the reviewer must differ from
  * the author; a published version is frozen; the resolution is a record;
  * the portal searches published articles and reads client notes only;
- * generalisation is blocked by the identifier checklist; another account
+ * generalization is blocked by the identifier checklist; another account
  * sees nothing until the article is shared or global.
  */
 const ADMIN_EMAIL = 'admin@example.test';
@@ -317,22 +317,22 @@ describe('resolution record', () => {
   });
 });
 
-describe('generalisation', () => {
+describe('generalization', () => {
   it('is blocked by the identifier checklist and succeeds once the text is clean, landing under GLOBAL', async () => {
     const articles = await api().get('/v1/articles').set(bearer(consultantToken)).expect(200);
     const published = articles.body.find((row: { status: string }) => row.status === 'published');
     const dirty = await api()
-      .post(`/v1/articles/${published.display_key}/generalise`)
+      .post(`/v1/articles/${published.display_key}/generalize`)
       .set(bearer(adminToken))
       .send({ steps: 'Ask Brookfield to renew the certificate.' })
       .expect(201);
     expect(dirty.body.findings).toEqual([{ section: 'steps', kind: 'account_name', value: 'Brookfield' }]);
     const clean = await api()
-      .post(`/v1/articles/${published.display_key}/generalise`)
+      .post(`/v1/articles/${published.display_key}/generalize`)
       .set(bearer(adminToken))
       .send({})
       .expect(201);
-    expect(clean.body).toMatchObject({ is_global: true, status: 'draft', generalised_from_id: published.id });
+    expect(clean.body).toMatchObject({ is_global: true, status: 'draft', generalized_from_id: published.id });
     const globalId = clean.body.id;
     // Publish the global copy (admin may review own draft); every account then reads it.
     const submitted = await api().get(`/v1/articles/${clean.body.display_key}`).set(bearer(adminToken)).expect(200);

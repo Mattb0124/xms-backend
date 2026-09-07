@@ -521,9 +521,9 @@
   },
   {
     "method": "POST",
-    "path": "/v1/articles/:key/generalise",
+    "path": "/v1/articles/:key/generalize",
     "controller": "KnowledgeController",
-    "handler": "generalise",
+    "handler": "generalize",
     "realm": "internal",
     "permission": "kb:publish",
     "public": null,

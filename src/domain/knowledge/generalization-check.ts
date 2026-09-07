@@ -1,11 +1,11 @@
 /**
  * The identifier checklist (Solution Knowledge Base technical 2.10): a
- * generalised article must not carry the originating account's name,
+ * generalized article must not carry the originating account's name,
  * contact names or emails, hostnames from its configuration items, or
  * attachment references. Pure; returns every finding so the curator can
  * fix them all at once.
  */
-export interface GeneralisationContext {
+export interface GeneralizationContext {
   readonly accountNames: readonly string[];
   readonly contactNames: readonly string[];
   readonly contactEmails: readonly string[];
@@ -22,7 +22,7 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const IP = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
 const ATTACHMENT = /\b(?:attachment|screenshot|see attached|\.(?:png|jpg|jpeg|xlsx|docx|pdf|log))\b/gi;
 
-export function checkGeneralisation(sections: Record<string, string>, context: GeneralisationContext): Finding[] {
+export function checkGeneralization(sections: Record<string, string>, context: GeneralizationContext): Finding[] {
   const findings: Finding[] = [];
   const names = [...context.accountNames].filter((name) => name.trim().length >= 3);
   const contacts = [...context.contactNames].filter((name) => name.trim().length >= 3);

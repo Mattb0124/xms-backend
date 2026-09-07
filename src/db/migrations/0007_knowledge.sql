@@ -38,7 +38,7 @@ create table acct.solution_articles (
   retired_at timestamptz,
   retired_reason text,
   source_ticket_id uuid references acct.tickets (id) on delete set null,
-  generalised_from_id uuid references acct.solution_articles (id) on delete set null,
+  generalized_from_id uuid references acct.solution_articles (id) on delete set null,
   -- Problem statement and symptoms of the published version, copied at
   -- publish so the generated search vector can include them.
   search_text text not null default '',
