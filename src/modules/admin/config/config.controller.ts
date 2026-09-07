@@ -1,4 +1,16 @@
-import { BadRequestException, Body, Controller, Get, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsObject } from 'class-validator';
 import {
@@ -51,5 +63,48 @@ export class AdminConfigController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.config.activateVersion(principal, ctx, id);
+  }
+}
+
+/** Account overrides of the catalogs (Accounts & Administration technical 3.4; P2.9.2). */
+@ApiTags('admin')
+@ApiBearerAuth()
+@Controller('accounts/:id/config')
+@RequirePermission('admin:config')
+export class AccountConfigController {
+  constructor(private readonly config: ConfigService) {}
+
+  @Get(':kind')
+  describe(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind') kind: string,
+    @Query('scope') scope?: string,
+  ) {
+    return this.config.describeForAccount(principal, id, kindOf(kind), scope ?? '*');
+  }
+
+  @Put(':kind/override')
+  setOverride(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind') kind: string,
+    @Query('scope') scope: string | undefined,
+    @Body() dto: CreateVersionDto,
+  ) {
+    return this.config.setOverride(principal, ctx, id, kindOf(kind), scope ?? '*', dto.body);
+  }
+
+  @Delete(':kind/override')
+  @HttpCode(200)
+  removeOverride(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('kind') kind: string,
+    @Query('scope') scope?: string,
+  ) {
+    return this.config.removeOverride(principal, ctx, id, kindOf(kind), scope ?? '*');
   }
 }

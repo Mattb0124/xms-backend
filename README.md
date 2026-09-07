@@ -37,7 +37,7 @@ src/db/                pool per role, session binding (set_config xms.account_id
 src/domain/            pure rules: state machines, priority matrix, SLA engine, close discipline, burn math, measures, email matching and stripping, AI redaction and SSE parsing
 src/contracts/         permission catalog, event catalog, AI capability contract (shared with the web client)
 src/common/            auth (token verifiers, guard, principal resolution, route table), audit writer, security events, outbox writer, storage and mail adapters, logging
-src/modules/           one feature module per spec module: admin, contracts, tickets, portal, telemetry, time, knowledge, attachments, email, reporting, ai, integrity
+src/modules/           one feature module per spec module: admin, contracts, tickets, portal, telemetry, time, knowledge, attachments, email, reporting, ai, integrity, security, connectors, roster, calendars, migration
 src/config/            environment contract (zod) and the seed catalogs (state machines, priority matrix, SLA policy, activity types, billable classes, resolution codes, ai)
 src/tools/             seed, dev-token
 test/kit/              database and fixture helpers, constructed identities, the in-process harness, the email corpus

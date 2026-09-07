@@ -181,6 +181,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/config/:kind",
+    "controller": "AccountConfigController",
+    "handler": "describe",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/accounts/:id/config/:kind/override",
+    "controller": "AccountConfigController",
+    "handler": "removeOverride",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/accounts/:id/config/:kind/override",
+    "controller": "AccountConfigController",
+    "handler": "setOverride",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/connectors",
     "controller": "ConnectorsController",
     "handler": "list",

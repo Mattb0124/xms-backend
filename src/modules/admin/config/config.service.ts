@@ -117,6 +117,51 @@ export class ConfigRepository extends RepositoryBase {
     );
   }
 
+  overrideVersions(tx: Tx, accountId: string, kind: ConfigKind, scopeKey: string): Promise<ConfigVersionRow[]> {
+    return this.many<ConfigVersionRow>(
+      tx,
+      `select * from acct.config_overrides where account_id = $1 and kind = $2 and scope_key = $3 order by version desc`,
+      [accountId, kind, scopeKey],
+    );
+  }
+
+  /** Inserts an active override version for the account, retiring the previous active one. */
+  async insertOverride(
+    tx: Tx,
+    accountId: string,
+    kind: ConfigKind,
+    scopeKey: string,
+    body: unknown,
+    activatedBy: string,
+  ): Promise<{ previous?: ConfigVersionRow; current: ConfigVersionRow }> {
+    const previous = await this.activeOverride(tx, accountId, kind, scopeKey);
+    if (previous) await tx.query(`update acct.config_overrides set status = 'retired' where id = $1`, [previous.id]);
+    const next = await this.maybeOne<{ next: number }>(
+      tx,
+      `select coalesce(max(version), 0) + 1 as next from acct.config_overrides where account_id = $1 and kind = $2 and scope_key = $3`,
+      [accountId, kind, scopeKey],
+    );
+    const current = await this.one<ConfigVersionRow>(
+      tx,
+      'config_override',
+      `insert into acct.config_overrides (account_id, kind, scope_key, version, body, status, activated_at, activated_by)
+       values ($1, $2, $3, $4, $5, 'active', now(), $6) returning *`,
+      [accountId, kind, scopeKey, next?.next ?? 1, JSON.stringify(body), activatedBy],
+    );
+    return { previous, current };
+  }
+
+  async retireOverride(
+    tx: Tx,
+    accountId: string,
+    kind: ConfigKind,
+    scopeKey: string,
+  ): Promise<ConfigVersionRow | undefined> {
+    const previous = await this.activeOverride(tx, accountId, kind, scopeKey);
+    if (previous) await tx.query(`update acct.config_overrides set status = 'retired' where id = $1`, [previous.id]);
+    return previous;
+  }
+
   async activate(
     tx: Tx,
     id: string,
@@ -282,6 +327,97 @@ export class ConfigService {
     });
     this.cache.clear();
     return result;
+  }
+
+  /** The account view: what resolves today (default or override), the override history, and the operator default. */
+  describeForAccount(principal: Principal, accountId: string, kind: ConfigKind, scopeKey: string) {
+    return this.uow.run(principal, async (tx) => ({
+      effective: await this.resolveUncached(tx, kind, scopeKey, accountId),
+      default: await this.repo.activeDefault(tx, kind, scopeKey),
+      overrides: await this.repo.overrideVersions(tx, accountId, kind, scopeKey),
+    }));
+  }
+
+  /** Activates a new override version for the account (P2.9.2); validated like a default; audited on the account. */
+  setOverride(
+    principal: Principal,
+    ctx: RequestContext,
+    accountId: string,
+    kind: ConfigKind,
+    scopeKey: string,
+    body: unknown,
+  ) {
+    this.validate(kind, body);
+    return this.uow.run(principal, async (tx) => {
+      const { previous, current } = await this.repo.insertOverride(
+        tx,
+        accountId,
+        kind,
+        scopeKey,
+        body,
+        principal.userId,
+      );
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: `config.${kind}`,
+          entityId: current.id,
+          eventType: 'admin.config.activated',
+          field: scopeKey,
+          oldValue: previous?.body ?? null,
+          newValue: current.body,
+        },
+      ]);
+      await this.security.write(
+        {
+          type: 'admin.config.changed',
+          outcome: 'success',
+          accountId,
+          actorKind: 'user',
+          actorId: principal.userId,
+          actorName: principal.displayName,
+          principalKind: principal.kind,
+          requestId: ctx.requestId,
+          entityKind: `config.${kind}`,
+          entityId: current.id,
+          attrs: { scope: 'override', scope_key: scopeKey, version: current.version },
+        },
+        tx,
+      );
+      this.cache.clear();
+      return current;
+    });
+  }
+
+  /** Removes the account override so the operator default applies again. */
+  removeOverride(principal: Principal, ctx: RequestContext, accountId: string, kind: ConfigKind, scopeKey: string) {
+    return this.uow.run(principal, async (tx) => {
+      const previous = await this.repo.retireOverride(tx, accountId, kind, scopeKey);
+      if (!previous) throw new NotFoundException({ code: 'not_found', entity: 'config_override' });
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: `config.${kind}`,
+          entityId: previous.id,
+          eventType: 'admin.config.override_removed',
+          field: scopeKey,
+          oldValue: previous.body,
+          newValue: null,
+        },
+      ]);
+      this.cache.clear();
+      return { removed: previous.id };
+    });
+  }
+
+  private async resolveUncached<T = unknown>(
+    tx: Tx,
+    kind: ConfigKind,
+    scopeKey: string,
+    accountId?: string,
+  ): Promise<ResolvedConfig<T>> {
+    const override = accountId ? await this.repo.activeOverride(tx, accountId, kind, scopeKey) : undefined;
+    const row = override ?? (await this.repo.activeDefault(tx, kind, scopeKey));
+    if (!row) throw new NotFoundException({ code: 'config_missing', kind, scopeKey });
+    return { versionId: row.id, source: override ? 'override' : 'default', version: row.version, body: row.body as T };
   }
 
   private validate(kind: ConfigKind, body: unknown): void {

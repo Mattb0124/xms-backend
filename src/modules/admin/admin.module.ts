@@ -6,7 +6,7 @@ import { AccountsRepository } from './accounts/accounts.repository.js';
 import { AccountsService } from './accounts/accounts.service.js';
 import { BootstrapController, MeController } from './admin.controller.js';
 import { BootstrapService } from './bootstrap.service.js';
-import { AdminConfigController } from './config/config.controller.js';
+import { AccountConfigController, AdminConfigController } from './config/config.controller.js';
 import { ConfigRepository, ConfigService } from './config/config.service.js';
 import { AdminUsersController, DirectoryController } from './users/users.controller.js';
 import { UsersRepository } from './users/users.repository.js';
@@ -50,6 +50,7 @@ export class AdminCoreModule {}
     AdminUsersController,
     DirectoryController,
     AdminConfigController,
+    AccountConfigController,
   ],
   providers: [BootstrapService],
   exports: [AdminCoreModule],
