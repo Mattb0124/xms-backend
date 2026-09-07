@@ -1,0 +1,23 @@
+# dependencies
+/node_modules
+
+# build
+/dist
+*.tsbuildinfo
+
+# tests
+/coverage
+/test-results
+
+# environment (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# generated
+/openapi.json
+
+# tooling
+.DS_Store
+npm-debug.log*
+pnpm-debug.log*

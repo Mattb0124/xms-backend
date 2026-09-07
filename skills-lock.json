@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "skill-authoring": {
+      "source": "pproenca/dot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/skill-authoring/SKILL.md",
+      "computedHash": "98e739c04af29cbb5d3774f80aed7fa312c76defa96b3058efd442957c78f11f"
+    },
+    "typescript": {
+      "source": "pproenca/dot-skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/typescript/SKILL.md",
+      "computedHash": "89f00ce25724f8ec8e0aab0c8d70d64e5fe8904dadb96896eaac622fdb7139ea"
+    }
+  }
+}
