@@ -109,6 +109,10 @@ export interface MappedSubmission {
 /** How many problems a refusal words before it says how many more there are. */
 export const MAX_PROBLEMS = 50;
 
+/** How many fields a form takes, and how long a piece of its wording may be. */
+export const MAX_FIELDS = 60;
+const MAX_LABEL = 160;
+
 const KEY = /^[a-z][a-z0-9_]{0,60}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -128,8 +132,11 @@ export function definitionProblems(definition: unknown): FormProblem[] {
   }
   if (fields.length === 0)
     problems.push({ field: 'fields', code: 'empty', message: 'a form needs at least one field' });
-  if (fields.length > 60)
-    problems.push({ field: 'fields', code: 'too_many', message: 'a form takes at most 60 fields' });
+  // Returning here rather than walking on: an `admin:config` caller who
+  // posts a very large `fields` array otherwise gets a proportionally large
+  // 400 for a form that was refused on its first line.
+  if (fields.length > MAX_FIELDS)
+    return [{ field: 'fields', code: 'too_many', message: `a form takes at most ${MAX_FIELDS} fields` }];
 
   const seenKeys = new Set<string>();
   const seenTargets = new Set<string>();
@@ -139,10 +146,13 @@ export function definitionProblems(definition: unknown): FormProblem[] {
   for (const [index, raw] of fields.entries()) {
     const field = raw as Partial<FormField> | null;
     const key = typeof field?.key === 'string' ? field.key : `field ${index + 1}`;
-    if (typeof field?.key !== 'string' || !KEY.test(field.key)) {
+    if (typeof field?.key !== 'string' || !KEY.test(field.key) || key in Object.prototype) {
       problems.push({
         field: key,
         code: 'bad_key',
+        // `constructor` matches the pattern and is a name every object
+        // already answers to, so a form keyed on one could never be
+        // submitted and the refusal it gave said the wrong thing.
         message: 'a field key is lower case letters, digits and underscores, starting with a letter',
       });
       continue;
@@ -161,8 +171,12 @@ export function definitionProblems(definition: unknown): FormProblem[] {
     byKey.set(field.key, field as FormField);
     if (kind === 'attachment') attachments += 1;
 
-    if (typeof field.label !== 'string' || field.label.trim().length === 0 || field.label.length > 160)
-      problems.push({ field: key, code: 'bad_label', message: 'a field needs a label of 1 to 160 characters' });
+    if (typeof field.label !== 'string' || field.label.trim().length === 0 || field.label.length > MAX_LABEL)
+      problems.push({
+        field: key,
+        code: 'bad_label',
+        message: `a field needs a label of 1 to ${MAX_LABEL} characters`,
+      });
     if (field.help !== undefined && (typeof field.help !== 'string' || field.help.length > 400))
       problems.push({ field: key, code: 'bad_help', message: 'help text is at most 400 characters' });
 
@@ -179,8 +193,12 @@ export function definitionProblems(definition: unknown): FormProblem[] {
           else if (values.has(option.value))
             problems.push({ field: key, code: 'duplicate_option', message: `two options share "${option.value}"` });
           else values.add(option.value);
-          if (typeof option?.label !== 'string' || option.label.trim().length === 0)
-            problems.push({ field: key, code: 'bad_option', message: 'every option needs a label' });
+          if (typeof option?.label !== 'string' || option.label.trim().length === 0 || option.label.length > MAX_LABEL)
+            problems.push({
+              field: key,
+              code: 'bad_option',
+              message: `every option needs a label of 1 to ${MAX_LABEL} characters`,
+            });
         }
       }
     } else if (options !== undefined) {
@@ -281,7 +299,7 @@ export function validateSubmission(
       hidden.push(field.key);
       continue;
     }
-    const answer = answers[field.key];
+    const answer = Object.hasOwn(answers, field.key) ? answers[field.key] : undefined;
     if (isBlank(answer)) {
       if (field.required)
         problems.push({ field: field.key, code: 'required', message: `"${field.label}" is required` });
@@ -295,8 +313,23 @@ export function validateSubmission(
       continue;
     }
     visible.set(field.key, answer);
-    if (field.maps_to.startsWith('custom.')) custom[field.maps_to.slice('custom.'.length)] = answer;
-    else columns[field.maps_to] = answer;
+    if (field.maps_to.startsWith('custom.')) {
+      custom[field.maps_to.slice('custom.'.length)] = answer;
+      continue;
+    }
+    // The allowlist is applied again where the write happens, not only
+    // where the definition was saved. Nothing today spreads
+    // `mapped.columns`, and this is what keeps that from being the thing
+    // that has to stay true.
+    if (!columnAllowed(field.kind, field.maps_to)) {
+      problems.push({
+        field: field.key,
+        code: 'bad_maps_to',
+        message: `a ${field.kind} field cannot write "${field.maps_to}"`,
+      });
+      continue;
+    }
+    columns[field.maps_to] = answer;
   }
 
   // One problem per unrecognised key, capped. A body of many thousands of
@@ -319,6 +352,14 @@ export function validateSubmission(
     });
 
   return { problems, mapped: { columns, custom, hidden } };
+}
+
+/** Whether a kind may write a ticket column, the same rule the definition was saved under. */
+function columnAllowed(kind: FormFieldKind, target: string): boolean {
+  return (
+    (FORM_TICKET_COLUMNS as readonly string[]).includes(target) &&
+    COLUMNS_BY_KIND[kind].includes(target as FormTicketColumn)
+  );
 }
 
 function conditionHolds(condition: FormFieldCondition, visible: Map<string, unknown>): boolean {

@@ -231,3 +231,62 @@ describe('how much a refusal says', () => {
     expect(codes(problems)).toEqual(['unknown_field', 'unknown_field']);
   });
 });
+
+/**
+ * The smaller edges of the form rules (review 2026-09-09 findings 18, 19
+ * and 25): a key every object already answers to, a target re-checked where
+ * the write happens rather than only where the definition was saved, and
+ * wording that is bounded like the rest of it.
+ */
+describe('the edges of a definition', () => {
+  it('refuses a field keyed on a name every object already has', () => {
+    const problems = definitionProblems({
+      fields: [{ key: 'constructor', kind: 'short_text', label: 'Summary', maps_to: 'short_description' }],
+    });
+    expect(codes(problems)).toContain('bad_key');
+  });
+
+  it('bounds an option label the way it bounds a field label', () => {
+    const long = form(
+      field({
+        key: 'systems',
+        kind: 'choice',
+        maps_to: 'category',
+        options: [{ value: 'erp', label: 'E'.repeat(161) }],
+      }),
+    );
+    expect(codes(definitionProblems(long))).toContain('bad_option');
+  });
+
+  it('refuses an oversized field list in one problem rather than one per field', () => {
+    const many = {
+      fields: Array.from({ length: 5000 }, (_unused, index) => ({
+        key: `f${index}`,
+        kind: 'short_text',
+        label: 'A field',
+        maps_to: `custom.f${index}`,
+      })),
+    };
+    const problems = definitionProblems(many);
+    expect(problems).toHaveLength(1);
+    expect(problems[0].code).toBe('too_many');
+  });
+
+  it('refuses a stored definition that writes a column its kind may not, at submission', () => {
+    // A definition that got past `definitionProblems` somehow, or was
+    // written before the rule existed: the write is where the allowlist has
+    // to hold, not only the save.
+    const smuggled = form(field({ key: 'summary', kind: 'long_text', maps_to: 'urgency' }));
+    const { problems, mapped } = validateSubmission(smuggled, { summary: 'high' });
+    expect(codes(problems)).toEqual(['bad_maps_to']);
+    expect(mapped.columns).toEqual({});
+  });
+
+  it('reads an answer by its own key, never off the prototype', () => {
+    const simple = form(field({ key: 'summary', kind: 'short_text', maps_to: 'short_description', required: true }));
+    const inherited = Object.create({ summary: 'from the prototype' }) as Record<string, unknown>;
+    const { problems, mapped } = validateSubmission(simple, inherited);
+    expect(codes(problems)).toEqual(['required']);
+    expect(mapped.columns.short_description).toBeUndefined();
+  });
+});
