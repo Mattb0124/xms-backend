@@ -327,6 +327,13 @@ describe('review before send (DR-05, functional 5.8)', () => {
     expect(detail.body.pack.id).toBe(held.pack_id);
     expect(detail.body.files.pptx).toContain('/v1/storage/download?');
     expect(detail.body.files.pdf).toContain('/v1/storage/download?');
+    // The signer is handed the delivery lifetime the specification names
+    // (functional 5.7: links valid for fourteen days), not the store's own
+    // short default, and both renditions get the same one.
+    for (const link of [detail.body.files.pptx, detail.body.files.pdf]) {
+      const expiresAt = Number(new URL(link).searchParams.get('expires')) * 1000;
+      expect(Math.round((expiresAt - Date.now()) / 86_400_000)).toBe(14);
+    }
     // The reviewers are the account's reports:manage holders: the owner and the administrator.
     const asked = await withSuperuser((client) =>
       client.query<{ recipient_id: string; link: string }>(

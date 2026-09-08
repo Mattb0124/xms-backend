@@ -75,8 +75,14 @@ import { PDF_CONTENT_TYPE, PPTX_CONTENT_TYPE, ReportingService } from './reporti
  * because unreviewed narrative never reaches a client.
  */
 
-/** Presigned delivery and review links live as long as the delivery email says they do. */
-const LINK_SECONDS = 7 * 24 * 3600;
+/**
+ * Presigned delivery and review links live as long as the delivery email
+ * says they do: fourteen days (Dashboards & Report Packs functional 5.7).
+ * The number is written once, and the email copy words it from the same
+ * constant, so a link cannot outlive or undercut what the client was told.
+ */
+const DELIVERY_LINK_DAYS = 14;
+const LINK_SECONDS = DELIVERY_LINK_DAYS * 24 * 3600;
 
 /** Recipient ids are user uuids; a distribution row may carry an address instead. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -818,8 +824,8 @@ export class SchedulesService {
           text: [
             `Your report pack for ${period.start} to ${period.end} is ready.`,
             '',
-            ...(links.pdf ? [`PDF (valid seven days): ${links.pdf}`] : []),
-            ...(links.pptx ? [`Slides (valid seven days): ${links.pptx}`] : []),
+            ...(links.pdf ? [`PDF (valid ${DELIVERY_LINK_DAYS} days): ${links.pdf}`] : []),
+            ...(links.pptx ? [`Slides (valid ${DELIVERY_LINK_DAYS} days): ${links.pptx}`] : []),
             '',
           ].join('\n'),
           messageId,
