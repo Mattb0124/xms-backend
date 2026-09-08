@@ -226,6 +226,69 @@ describe('the configuration item register', () => {
     expect(inUse.body).toMatchObject({ code: 'configuration_item_in_use', tickets: 1 });
   });
 
+  it('names the item on the ticket view, in the record, the queue and after a change (render 02)', async () => {
+    const item = (await newItem({ ci_type: 'application', name: 'HFM PROD' })) as unknown as {
+      id: string;
+      version: number;
+    };
+    const withItem = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'Consolidation failing on the EU entity',
+        configuration_item_id: item.id,
+      })
+      .expect(201);
+    // The create answers the name, so the record can print it without a
+    // second call the moment the ticket exists.
+    expect(withItem.body).toMatchObject({ configuration_item_id: item.id, configuration_item_name: 'HFM PROD' });
+
+    const record = await api().get(`/v1/tickets/${withItem.body.key}`).set(bearer(caraToken)).expect(200);
+    expect(record.body.configuration_item_name).toBe('HFM PROD');
+
+    const withoutItem = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({ account_id: accountId, type: 'incident', short_description: 'No item named' })
+      .expect(201);
+    expect(withoutItem.body.configuration_item_id).toBeNull();
+    expect(withoutItem.body.configuration_item_name).toBeNull();
+    const bare = await api().get(`/v1/tickets/${withoutItem.body.key}`).set(bearer(caraToken)).expect(200);
+    expect(bare.body.configuration_item_name).toBeNull();
+
+    // A rename reaches the ticket, because the view reads the register
+    // rather than a copy taken when the ticket was written.
+    await api()
+      .patch(`/v1/configuration-items/${item.id}`)
+      .set(bearer(adminToken))
+      .send({ version: item.version, name: 'HFM PROD (EMEA)' })
+      .expect(200);
+    const renamed = await api().get(`/v1/tickets/${withItem.body.key}`).set(bearer(caraToken)).expect(200);
+    expect(renamed.body.configuration_item_name).toBe('HFM PROD (EMEA)');
+
+    // The queue answers it too, from one lookup for the page.
+    const queue = await api().get(`/v1/tickets?account_id=${accountId}`).set(bearer(caraToken)).expect(200);
+    const names = new Map<string, string | null>(
+      queue.body.items.map((row: { key: string; configuration_item_name: string | null }) => [
+        row.key,
+        row.configuration_item_name,
+      ]),
+    );
+    expect(names.get(withItem.body.key)).toBe('HFM PROD (EMEA)');
+    expect(names.get(withoutItem.body.key)).toBeNull();
+
+    // Clearing the item clears the name with it.
+    const cleared = await api()
+      .patch(`/v1/tickets/${withItem.body.key}`)
+      .set(bearer(adminToken))
+      .send({ version: renamed.body.version, configuration_item_id: null })
+      .expect(200);
+    expect(cleared.body.configuration_item_id).toBeNull();
+    expect(cleared.body.configuration_item_name).toBeNull();
+  });
+
   it('keeps writing behind admin:config while reading stays with tickets:view', async () => {
     const refused = await api()
       .post(`/v1/accounts/${accountId}/configuration-items`)

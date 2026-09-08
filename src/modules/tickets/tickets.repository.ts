@@ -158,6 +158,23 @@ export class TicketsRepository extends RepositoryBase {
     return this.one<TicketRow>(tx, 'ticket', 'select * from acct.tickets where id = $1 for update', [id]);
   }
 
+  /**
+   * The names of the configuration items a set of tickets points at
+   * (TM-19), read in one query so a page of the queue costs one lookup
+   * rather than one per row. An id with no row of its own simply has no
+   * entry, and the view then says null, exactly as an unset item does.
+   */
+  async configurationItemNames(tx: Tx, ids: readonly (string | null)[]): Promise<Map<string, string>> {
+    const wanted = [...new Set(ids.filter((id): id is string => id !== null))];
+    if (wanted.length === 0) return new Map();
+    const rows = await this.many<{ id: string; name: string }>(
+      tx,
+      'select id, name from acct.configuration_items where id = any ($1::uuid[])',
+      [wanted],
+    );
+    return new Map(rows.map((row) => [row.id, row.name]));
+  }
+
   insert(
     tx: Tx,
     row: Partial<TicketRow> & {

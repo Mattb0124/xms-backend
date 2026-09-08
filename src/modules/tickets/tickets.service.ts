@@ -114,6 +114,8 @@ export interface TicketView {
   group_id: string | null;
   /** The configuration item the work is about (TM-19). */
   configuration_item_id: string | null;
+  /** That item's name, so the record's properties print it without a second call. */
+  configuration_item_name: string | null;
   /** The project or change window the ticket belongs to (TM-10). */
   ticket_group_id: string | null;
   assignee_id: string | null;
@@ -261,6 +263,10 @@ export class TicketsService {
       );
       const now = new Date();
       const calendars = await this.calendars.forClocks(tx, clocks);
+      const configurationItems = await this.tickets.configurationItemNames(
+        tx,
+        page.rows.map((row) => row.configuration_item_id),
+      );
       const machines = new Map<string, StateMachine>();
       const items: TicketView[] = [];
       for (const row of page.rows) {
@@ -273,6 +279,7 @@ export class TicketsService {
             null,
             now,
             calendars,
+            configurationItems,
           ),
         );
       }
@@ -298,7 +305,15 @@ export class TicketsService {
       const watchers = await this.tickets.watchersOf(tx, row.id);
       const watching = watchers.some((watcher) => watcher.user_id === principal.userId && !watcher.muted_at);
       return {
-        ...this.toView(row, clocks, machine, requester ?? null, new Date(), await this.calendars.forClocks(tx, clocks)),
+        ...this.toView(
+          row,
+          clocks,
+          machine,
+          requester ?? null,
+          new Date(),
+          await this.calendars.forClocks(tx, clocks),
+          await this.configurationItem(tx, row),
+        ),
         watching,
       };
     });
@@ -522,7 +537,15 @@ export class TicketsService {
         row.updated_at = row.created_at;
       }
       const clocks = await this.tickets.clocksOf(tx, row.id);
-      return this.toView(row, clocks, machine, requester ?? null, now, await this.calendars.forClocks(tx, clocks));
+      return this.toView(
+        row,
+        clocks,
+        machine,
+        requester ?? null,
+        now,
+        await this.calendars.forClocks(tx, clocks),
+        await this.configurationItem(tx, row),
+      );
     });
   }
 
@@ -736,6 +759,7 @@ export class TicketsService {
         null,
         new Date(),
         await this.calendars.forClocks(tx, finalClocks),
+        await this.configurationItem(tx, after),
       );
     });
   }
@@ -1012,6 +1036,7 @@ export class TicketsService {
         requester ?? null,
         now,
         await this.calendars.forClocks(tx, finalClocks),
+        await this.configurationItem(tx, after),
       );
     });
   }
@@ -1184,7 +1209,15 @@ export class TicketsService {
       if (!definition) throw new BadRequestException({ code: 'unknown_state', state: input.state });
       if (before.state === input.state) {
         const clocks = await this.tickets.clocksOf(tx, before.id);
-        return this.toView(before, clocks, machine, null, new Date(), new Map());
+        return this.toView(
+          before,
+          clocks,
+          machine,
+          null,
+          new Date(),
+          new Map(),
+          await this.configurationItem(tx, before),
+        );
       }
       const at = input.at ?? new Date();
       const assignments: Record<string, unknown> = { state: input.state };
@@ -1210,7 +1243,7 @@ export class TicketsService {
         },
       ]);
       const clocks = await this.tickets.clocksOf(tx, before.id);
-      return this.toView(after, clocks, machine, null, new Date(), new Map());
+      return this.toView(after, clocks, machine, null, new Date(), new Map(), await this.configurationItem(tx, after));
     });
   }
 
@@ -1573,11 +1606,24 @@ export class TicketsService {
   private async viewOf(tx: Tx, row: TicketRow): Promise<TicketView> {
     const machine = await this.machineFor(tx, row, new Map());
     const clocks = await this.tickets.clocksOf(tx, row.id);
-    return this.toView(row, clocks, machine, null, new Date(), await this.calendars.forClocks(tx, clocks));
+    return this.toView(
+      row,
+      clocks,
+      machine,
+      null,
+      new Date(),
+      await this.calendars.forClocks(tx, clocks),
+      await this.configurationItem(tx, row),
+    );
   }
 
   private inTx<T>(principal: Principal, bound: Tx | undefined, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return bound ? fn(bound) : this.uow.run(principal, (tx) => fn(tx));
+  }
+
+  /** The configuration item names one row needs, for a view of a single ticket (TM-19). */
+  private configurationItem(tx: Tx, row: TicketRow): Promise<Map<string, string>> {
+    return this.tickets.configurationItemNames(tx, [row.configuration_item_id]);
   }
 
   private async load(tx: Tx, idOrKey: string): Promise<TicketRow> {
@@ -1874,6 +1920,7 @@ export class TicketsService {
     requester: { id: string; email: string; display_name: string } | null,
     now: Date,
     calendars: Map<string, Calendar> = new Map(),
+    configurationItems: ReadonlyMap<string, string> = new Map(),
   ): TicketView {
     const sla: TicketView['sla'] = {};
     for (const clockRow of clocks)
@@ -1900,6 +1947,9 @@ export class TicketsService {
       assignee_name: row.assignee_name,
       contract_id: row.contract_id,
       configuration_item_id: row.configuration_item_id,
+      configuration_item_name: row.configuration_item_id
+        ? (configurationItems.get(row.configuration_item_id) ?? null)
+        : null,
       resolution: {
         code: row.resolution_code,
         notes: row.resolution_notes,
