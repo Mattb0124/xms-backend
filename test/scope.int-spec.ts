@@ -211,6 +211,25 @@ describe('POST /v1/tickets/:key/scope', () => {
       .send({ version: flagged.body.version, out_of_scope: false })
       .expect(201);
     expect(withdrawn.body.scope.out_of_scope).toBe('none');
+    // A retraction is its own event and it is published, so a consumer can
+    // tell it from the raise without reading the value, and the outbox
+    // stops saying a flag is open after it has gone.
+    const audited = await withSuperuser((client) =>
+      client.query<{ event_type: string }>(
+        `select event_type from acct.audit_events where ticket_id = $1 and event_type like 'ticket.scope%' order by created_at`,
+        [withdrawn.body.id],
+      ),
+    );
+    expect(audited.rows.map((row) => row.event_type)).toEqual(['ticket.scope_flagged', 'ticket.scope_withdrawn']);
+    const published = await withSuperuser((client) =>
+      client.query<{ event_type: string; payload: Record<string, unknown> }>(
+        `select event_type, payload from sys.outbox where aggregate_id = $1 and event_type like 'ticket.scope%' order by id`,
+        [withdrawn.body.id],
+      ),
+    );
+    expect(published.rows.map((row) => row.event_type)).toEqual(['ticket.scope_flagged', 'ticket.scope_withdrawn']);
+    expect(published.rows[1].payload).toMatchObject({ reason: 'Possibly outside the retainer.' });
+
     const nothing = await api()
       .post(`/v1/tickets/${ticket.key}/scope`)
       .set(bearer(consultantToken))

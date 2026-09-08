@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Injectable, Module, Param, ParseUUIDPipe, Put } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Injectable,
+  Module,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
+  Put,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
@@ -125,6 +135,12 @@ export class RoutingService {
     accountId: string,
     dto: ReplaceRoutingRulesDto,
   ): Promise<RoutingRuleRow[]> {
+    // The forced policy's `with check` blocks the write either way, but a
+    // foreign id is a 404 in this codebase, not a policy error, and the
+    // guarantee should rest on the service and the policy rather than on
+    // the policy alone.
+    if (!principal.accountIds.includes(accountId))
+      throw new NotFoundException({ code: 'not_found', entity: 'account' });
     const rules = dto.rules.map((rule) => ({
       ticket_type: rule.ticket_type,
       category: rule.category?.trim() ? rule.category.trim() : null,

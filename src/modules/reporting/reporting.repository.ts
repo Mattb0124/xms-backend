@@ -406,8 +406,14 @@ export class ReportingRepository extends RepositoryBase {
   > {
     return this.many(
       tx,
+      // The id follows the row's visibility, not the payload's word for
+      // it: a dead letter carrying no account of its own used to hand back
+      // the instance id whatever account owned that connector, while only
+      // the name was suppressed by row-level security on the join.
       `select d.queue, count(*)::int as n, min(d.first_failed_at) as oldest,
-              d.account_id::text as account_id, d.payload->>'instance_id' as instance_id, max(c.name) as instance_name
+              d.account_id::text as account_id,
+              case when max(c.id::text) is null then null else d.payload->>'instance_id' end as instance_id,
+              max(c.name) as instance_name
          from sys.dead_letters d
          left join acct.connector_instances c on c.id::text = d.payload->>'instance_id'
         where d.resolution = 'open' and (d.account_id is null or d.account_id = any ($1::uuid[]))

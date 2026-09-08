@@ -1,4 +1,4 @@
-import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { HttpException, Logger, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import PptxGenJS from 'pptxgenjs';
 import { randomUUID } from 'node:crypto';
@@ -115,6 +115,21 @@ export class ReportingService {
     private readonly archives: ArchiveService,
     @Inject(OBJECT_STORE) private readonly store: ObjectStore,
   ) {}
+
+  private readonly logger = new Logger(ReportingService.name);
+
+  /**
+   * What a failed run records. The driver's own message carries table
+   * names, constraint names and fragments of values, and `runs()` returns
+   * the column with `select r.*` to any `tickets:view` holder on the
+   * account, which routes around the exception filter's `internal_error`.
+   * The row gets a code; the message goes to the log, where operations can
+   * read it and a client cannot.
+   */
+  private runFailure(runId: string, error: unknown): string {
+    this.logger.error(`report run ${runId} failed: ${(error as Error).message}`);
+    return error instanceof HttpException ? `refused: ${error.getStatus()}` : 'render_failed';
+  }
 
   /** Operations dashboard: every granted account, with a per-account strip. */
   operations(principal: Principal, days = 7): Promise<DashboardView> {
@@ -731,7 +746,7 @@ export class ReportingService {
         );
         return { run_id: run.id, pack_id: pack.id, download };
       } catch (error) {
-        await this.reporting.finishRun(tx, run.id, null, (error as Error).message.slice(0, 500));
+        await this.reporting.finishRun(tx, run.id, null, this.runFailure(run.id, error));
         throw error;
       }
     });
@@ -828,7 +843,7 @@ export class ReportingService {
         pdf_file_name: `${account.key}-WSR-${iso(period.start)}.pdf`,
       };
     } catch (error) {
-      await this.reporting.finishRun(tx, run.id, null, (error as Error).message.slice(0, 500));
+      await this.reporting.finishRun(tx, run.id, null, this.runFailure(run.id, error));
       throw error;
     }
   }

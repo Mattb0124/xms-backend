@@ -621,8 +621,20 @@ export class TimeService {
           entityKind: 'non_ticket_bucket',
           entityId: bucketId,
           eventType: 'updated',
-          oldValue: { label: before.label, billable_class: before.billable_class, status: before.status },
-          newValue: { label: after.label, billable_class: after.billable_class, status: after.status },
+          // `code` is on both sides: re-coding a bucket regroups its time
+          // across accounts in reporting, and used to leave no trace.
+          oldValue: {
+            label: before.label,
+            code: before.code,
+            billable_class: before.billable_class,
+            status: before.status,
+          },
+          newValue: {
+            label: after.label,
+            code: after.code,
+            billable_class: after.billable_class,
+            status: after.status,
+          },
         },
       ]);
       return after;

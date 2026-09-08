@@ -11,7 +11,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { actorOf, AuditService } from '../../common/audit/audit.service.js';
@@ -73,7 +74,11 @@ export class ContactsRepository extends RepositoryBase {
 
 export class ListContactsQueryDto {
   @IsOptional() @IsString() @MaxLength(120) q?: string;
-  @IsOptional() @IsInt() limit?: number;
+
+  // `enableImplicitConversion` is off, so without the transform any
+  // `?limit=` value arrives as a string and 400s, which made the parameter
+  // unusable rather than unbounded.
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(500) limit?: number;
 }
 
 export class SetContactFlagsDto {
@@ -90,9 +95,9 @@ export class ContactsService {
   ) {}
 
   list(principal: Principal, accountId: string, query: ListContactsQueryDto) {
-    return this.uow.run(principal, (tx) =>
-      this.contacts.list(tx, accountId, query.q, Math.min(Number(query.limit ?? 200), 500)),
-    );
+    if (!principal.accountIds.includes(accountId))
+      throw new NotFoundException({ code: 'not_found', entity: 'account' });
+    return this.uow.run(principal, (tx) => this.contacts.list(tx, accountId, query.q, query.limit ?? 200));
   }
 
   /** Replaces the flag set; the audit records what it was and what it became. */

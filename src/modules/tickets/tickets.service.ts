@@ -1385,17 +1385,30 @@ export class TicketsService {
         out_of_scope: 'none',
         out_of_scope_detail: { ...detail, withdrawn_at: new Date().toISOString(), withdrawn_by: principal.userId },
       });
+      // A retraction is its own event. Reusing the raise type left a
+      // consumer unable to tell one from the other without reading
+      // `newValue`, and the raise was published while the retraction was
+      // not, so the outbox said a flag was still open after it was gone.
       await this.audit.account(tx, before.account_id, actorOf(principal), { requestId: ctx.requestId, correlationId }, [
         {
           entityKind: 'ticket',
           entityId: before.id,
           ticketId: before.id,
-          eventType: 'ticket.scope_flagged',
+          eventType: 'ticket.scope_withdrawn',
           field: 'out_of_scope',
           oldValue: 'flagged',
           newValue: 'none',
         },
       ]);
+      await this.outbox.write(tx, {
+        accountId: before.account_id,
+        aggregate: 'ticket',
+        aggregateId: before.id,
+        eventType: 'ticket.scope_withdrawn',
+        correlationId,
+        origin: ctx.origin,
+        payload: { withdrawn_by: principal.userId, reason: detail.reason ?? null },
+      });
       return this.viewOf(tx, after);
     });
   }

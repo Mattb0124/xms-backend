@@ -101,6 +101,7 @@ export const AUDIT_EVENT_TYPES = [
   'ticket.change_window_acknowledged',
   'ticket.change_window_overridden',
   'ticket.scope_flagged',
+  'ticket.scope_withdrawn',
   'ticket.scope_decided',
   'comment.created',
   'work_note.created',
