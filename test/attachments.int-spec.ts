@@ -3,11 +3,13 @@ import { Test } from '@nestjs/testing';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
+import { MAX_IMAGE_EDGE } from '../src/common/images/reencode.js';
 import { EICAR } from '../src/modules/attachments/attachments.module.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
@@ -16,8 +18,10 @@ import { DEV_SECRET, devToken } from './kit/auth.js';
  * Attachments over the API with the local store (P1.6.1, P1.6.2 done-when,
  * TM-14): presign with the allowlist and the account size cap, upload
  * through the signed URL, confirm triggers the scan, downloads only for
- * clean, EICAR is quarantined within the flow, the portal sees public
- * clean attachments only, a tampered signature is refused.
+ * clean, EICAR is quarantined within the flow, an uploaded image is
+ * re-encoded before the scan gate sees it (Security & Tenancy section 6),
+ * the portal sees public clean attachments only, a tampered signature is
+ * refused.
  */
 const ADMIN_EMAIL = 'admin@example.test';
 
@@ -178,7 +182,13 @@ describe('attachments', () => {
   });
 
   it('the portal uploads public attachments and sees only clean public ones', async () => {
-    const confirmed = await upload(portalToken, '/v1/portal', 'screen.png', 'image/png', Buffer.from('PNG'));
+    // A real picture, because an uploaded image is decoded at confirm now.
+    const png = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .png()
+      .toBuffer();
+    const confirmed = await upload(portalToken, '/v1/portal', 'screen.png', 'image/png', png);
     expect(confirmed).toMatchObject({ origin: 'portal', visibility: 'public', scan_state: 'clean' });
     await upload(adminToken, '/v1', 'internal.txt', 'text/plain', Buffer.from('internal'));
     const portalList = await api().get(`/v1/portal/tickets/${key}/attachments`).set(bearer(portalToken)).expect(200);
@@ -197,6 +207,69 @@ describe('attachments', () => {
       .send({ file_name: 'x.txt', content_type: 'text/plain', size_bytes: 1 })
       .expect(403);
     expect(refusedUpload.body.code).toBe('wrong_realm');
+  });
+
+  it('re-encodes an uploaded image at confirm, leaves a non-image alone and quarantines one it cannot decode', async () => {
+    // Constructed here: an oversized flat swatch carrying EXIF on purpose,
+    // so what is asserted is what the re-encode took away.
+    const original = await sharp({
+      create: { width: MAX_IMAGE_EDGE + 200, height: 600, channels: 3, background: { r: 200, g: 40, b: 60 } },
+    })
+      .withExifMerge({ IFD0: { Copyright: 'A client of ours', Software: 'Their screenshot tool' } })
+      .jpeg()
+      .toBuffer();
+    expect((await sharp(original).metadata()).exif).toBeDefined();
+
+    const confirmed = await upload(adminToken, '/v1', 'shot.jpg', 'image/jpeg', original);
+    expect(confirmed).toMatchObject({ scan_state: 'clean', file_name: 'shot.jpg', content_type: 'image/jpeg' });
+    expect(confirmed.re_encode).toMatchObject({
+      original_content_type: 'image/jpeg',
+      content_type: 'image/jpeg',
+      original_bytes: original.length,
+      original_width: MAX_IMAGE_EDGE + 200,
+      original_height: 600,
+      width: MAX_IMAGE_EDGE,
+      resized: true,
+      metadata_stripped: true,
+    });
+    expect(Number(confirmed.size_bytes)).toBe(confirmed.re_encode.bytes);
+
+    // The bytes that are served are the re-encoded ones: no metadata block
+    // survived the trip through the store.
+    const download = await api().get(`/v1/attachments/${confirmed.id}/download`).set(bearer(adminToken)).expect(200);
+    const fetched = await request(app.getHttpServer())
+      .get(localPath(download.body.url))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const served = await sharp(fetched.body as Buffer).metadata();
+    expect(served.format).toBe('jpeg');
+    expect(served.width).toBe(MAX_IMAGE_EDGE);
+    expect(served.exif).toBeUndefined();
+
+    // A file that is not an image is stored as it came.
+    const plain = await upload(adminToken, '/v1', 'notes-2.txt', 'text/plain', Buffer.from('nothing to re-encode'));
+    expect(plain).toMatchObject({ scan_state: 'clean', content_type: 'text/plain', re_encode: null });
+    expect(Number(plain.size_bytes)).toBe(20);
+
+    // A file that says it is an image and is not one goes to quarantine
+    // with the reason the email path uses.
+    const trap = await upload(
+      adminToken,
+      '/v1',
+      'logo.png',
+      'image/png',
+      Buffer.from('<svg onload="alert(1)"><script>steal()</script></svg>', 'utf8'),
+    );
+    expect(trap).toMatchObject({ scan_state: 'quarantined', re_encode: null });
+    expect(trap.scan_detail).toMatchObject({ reason: 'image_not_decodable', declared_content_type: 'image/png' });
+    expect(trap.scan_detail.detail).toMatch(/could not be decoded as an image/);
+    expect(trap.s3_key).toMatch(/^quarantine\//);
+    await api().get(`/v1/attachments/${trap.id}/download`).set(bearer(adminToken)).expect(403);
   });
 
   it('soft deletes and hides the row', async () => {

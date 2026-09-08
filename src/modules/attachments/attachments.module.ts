@@ -43,7 +43,10 @@ import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
  * condition, a MIME and extension allowlist, rows created `pending`, the
  * scan result consumer (GuardDuty in AWS, the local scanner in
  * development) moving quarantined objects and notifying, downloads only for
- * `clean`, portal reads of public attachments only.
+ * `clean`, portal reads of public attachments only. Every image is
+ * re-encoded before the scan gate sees it, whichever way it arrived: at
+ * confirm for a browser upload, in `ingest` for a connector, in the email
+ * service for a message.
  */
 export const ALLOWED_TYPES: Record<string, readonly string[]> = {
   'image/png': ['png'],
@@ -163,6 +166,25 @@ export class AttachmentsRepository extends RepositoryBase {
       'attachment',
       `update acct.attachments set scan_state = $2, scan_detail = $3, s3_key = coalesce($4, s3_key) where id = $1 returning *`,
       [id, state, JSON.stringify(detail), newKey ?? null],
+    );
+  }
+
+  /**
+   * The row after the stored bytes were re-encoded: the name and the type
+   * say what the stored object now is, the size is the re-encoded size, and
+   * `re_encode` carries what the re-encode did.
+   */
+  setReEncoded(
+    tx: Tx,
+    id: string,
+    input: { fileName: string; contentType: string; sizeBytes: number; detail: Record<string, unknown> },
+  ): Promise<AttachmentRow> {
+    return this.one<AttachmentRow>(
+      tx,
+      'attachment',
+      `update acct.attachments set file_name = $2, content_type = $3, size_bytes = $4, re_encode = $5::jsonb
+        where id = $1 returning *`,
+      [id, input.fileName, input.contentType, input.sizeBytes, JSON.stringify(input.detail)],
     );
   }
 
@@ -303,7 +325,7 @@ export class AttachmentsService {
     return principal.kind === 'portal' ? this.uow.portalWrite(principal, work) : this.uow.run(principal, work);
   }
 
-  /** After the upload: verify the object exists, then scan (inline locally; the worker consumer in AWS). */
+  /** After the upload: verify the object exists, re-encode an image, then scan (inline locally; the worker consumer in AWS). */
   async confirm(
     principal: Principal,
     ctx: RequestContext,
@@ -322,13 +344,63 @@ export class AttachmentsService {
       if (options.visibility && principal.kind !== 'portal') {
         await tx.query('update acct.attachments set visibility = $2 where id = $1', [row.id, options.visibility]);
       }
+      const gate = await this.reEncodeStored(tx, await this.attachments.byId(tx, row.id), ctx);
+      if (gate.quarantined) return gate.row;
       if (this.store.kind === 'local') {
-        const verdict = await this.scanner.scan(await this.store.getObject(row.s3_key));
-        return this.applyScan(tx, row, verdict.verdict, verdict.detail, ctx);
+        const body = gate.body ?? (await this.store.getObject(gate.row.s3_key));
+        const verdict = await this.scanner.scan(body);
+        return this.applyScan(tx, gate.row, verdict.verdict, verdict.detail, ctx);
       }
-      return this.attachments.byId(tx, row.id);
+      return gate.row;
     };
     return principal.kind === 'portal' ? this.uow.portalWrite(principal, work) : this.uow.run(principal, work);
+  }
+
+  /**
+   * The browser upload gets the treatment an image off an email gets
+   * (Security & Tenancy section 6). A presigned upload puts the bytes in
+   * the store without this process ever seeing them, so the object is
+   * fetched back at confirm, decoded, written out again under the same key,
+   * and only then does the scan gate see it. What is served afterwards is
+   * built from the pixels: no EXIF or XMP block, no comment segment, no
+   * polyglot tail, no SVG script. The store kind makes no difference, since
+   * both stores read and write an object the same way.
+   *
+   * A file that says it is an image and is not one is not stored on a
+   * guess: it goes to quarantine with `image_not_decodable`, in the same
+   * words the email path uses. A row that already carries `re_encode` is
+   * left alone, so a second confirm re-encodes nothing.
+   */
+  private async reEncodeStored(
+    tx: Tx,
+    row: AttachmentRow,
+    ctx: RequestContext,
+  ): Promise<{ row: AttachmentRow; body?: Buffer; quarantined: boolean }> {
+    if (row.re_encode || !isReEncodedImage(row.content_type)) return { row, quarantined: false };
+    const raw = await this.store.getObject(row.s3_key);
+    let encoded;
+    try {
+      encoded = await reEncodeImage(raw, row.content_type, row.file_name);
+    } catch (error) {
+      const detail =
+        error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+      const quarantined = await this.applyScan(
+        tx,
+        row,
+        'quarantined',
+        { reason: 'image_not_decodable', detail, declared_content_type: row.content_type },
+        ctx,
+      );
+      return { row: quarantined, quarantined: true };
+    }
+    await this.store.putObject(row.s3_key, encoded.body, encoded.contentType);
+    const updated = await this.attachments.setReEncoded(tx, row.id, {
+      fileName: encoded.fileName,
+      contentType: encoded.contentType,
+      sizeBytes: encoded.body.length,
+      detail: encoded.detail,
+    });
+    return { row: updated, body: encoded.body, quarantined: false };
   }
 
   /**
