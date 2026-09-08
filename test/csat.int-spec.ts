@@ -100,6 +100,12 @@ beforeAll(async () => {
     .expect(201);
   accountId = account.body.id;
   await api().post(`/v1/admin/accounts/${accountId}/activate`).set(bearer(adminToken)).expect(201);
+  const settings = await api().get(`/v1/admin/accounts/${accountId}/settings`).set(bearer(adminToken)).expect(200);
+  await api()
+    .put(`/v1/admin/accounts/${accountId}/settings`)
+    .set(bearer(adminToken))
+    .send({ version: settings.body.version, csat_enabled: true })
+    .expect(200);
   await api()
     .post(`/v1/accounts/${accountId}/contracts`)
     .set(bearer(adminToken))

@@ -46,6 +46,7 @@ import {
 } from '../../domain/portal/csat.js';
 import type { Job } from '../../worker/jobs.js';
 import type { OutboxRow } from '../../worker/outbox-dispatcher.js';
+import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { EmailCoreModule } from '../email/email.module.js';
 import { EmailRepository } from '../email/email.repository.js';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
@@ -258,6 +259,7 @@ export class CsatService {
     private readonly pools: DbPools,
     private readonly repo: CsatRepository,
     private readonly tickets: TicketsRepository,
+    private readonly accounts: AccountsRepository,
     private readonly email: EmailRepository,
     private readonly notifications: NotificationsRepository,
     private readonly time: TimeRepository,
@@ -274,6 +276,9 @@ export class CsatService {
     await this.uow.worker([row.account_id], async (tx) => {
       const ticket = await this.tickets.byId(tx, row.aggregate_id).catch(() => undefined);
       if (!ticket || !ticket.requester_contact_id) return;
+      // The account switch (Accounts & Administration settings): no surveys until the account turns them on.
+      const settings = await this.accounts.settings(tx, ticket.account_id).catch(() => undefined);
+      if (!settings?.csat_enabled) return;
       if (await this.repo.surveyForTicket(tx, ticket.id, ticket.requester_contact_id)) return;
       const contact = await this.tickets.contactById(tx, ticket.requester_contact_id);
       const reason = suppressionReason(
