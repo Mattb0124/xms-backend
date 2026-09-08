@@ -10,6 +10,7 @@ import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
+import { MAX_CALENDAR_DAYS } from '../src/modules/tickets/change-windows.module.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
 /**
@@ -458,6 +459,29 @@ describe('the change calendar', () => {
     expect(names).toContain('Azure Files cutover');
     const tonight = calendar.body.windows.find((row: { name: string }) => row.name === 'Tonight');
     expect(tonight.tickets.length).toBeGreaterThan(0);
+
+    // The tickets of every window on the page come from one query, so the
+    // read costs the same whether the page holds one window or many.
+    for (const window of calendar.body.windows) expect(Array.isArray(window.tickets)).toBe(true);
+
+    // A range wider than a calendar is ever read at is refused rather than
+    // returning every change window ever recorded.
+    const wide = await api()
+      .get('/v1/change-calendar?from=1900-01-01T00:00:00.000Z&to=2999-12-31T00:00:00.000Z')
+      .set(bearer(adminToken))
+      .expect(400);
+    expect(wide.body).toMatchObject({ code: 'range_too_wide', max_days: MAX_CALENDAR_DAYS });
+
+    // A year is inside the cap, and a backwards range is its own refusal.
+    await api()
+      .get(`/v1/change-calendar?from=${encodeURIComponent(days(-300))}&to=${encodeURIComponent(days(60))}`)
+      .set(bearer(adminToken))
+      .expect(200);
+    const backwards = await api()
+      .get(`/v1/change-calendar?from=${encodeURIComponent(days(10))}&to=${encodeURIComponent(days(1))}`)
+      .set(bearer(adminToken))
+      .expect(400);
+    expect(backwards.body.code).toBe('invalid_range');
 
     // Another account's window is never in the answer.
     const foreign = await api()

@@ -26,7 +26,11 @@ import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { writeCalendar, type IcsEvent, type IcsStatus } from '../../domain/integrations/ics.js';
 import type { FreezeWindow } from '../../domain/tickets/change-window.js';
-import { ChangeWindowsCoreModule, TicketGroupsRepository } from '../tickets/change-windows.module.js';
+import {
+  assertCalendarRange,
+  ChangeWindowsCoreModule,
+  TicketGroupsRepository,
+} from '../tickets/change-windows.module.js';
 
 /**
  * The change calendar as a subscribed ICS feed (INT-05; Integrations
@@ -225,7 +229,20 @@ export class CalendarFeedService {
     const now = new Date();
     const start = from ?? new Date(now.getTime() - FEED_PAST_DAYS * 86_400_000).toISOString();
     const end = to ?? new Date(now.getTime() + FEED_FUTURE_DAYS * 86_400_000).toISOString();
-    const rows = await this.uow.system(accountIds, (tx) => this.groups.feed(tx, accountIds, start, end));
+    assertCalendarRange(start, end, FEED_PAST_DAYS + FEED_FUTURE_DAYS);
+    // One transaction and two queries, whatever the number of windows: the
+    // member tickets used to be read one window at a time, and each of
+    // those opened a transaction of its own.
+    const { rows, tickets } = await this.uow.system(accountIds, async (tx) => {
+      const windows = await this.groups.feed(tx, accountIds, start, end);
+      return {
+        rows: windows,
+        tickets: await this.groups.ticketsOfMany(
+          tx,
+          windows.map((window) => window.id),
+        ),
+      };
+    });
     const events: IcsEvent[] = [];
     for (const row of rows) {
       if (!row.starts_at || !row.ends_at) continue;
@@ -234,11 +251,11 @@ export class CalendarFeedService {
       // `version` starts at 1 on an untouched record and rises on every
       // edit, so the sequence a subscriber sees is the number of edits.
       const sequence = Math.max(0, row.version - 1);
-      const tickets = await this.uow.system(accountIds, (tx) => this.groups.ticketsOf(tx, row.id));
-      const named = tickets
+      const named = (tickets.get(row.id) ?? [])
         .slice(0, TICKETS_IN_DESCRIPTION)
         .map((ticket) => `${ticket.key} ${ticket.short_description}`);
-      const more = tickets.length > named.length ? [`and ${tickets.length - named.length} more`] : [];
+      const total = (tickets.get(row.id) ?? []).length;
+      const more = total > named.length ? [`and ${total - named.length} more`] : [];
       events.push({
         uid: `change-window-${row.id}@xms`,
         start: new Date(row.starts_at),

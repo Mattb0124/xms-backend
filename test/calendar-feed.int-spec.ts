@@ -203,7 +203,12 @@ describe('the change calendar feed', () => {
     await api()
       .patch(`/v1/ticket-groups/${windowId}`)
       .set(bearer(adminToken))
-      .send({ version: record.body.version, starts_at: days(30), ends_at: days(31) })
+      .send({
+        version: record.body.version,
+        starts_at: days(30),
+        ends_at: days(31),
+        change_window_reason: 'The client moved the cutover weekend',
+      })
       .expect(200);
 
     const moved = await api().get(`${path}?token=${token}&account_id=${accountId}`).expect(200);

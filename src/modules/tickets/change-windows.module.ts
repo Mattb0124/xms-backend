@@ -80,6 +80,25 @@ export interface TicketGroupRow {
   version: number;
 }
 
+/** One member ticket of a group, as the calendar and the feed render it. */
+export interface TicketOfGroup {
+  id: string;
+  key: string;
+  type: string;
+  state: string;
+  priority: string;
+  short_description: string;
+}
+
+/**
+ * How wide a calendar read may be, and how many windows one answer carries.
+ * A year and a day covers any calendar a person looks at, and the cap on
+ * rows keeps a grant over many accounts from turning one request into every
+ * change window ever recorded.
+ */
+export const MAX_CALENDAR_DAYS = 366;
+export const MAX_CALENDAR_WINDOWS = 500;
+
 /** A window as the calendar feed reads it: the row plus the account it belongs to. */
 export interface ChangeWindowFeedRow extends TicketGroupRow {
   account_key: string;
@@ -123,7 +142,8 @@ export class TicketGroupsRepository extends RepositoryBase {
         where account_id = any ($1::uuid[]) and kind = 'change_window' and status <> 'cancelled'
           and starts_at is not null and ends_at is not null
           and starts_at < $3::timestamptz and ends_at > $2::timestamptz
-        order by starts_at`,
+        order by starts_at
+        limit ${MAX_CALENDAR_WINDOWS}`,
       [accountIds, from, to],
     );
   }
@@ -172,6 +192,29 @@ export class TicketGroupsRepository extends RepositoryBase {
          from acct.tickets where ticket_group_id = $1 order by number`,
       [groupId],
     );
+  }
+
+  /**
+   * The member tickets of many groups in one query, keyed by group. The
+   * calendar and the ICS feed each render a page of windows, and asking per
+   * window made the cost of a read linear in the number of windows on the
+   * page rather than constant.
+   */
+  async ticketsOfMany(tx: Tx, groupIds: string[]): Promise<Map<string, TicketOfGroup[]>> {
+    const byGroup = new Map<string, TicketOfGroup[]>();
+    if (groupIds.length === 0) return byGroup;
+    const rows = await this.many<TicketOfGroup & { ticket_group_id: string }>(
+      tx,
+      `select ticket_group_id, id, 'CS' || lpad(number::text, 7, '0') as key, type, state, priority, short_description
+         from acct.tickets where ticket_group_id = any ($1::uuid[]) order by number`,
+      [groupIds],
+    );
+    for (const groupId of groupIds) byGroup.set(groupId, []);
+    for (const row of rows) {
+      const { ticket_group_id: groupId, ...ticket } = row;
+      byGroup.get(groupId)?.push(ticket);
+    }
+    return byGroup;
   }
 
   /**
@@ -323,6 +366,17 @@ export class ChangeCalendarQueryDto {
   @IsISO8601({ strict: true }) from!: string;
 
   @IsISO8601({ strict: true }) to!: string;
+}
+
+/**
+ * A range no wider than a calendar is ever read at. The subscribed feed
+ * spans its own default window, which is wider than a screen's, so it names
+ * its own maximum rather than the screen's.
+ */
+export function assertCalendarRange(from: string, to: string, maxDays = MAX_CALENDAR_DAYS): void {
+  const span = Date.parse(to) - Date.parse(from);
+  if (!Number.isFinite(span) || span <= 0) throw new BadRequestException({ code: 'invalid_range' });
+  if (span > maxDays * 86_400_000) throw new BadRequestException({ code: 'range_too_wide', max_days: maxDays });
 }
 
 export class WindowAtQueryDto {
@@ -505,22 +559,24 @@ export class TicketGroupsService {
     const accountIds = (query.account_id?.length ? query.account_id : [...principal.accountIds]).filter((id) =>
       principal.accountIds.includes(id),
     );
+    assertCalendarRange(query.from, query.to);
     if (accountIds.length === 0) return Promise.resolve({ from: query.from, to: query.to, windows: [] });
     return this.uow.run(principal, async (tx) => {
       const rows = await this.groups.overlapping(tx, accountIds, query.from, query.to);
-      const windows = [];
-      for (const row of rows) {
-        windows.push({
-          id: row.id,
-          account_id: row.account_id,
-          name: row.name,
-          status: row.status,
-          starts_at: row.starts_at,
-          ends_at: row.ends_at,
-          freeze_windows: row.freeze_windows ?? [],
-          tickets: await this.groups.ticketsOf(tx, row.id),
-        });
-      }
+      const tickets = await this.groups.ticketsOfMany(
+        tx,
+        rows.map((row) => row.id),
+      );
+      const windows = rows.map((row) => ({
+        id: row.id,
+        account_id: row.account_id,
+        name: row.name,
+        status: row.status,
+        starts_at: row.starts_at,
+        ends_at: row.ends_at,
+        freeze_windows: row.freeze_windows ?? [],
+        tickets: tickets.get(row.id) ?? [],
+      }));
       return { from: query.from, to: query.to, windows };
     });
   }
