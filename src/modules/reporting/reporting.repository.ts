@@ -398,6 +398,27 @@ export class ReportingRepository extends RepositoryBase {
     );
   }
 
+  /**
+   * What each stream of `rpt.events_v` holds right now: how many rows the
+   * reader can see, and the oldest and newest instants among them. The
+   * grant clause is the one the audit search applies (`account_id is null
+   * or account_id = any (...)`), so the panel counts exactly the rows the
+   * same reader could open in the search and no more.
+   */
+  eventStreamSpans(
+    tx: Tx,
+    accountIds: readonly string[],
+  ): Promise<{ stream: string; n: number; oldest: string | null; newest: string | null }[]> {
+    return this.many(
+      tx,
+      `select stream, count(*)::int as n, min(occurred_at) as oldest, max(occurred_at) as newest
+         from rpt.events_v
+        where account_id is null or account_id = any ($1::uuid[])
+        group by 1 order by 1`,
+      [[...accountIds]],
+    );
+  }
+
   usageTiles(tx: Tx, accountIds: string[], days: number): Promise<{ metric: string; key: string; n: number }[]> {
     return this.many(
       tx,

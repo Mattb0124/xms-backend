@@ -38,6 +38,7 @@ import { packFormat, ReportingService } from './reporting.service.js';
 import { CreateSavedQueryDto, RunSavedQueryDto, UpdateSavedQueryDto } from './saved-queries.dto.js';
 import { SavedQueriesRepository } from './saved-queries.repository.js';
 import { SavedQueriesService } from './saved-queries.service.js';
+import { IntegrityCoreModule } from '../integrity/integrity.module.js';
 
 function decodeJson<T>(encoded: string | undefined, code: string): T | undefined {
   if (!encoded) return undefined;
@@ -78,6 +79,13 @@ export class ReportingController {
   @RequirePermission('audit:read')
   security(@CurrentPrincipal() principal: Principal, @Query('days') days?: string) {
     return this.reporting.securityDashboard(principal, clampDays(days, 7));
+  }
+
+  /** The integrity panel of the Security screen: the chain, the archive, the streams and the retention policy. */
+  @Get('dashboards/security/integrity')
+  @RequirePermission('audit:read')
+  integrity(@CurrentPrincipal() principal: Principal) {
+    return this.reporting.integrityPanel(principal);
   }
 
   @Get('dashboards/usage')
@@ -352,7 +360,9 @@ export class SnapshotJob {
 }
 
 @Module({
-  imports: [TicketsCoreModule],
+  // The integrity module owns the digest chain and the archive, which the
+  // Security screen reads beside the event streams.
+  imports: [TicketsCoreModule, IntegrityCoreModule],
   providers: [ReportingRepository, ReportingService, SnapshotJob, SavedQueriesRepository, SavedQueriesService],
   exports: [ReportingService, ReportingRepository, SnapshotJob, SavedQueriesService],
 })

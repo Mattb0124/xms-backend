@@ -444,6 +444,65 @@ describe('dashboards', () => {
     // A consultant reads usage on nothing: the route stands on analytics:read.
     await api().get('/v1/dashboards/usage').set(bearer(consultantToken)).expect(403);
   });
+
+  it('the integrity panel names the chain, the archive, the streams and the retention policy', async () => {
+    const { ArchiveService, DigestService, dayOf } = await import('../src/modules/integrity/integrity.module.js');
+    const digests = app.get(DigestService);
+    const archives = app.get(ArchiveService);
+    // A closed day: the chain attests days that have stopped receiving
+    // events, so the day under test is yesterday and its rows are seeded.
+    const day = dayOf(new Date(Date.now() - 86_400_000));
+    await withSuperuser(async (client) => {
+      for (const outcome of ['success', 'denied']) {
+        await client.query(
+          `insert into sys.security_events (occurred_at, event_type, outcome, actor_kind, actor_id)
+           values (now() - interval '1 day', 'auth.signin.failed', $1, 'anonymous', 'anonymous')`,
+          [outcome],
+        );
+      }
+    });
+    const written = await digests.write('security', day, 'test');
+    expect(written.row_count).toBeGreaterThanOrEqual(2);
+    await digests.verify('security', day, 'test');
+    const archived = await archives.export('security', day, 'test');
+
+    const panel = await api().get('/v1/dashboards/security/integrity').set(bearer(adminToken)).expect(200);
+    const chain = panel.body.chain.streams.find((row: { stream: string }) => row.stream === 'security');
+    expect(chain).toMatchObject({
+      last_day: day,
+      row_count: written.row_count,
+      digest: written.digest,
+      last_verification_matched: true,
+    });
+    expect(chain.last_verified_at).toBeTruthy();
+    expect(panel.body.chain.last_mismatch_at).toBeNull();
+
+    const archive = panel.body.archive.streams.find((row: { stream: string }) => row.stream === 'security');
+    expect(archive).toMatchObject({ last_day: day, days: 1, rows: archived.row_count });
+    expect(archive.bytes).toBeGreaterThan(0);
+
+    // The streams are counted through rpt.events_v under the same grant
+    // clause the audit search applies, so the panel counts what this reader
+    // could open in the search.
+    const streams = Object.fromEntries(
+      panel.body.streams.map((row: { stream: string }) => [row.stream, row]),
+    ) as Record<string, { n: number; oldest: string; newest: string }>;
+    expect(Object.keys(streams).sort()).toEqual(['audit', 'security', 'usage']);
+    expect(streams.security.n).toBeGreaterThan(0);
+    expect(new Date(streams.security.oldest).getTime()).toBeLessThanOrEqual(
+      new Date(streams.security.newest).getTime(),
+    );
+
+    // The retention line is the specification's policy, said to be a policy.
+    expect(panel.body.retention).toEqual({
+      security_months: 24,
+      usage_months: 13,
+      audit: 'life of the account plus contractual retention',
+      source: 'Audit & Analytics section 6',
+      detach_job_built: false,
+    });
+    await api().get('/v1/dashboards/security/integrity').set(bearer(consultantToken)).expect(403);
+  });
 });
 
 describe('exports', () => {

@@ -1551,6 +1551,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/dashboards/security/integrity",
+    "controller": "ReportingController",
+    "handler": "integrity",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/dashboards/usage",
     "controller": "ReportingController",
     "handler": "usage",

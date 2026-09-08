@@ -390,6 +390,15 @@ export interface ArchiveRow {
   created_at: string;
 }
 
+export interface ArchiveSummaryRow {
+  stream: Stream;
+  last_day: string | null;
+  last_run_at: string | null;
+  days: number;
+  rows: number;
+  bytes: number;
+}
+
 export function archiveKey(stream: Stream, day: string): string {
   const [year, month, date] = day.split('-');
   return `audit/${stream}/${year}/${month}/${date}/rows.ndjson.gz`;
@@ -463,6 +472,24 @@ export class ArchiveService {
       .query<ArchiveRow>(
         'select id, stream, day::text as day, object_key, row_count, byte_count, checksum, digest_id, created_at from sys.event_archives order by day desc, stream limit $1',
         [Math.min(Math.max(1, limit), 1000)],
+      )
+      .then((result) => result.rows);
+  }
+
+  /**
+   * What the archive holds, per stream, for the Security screen's integrity
+   * panel: the last day exported, when that export ran, and how many days,
+   * rows and bytes are in cold storage altogether. Every figure is an
+   * aggregate of `sys.event_archives`, the append-only row the export
+   * writes, so a stream with nothing archived is simply absent.
+   */
+  summary(): Promise<ArchiveSummaryRow[]> {
+    return this.pools
+      .get('app')
+      .query<ArchiveSummaryRow>(
+        `select stream, max(day)::text as last_day, max(created_at) as last_run_at, count(*)::int as days,
+                sum(row_count)::int as rows, sum(byte_count)::int as bytes
+           from sys.event_archives group by stream order by stream`,
       )
       .then((result) => result.rows);
   }

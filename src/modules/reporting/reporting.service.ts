@@ -23,6 +23,7 @@ import { ConfigService } from '../admin/config/config.service.js';
 import { translate, type ConditionSet } from '../tickets/conditions.js';
 import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
 import { TimeRepository } from '../time/time.repository.js';
+import { ArchiveService, DigestService, type VerificationRow } from '../integrity/integrity.module.js';
 import { translateEvents, type EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
 import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
@@ -50,6 +51,20 @@ export type PackFormat = 'pptx' | 'pdf';
 export function packFormat(value: string | undefined): PackFormat {
   return value === 'pdf' ? 'pdf' : 'pptx';
 }
+
+/**
+ * Hot retention in PostgreSQL as Audit & Analytics section 6 states it. No
+ * table holds this, so the panel reports it as the declared policy it is;
+ * `detach_job_built` is false because the partition detach job that section
+ * also names is not built, and a screen must not read a promise as a fact.
+ */
+const HOT_RETENTION = {
+  security_months: 24,
+  usage_months: 13,
+  audit: 'life of the account plus contractual retention',
+  source: 'Audit & Analytics section 6',
+  detach_job_built: false,
+} as const;
 
 const PORTAL_MEASURES = [
   'open_tickets',
@@ -88,6 +103,8 @@ export class ReportingService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly security: SecurityEventsService,
+    private readonly digests: DigestService,
+    private readonly archives: ArchiveService,
     @Inject(OBJECT_STORE) private readonly store: ObjectStore,
   ) {}
 
@@ -459,6 +476,59 @@ export class ReportingService {
         });
       grouped.per_account = await this.reporting.usagePerAccount(tx, accountIds, days);
       return grouped;
+    });
+  }
+
+  /**
+   * The integrity panel of the Security screen (Audit & Analytics 7.1:
+   * "integrity status (last digest, last verification)"; section 6 for the
+   * archive and the retention policy). Every figure names its source and
+   * nothing is inferred:
+   *
+   * - `chain` from `sys.event_digests` and `sys.digest_verifications`
+   *   through `DigestService.status()`: the last digested day per stream
+   *   with its row count and hash, the last verification of that stream
+   *   with its verdict, and the last mismatch across all of them.
+   * - `archive` from `sys.event_archives` through `ArchiveService.summary()`:
+   *   the last day exported per stream, when the export ran, and the days,
+   *   rows and bytes in cold storage.
+   * - `streams` from `rpt.events_v` under the same grant clause the audit
+   *   search applies: how many rows this reader can see per stream and the
+   *   oldest and newest instants among them.
+   * - `retention` is the policy of Audit & Analytics section 6, declared
+   *   here as the constant `HOT_RETENTION` because no table holds it. It is
+   *   what the platform promises, not what it has done: the partition
+   *   detach job named in that section is not built, which
+   *   `detach_job_built` says out loud so the screen cannot present the
+   *   promise as a measurement.
+   */
+  integrityPanel(principal: Principal) {
+    return this.uow.run(principal, async (tx) => {
+      const status = await this.digests.status();
+      const verificationOf = (stream: string): VerificationRow | undefined =>
+        status.verifications.find((row) => row.stream === stream);
+      return {
+        chain: {
+          streams: status.digests.map((digest) => {
+            const verification = verificationOf(digest.stream);
+            return {
+              stream: digest.stream,
+              last_day: digest.day,
+              row_count: digest.row_count,
+              digest: digest.digest,
+              written_at: digest.created_at,
+              last_verified_at: verification?.verified_at ?? null,
+              last_verification_matched: verification ? verification.matched : null,
+            };
+          }),
+          last_digest_at: status.last_digest_at,
+          last_verification_at: status.last_verification_at,
+          last_mismatch_at: status.last_mismatch_at,
+        },
+        archive: { streams: await this.archives.summary() },
+        streams: await this.reporting.eventStreamSpans(tx, principal.accountIds),
+        retention: HOT_RETENTION,
+      };
     });
   }
 
