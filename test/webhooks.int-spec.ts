@@ -138,10 +138,13 @@ describe('API clients', () => {
       .expect(201);
     expect(created.body.key).toMatch(/^xms_live_/);
     expect(created.body).toMatchObject({ name: 'Integrator', status: 'active', account_ids: [accountId] });
+    // The grants come back as persisted, with the key and name the screen shows.
+    expect(created.body.accounts).toEqual([{ id: accountId, key: 'BRK', name: 'Brookfield' }]);
     apiKey = created.body.key;
     clientId = created.body.id;
     const listed = await api().get('/v1/admin/api-clients').set(bearer(adminToken)).expect(200);
     expect(listed.body[0]).toMatchObject({ id: clientId, key_prefix: apiKey.slice(0, 16) });
+    expect(listed.body[0].accounts).toEqual([{ id: accountId, key: 'BRK', name: 'Brookfield' }]);
     expect(listed.body[0].key).toBeUndefined();
     const tickets = await api().get('/v1/tickets').set(bearer(apiKey)).expect(200);
     expect(tickets.body).toBeDefined();
@@ -289,7 +292,7 @@ describe('webhooks (INT-05)', () => {
     expect(rotated.body.secret).not.toBe(secret);
     await api().delete(`/v1/webhooks/${subscriptionId}`).set(bearer(apiKey)).expect(200);
     await api().delete(`/v1/webhooks/${subscriptionId}`).set(bearer(apiKey)).expect(404);
-    await api().post(`/v1/admin/api-clients/${clientId}/revoke`).set(bearer(adminToken)).expect(201);
+    await api().post(`/v1/admin/api-clients/${clientId}/revoke`).set(bearer(adminToken)).expect(200);
     await api().get('/v1/webhooks').set(bearer(apiKey)).expect(401);
     const again = await api().post(`/v1/admin/api-clients/${clientId}/revoke`).set(bearer(adminToken)).expect(409);
     expect(again.body.code).toBe('already_revoked');
@@ -312,7 +315,7 @@ describe('webhooks (INT-05)', () => {
         event_types: ['ticket.created'],
       })
       .expect(201);
-    await api().post(`/v1/admin/api-clients/${secondId}/revoke`).set(bearer(adminToken)).expect(201);
+    await api().post(`/v1/admin/api-clients/${secondId}/revoke`).set(bearer(adminToken)).expect(200);
 
     // The pause is a write to an account-scoped table: under an unbound
     // connection it matches no row and silently does nothing.

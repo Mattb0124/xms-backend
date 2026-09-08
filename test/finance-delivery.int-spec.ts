@@ -286,10 +286,18 @@ describe('finance delivery (INT-02)', () => {
   });
 
   it('an object-store destination writes the file and the manifest under the prefix', async () => {
+    const stale = await api()
+      .put(`/v1/finance/destinations/${accountId}`)
+      .set(bearer(adminToken))
+      // A destination already exists, so the version is required and checked.
+      .send({ kind: 'object_store', object_prefix: 'finance/thg', format: 'csv' })
+      .expect(409);
+    expect(stale.body).toMatchObject({ code: 'stale_version', entity: 'finance_destination' });
+    const current = await api().get(`/v1/finance/destinations/${accountId}`).set(bearer(adminToken)).expect(200);
     const set = await api()
       .put(`/v1/finance/destinations/${accountId}`)
       .set(bearer(adminToken))
-      .send({ kind: 'object_store', object_prefix: 'finance/thg', format: 'csv' })
+      .send({ version: current.body.version, kind: 'object_store', object_prefix: 'finance/thg', format: 'csv' })
       .expect(200);
     expect(set.body.secret).toBeUndefined();
     const delivered = await api()
@@ -306,7 +314,12 @@ describe('finance delivery (INT-02)', () => {
     const disabled = await api()
       .put(`/v1/finance/destinations/${accountId}`)
       .set(bearer(adminToken))
-      .send({ kind: 'object_store', object_prefix: 'finance/thg', enabled: false })
+      .send({
+        version: set.body.version,
+        kind: 'object_store',
+        object_prefix: 'finance/thg',
+        enabled: false,
+      })
       .expect(200);
     expect(disabled.body.enabled).toBe(false);
     const refused = await api()

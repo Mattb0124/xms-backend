@@ -96,59 +96,71 @@ export interface Recipient {
 export interface DeliveryOutcome {
   kind: Recipient['kind'];
   to: string;
+  /** Who the recipient is, so the run detail names a person rather than an id. */
+  name?: string;
   outcome: 'notified' | 'emailed' | 'skipped';
   reason?: string;
+}
+
+/** `run_time` is a time column; every route speaks HH:MM, which is what the PATCH accepts. */
+export function hhmm<T extends { run_time: string }>(row: T): T {
+  return { ...row, run_time: String(row.run_time).slice(0, 5) };
 }
 
 // Repository -------------------------------------------------------------------
 
 @Injectable()
 export class SchedulesRepository extends RepositoryBase {
-  list(tx: Tx, accountId?: string): Promise<ScheduleRow[]> {
-    return this.many(
+  async list(tx: Tx, accountId?: string): Promise<ScheduleRow[]> {
+    const rows = await this.many<ScheduleRow>(
       tx,
       `select *, run_time::text as run_time from acct.report_schedules where ($1::uuid is null or account_id = $1) order by account_id, name`,
       [accountId ?? null],
     );
+    return rows.map(hhmm);
   }
 
-  byId(tx: Tx, id: string): Promise<ScheduleRow> {
-    return this.one(
-      tx,
-      'report_schedule',
-      'select *, run_time::text as run_time from acct.report_schedules where id = $1',
-      [id],
+  async byId(tx: Tx, id: string): Promise<ScheduleRow> {
+    return hhmm(
+      await this.one<ScheduleRow>(
+        tx,
+        'report_schedule',
+        'select *, run_time::text as run_time from acct.report_schedules where id = $1',
+        [id],
+      ),
     );
   }
 
   insert(tx: Tx, values: Record<string, unknown>): Promise<ScheduleRow> {
     const keys = Object.keys(values);
-    return this.one(
+    return this.one<ScheduleRow>(
       tx,
       'report_schedule',
       `insert into acct.report_schedules (${keys.map(quoteIdent).join(', ')})
        values (${keys.map((_, index) => `$${index + 1}`).join(', ')}) returning *, run_time::text as run_time`,
       keys.map((key) => values[key]),
-    );
+    ).then((row) => hhmm(row));
   }
 
   update(tx: Tx, id: string, version: number, assignments: Record<string, unknown>): Promise<ScheduleRow> {
     const values = { ...assignments };
     if ('distribution' in values) values.distribution = JSON.stringify(values.distribution);
     return this.updateVersioned<ScheduleRow>(tx, 'report_schedule', 'acct.report_schedules', id, version, values).then(
-      (row) => ({ ...row, run_time: String(row.run_time).slice(0, 5) }),
+      (row) => hhmm(row),
     );
   }
 
   /** Claims due, enabled schedules: SKIP LOCKED so two workers never run the same one. */
-  claimDue(tx: Tx, now: Date, batch: number): Promise<ScheduleRow[]> {
-    return this.many(
-      tx,
-      `select *, run_time::text as run_time from acct.report_schedules
+  async claimDue(tx: Tx, now: Date, batch: number): Promise<ScheduleRow[]> {
+    return (
+      await this.many<ScheduleRow>(
+        tx,
+        `select *, run_time::text as run_time from acct.report_schedules
         where enabled and next_run_at is not null and next_run_at <= $1
         order by next_run_at limit $2 for update skip locked`,
-      [now, batch],
-    );
+        [now, batch],
+      )
+    ).map(hhmm);
   }
 
   async advance(tx: Tx, id: string, nextRunAt: Date, lastRunId: string | null): Promise<void> {
@@ -398,6 +410,15 @@ export class SchedulesService {
           outcomes.push({ kind: recipient.kind, to: recipient.email ?? '', outcome: 'skipped', reason: 'no_user_id' });
           continue;
         }
+        const named =
+          recipient.name ??
+          (
+            await tx.query<{ name: string }>(
+              `select nullif(trim(coalesce(first_name, '') || ' ' || coalesce(last_name, '')), '') as name from op.users where id = $1`,
+              [recipient.id],
+            )
+          ).rows[0]?.name ??
+          recipient.email;
         await this.notifications.upsert(tx, {
           accountId: schedule.account_id,
           recipientId: recipient.id,
@@ -409,7 +430,7 @@ export class SchedulesService {
           link: `/reports/packs/${built.pack_id}`,
           collapseKey: `report:${built.run_id}`,
         });
-        outcomes.push({ kind: recipient.kind, to: recipient.id, outcome: 'notified' });
+        outcomes.push({ kind: recipient.kind, to: recipient.id, name: named, outcome: 'notified' });
         continue;
       }
       if (!recipient.email) {
@@ -432,7 +453,7 @@ export class SchedulesService {
         });
         const raw = await composer.compile().build();
         await this.transport.send({ from: identity.address, to: [recipient.email], raw, messageId });
-        outcomes.push({ kind: recipient.kind, to: recipient.email, outcome: 'emailed' });
+        outcomes.push({ kind: recipient.kind, to: recipient.email, name: recipient.name, outcome: 'emailed' });
       } catch (error) {
         this.logger.warn(`report delivery to ${recipient.email} failed: ${(error as Error).message}`);
         outcomes.push({ kind: recipient.kind, to: recipient.email, outcome: 'skipped', reason: 'send_failed' });

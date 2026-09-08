@@ -201,7 +201,7 @@ describe('CSAT on ticket close (CP-07)', () => {
       .post(`/v1/portal/surveys/${surveyId}/answer`)
       .set(bearer(portalToken))
       .send({ score: 2, comment: 'Took a while to hear back.' })
-      .expect(201);
+      .expect(200);
     expect(answered.body).toMatchObject({ survey_id: surveyId, score: 2 });
     const again = await api()
       .post(`/v1/portal/surveys/${surveyId}/answer`)
@@ -230,15 +230,17 @@ describe('CSAT on ticket close (CP-07)', () => {
     // The token is the sole credential for the public answer route. In the
     // query string it lands in browser history, proxy and load balancer
     // logs, and is forwarded verbatim with the mail (finding 9).
-    const prompt = mail.sent.at(-1);
-    expect(prompt).toBeDefined();
-    const body = prompt!.raw
-      .toString('utf8')
-      .replace(/=\r?\n/g, '')
-      .replace(/=3D/gi, '=');
-    const link = /https?:\/\/\S*\/portal\/surveys\/[0-9a-f-]+#token=[A-Za-z0-9_-]+/.exec(body);
-    expect(link).not.toBeNull();
-    expect(body).not.toMatch(/\/portal\/surveys\/[0-9a-f-]+\?token=/);
+    // Quoted-printable spells "=" as "=3D" and breaks long lines with "=\r\n".
+    const bodies = mail.sent.map((message) =>
+      message.raw
+        .toString('utf8')
+        .replace(/=\r?\n/g, '')
+        .replace(/=3D/gi, '='),
+    );
+    expect(bodies.length).toBeGreaterThan(0);
+    const links = bodies.filter((body) => /\/portal\/surveys\/[0-9a-f-]+#token=[A-Za-z0-9_-]+/.test(body));
+    expect(links.length, `no fragment link in ${bodies.length} messages`).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toMatch(/\/portal\/surveys\/[0-9a-f-]+\?token=/);
   });
 
   it('the email link answers with the one-time token only, and the operator reads the scores', async () => {
@@ -283,7 +285,7 @@ describe('CSAT on ticket close (CP-07)', () => {
     const linked = await api()
       .post(`/v1/csat/${survey.id}/answer`)
       .send({ token, score: 5, comment: 'Quick and clear.' })
-      .expect(201);
+      .expect(200);
     expect(linked.body.score).toBe(5);
     await api().post(`/v1/csat/${survey.id}/answer`).send({ token, score: 4 }).expect(409);
 

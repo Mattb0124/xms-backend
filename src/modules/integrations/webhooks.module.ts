@@ -137,11 +137,16 @@ const API_SCOPES: readonly Permission[] = [
 
 @Injectable()
 export class WebhooksRepository extends RepositoryBase {
-  clients(tx: Tx): Promise<(ApiClientRow & { account_ids: string[] })[]> {
+  /** The screen names the accounts a key reaches, so the list carries keys and names beside the ids. */
+  clients(tx: Tx): Promise<(ApiClientRow & { account_ids: string[]; accounts: GrantedAccount[] })[]> {
     return this.many(
       tx,
       `select c.id, c.name, c.owner_user_id, c.service_user_id, c.key_prefix, c.scopes, c.expires_at, c.last_used_at, c.status, c.created_at, c.version,
-              coalesce((select array_agg(g.account_id) from op.api_client_grants g where g.api_client_id = c.id), '{}') as account_ids
+              coalesce((select array_agg(g.account_id order by a.key) from op.api_client_grants g
+                          join op.accounts a on a.id = g.account_id where g.api_client_id = c.id), '{}') as account_ids,
+              coalesce((select json_agg(json_build_object('id', a.id, 'key', a.key, 'name', a.name) order by a.key)
+                          from op.api_client_grants g join op.accounts a on a.id = g.account_id
+                         where g.api_client_id = c.id), '[]'::json) as accounts
          from op.api_clients c order by c.created_at desc`,
     );
   }
@@ -202,6 +207,16 @@ export class WebhooksRepository extends RepositoryBase {
       [clientId],
     );
     return result.rows.map((row) => row.account_id);
+  }
+
+  /** The same grants with the key and name the screen shows. */
+  async grantedAccountRows(tx: Tx, clientId: string): Promise<GrantedAccount[]> {
+    const result = await tx.query<GrantedAccount>(
+      `select a.id, a.key, a.name from op.api_client_grants g join op.accounts a on a.id = g.account_id
+        where g.api_client_id = $1 order by a.key`,
+      [clientId],
+    );
+    return result.rows;
   }
 
   async revokeClient(tx: Tx, id: string): Promise<void> {
@@ -351,6 +366,13 @@ export class WebhooksRepository extends RepositoryBase {
   }
 }
 
+/** An account a key reaches, as the admin screen shows it. */
+export interface GrantedAccount {
+  id: string;
+  key: string;
+  name: string;
+}
+
 // DTOs -----------------------------------------------------------------------------
 
 export class CreateApiClientDto {
@@ -437,6 +459,9 @@ export class ApiClientsService {
         expiresAt: dto.expires_at ?? null,
       });
       await this.repo.grant(tx, client.id, [...new Set(dto.account_ids)]);
+      // Read back what was persisted rather than echoing the request: the
+      // screen shows the grants the key actually carries.
+      const granted = await this.repo.grantedAccountRows(tx, client.id);
       await this.audit.operator(tx, actorOf(principal), ctx, [
         {
           entityKind: 'api_client',
@@ -460,7 +485,7 @@ export class ApiClientsService {
         },
         tx,
       );
-      return { ...client, account_ids: dto.account_ids, key };
+      return { ...client, account_ids: granted.map((account) => account.id), accounts: granted, key };
     });
   }
 
@@ -823,7 +848,9 @@ export class ApiClientsController {
     return this.clients.create(principal, ctx, dto);
   }
 
+  // Revocation changes a client; it creates nothing.
   @Post(':id/revoke')
+  @HttpCode(200)
   revoke(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,

@@ -17,7 +17,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, MaxLength, Min } from 'class-validator';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import { actorOf, AuditService, SYSTEM_ACTOR, type AuditActor } from '../../common/audit/audit.service.js';
 import type { Principal } from '../../common/auth/principal.js';
@@ -214,6 +214,8 @@ export class FinanceRepository extends RepositoryBase {
 // DTOs ----------------------------------------------------------------------------------
 
 export class SetDestinationDto {
+  /** The version being replaced; required once a destination exists. */
+  @IsOptional() @IsInt() @Min(1) version?: number;
   @IsIn(['https', 'object_store']) kind!: 'https' | 'object_store';
   @IsOptional() @IsString() @MaxLength(2000) endpoint_url?: string;
   @IsOptional() @Matches(/^[a-z0-9][a-z0-9/_.-]{0,200}$/) object_prefix?: string;
@@ -274,6 +276,10 @@ export class FinanceService {
     } else if (!dto.object_prefix) throw new BadRequestException({ code: 'prefix_required' });
     return this.uow.run(principal, async (tx) => {
       const before = await this.repo.destination(tx, accountId);
+      // Optimistic concurrency, as everywhere else a screen edits a record:
+      // two administrators must not silently overwrite one another.
+      if (before && dto.version !== before.version)
+        throw new ConflictException({ code: 'stale_version', entity: 'finance_destination', version: before.version });
       let secret: string | null = null;
       let sealed: string | null = null;
       let kid: string | null = null;
@@ -325,7 +331,10 @@ export class FinanceService {
       if (period.status !== 'locked' && period.status !== 'exported')
         throw new ConflictException({ code: 'period_not_locked', status: period.status });
       const destination = await this.repo.destination(tx, period.account_id);
-      if (!destination || !destination.enabled) throw new ConflictException({ code: 'no_destination' });
+      // The two reasons read differently on the screen: nothing configured
+      // at all, or a destination deliberately switched off.
+      if (!destination || !destination.enabled)
+        throw new ConflictException({ code: 'no_destination', reason: destination ? 'disabled' : 'missing' });
       return this.deliver(tx, period.id, destination, actorOf(principal), principal.userId, ctx.requestId);
     });
   }

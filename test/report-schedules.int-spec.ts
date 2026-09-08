@@ -121,11 +121,13 @@ describe('report schedules (DR-05)', () => {
       .expect(201);
     scheduleId = created.body.id;
     scheduleVersion = created.body.version;
-    expect(created.body).toMatchObject({ period_kind: 'previous_week', enabled: true, run_time: '06:00:00' });
+    // Every route speaks the HH:MM the PATCH accepts, create and list included.
+    expect(created.body).toMatchObject({ period_kind: 'previous_week', enabled: true, run_time: '06:00' });
     expect(new Date(created.body.next_run_at).getTime()).toBeGreaterThan(Date.now());
     expect(new Date(created.body.next_run_at).getUTCDay()).toBe(1);
     const listed = await api().get(`/v1/reporting/schedules?account=${accountId}`).set(bearer(adminToken)).expect(200);
     expect(listed.body.map((row: { id: string }) => row.id)).toEqual([scheduleId]);
+    expect(listed.body[0].run_time).toBe('06:00');
   });
 
   it('run now builds the pack and delivers it: a notification, a skip without a sender, then an email once the identity exists', async () => {
@@ -135,8 +137,9 @@ describe('report schedules (DR-05)', () => {
       .send({})
       .expect(201);
     expect(first.body.status).toBe('sent');
+    // An internal recipient is named, so the run detail reads as a person.
     expect(first.body.delivery).toEqual([
-      { kind: 'internal', to: adminId, outcome: 'notified' },
+      { kind: 'internal', to: adminId, name: 'Administrator', outcome: 'notified' },
       { kind: 'contact', to: 'pat@client.test', outcome: 'skipped', reason: 'no_sender_identity' },
       { kind: 'portal_user', to: '', outcome: 'skipped', reason: 'no_email' },
     ]);
@@ -158,7 +161,12 @@ describe('report schedules (DR-05)', () => {
       .send({ period_start: '2026-08-24', period_end: '2026-08-30' })
       .expect(201);
     expect(second.body.period).toEqual({ start: '2026-08-24', end: '2026-08-30' });
-    expect(second.body.delivery[1]).toEqual({ kind: 'contact', to: 'pat@client.test', outcome: 'emailed' });
+    expect(second.body.delivery[1]).toEqual({
+      kind: 'contact',
+      to: 'pat@client.test',
+      name: 'Pat',
+      outcome: 'emailed',
+    });
     const runs = await api()
       .get(`/v1/reporting/runs?account=${accountId}&schedule=${scheduleId}`)
       .set(bearer(adminToken))

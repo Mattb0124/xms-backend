@@ -5,6 +5,7 @@ import {
   Controller,
   Get,
   Inject,
+  HttpCode,
   Injectable,
   Logger,
   Module,
@@ -553,7 +554,9 @@ export class PortalSurveysController {
     return this.csat.mine(principal);
   }
 
+  // Answering records a response against a survey that already exists.
   @Post(':id/answer')
+  @HttpCode(200)
   @Authenticated()
   answer(
     @CurrentPrincipal() principal: Principal,
@@ -572,6 +575,7 @@ export class CsatLinkController {
   constructor(private readonly csat: CsatService) {}
 
   @Post(':id/answer')
+  @HttpCode(200)
   @Public('csat one-time link; the token is the credential')
   answer(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TokenAnswerDto) {
     if (!dto.token) throw new BadRequestException({ code: 'token_required' });
