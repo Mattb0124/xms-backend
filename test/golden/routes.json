@@ -1991,6 +1991,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/reporting/runs/:id",
+    "controller": "SchedulesController",
+    "handler": "run",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/reporting/runs/:id/approve",
+    "controller": "SchedulesController",
+    "handler": "approve",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/reporting/runs/:id/cancel",
+    "controller": "SchedulesController",
+    "handler": "cancelRun",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/reporting/schedules",
     "controller": "SchedulesController",
     "handler": "list",
