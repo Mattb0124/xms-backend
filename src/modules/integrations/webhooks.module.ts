@@ -104,6 +104,8 @@ export interface SubscriptionRow {
   secret_kid: string;
   status: 'active' | 'paused' | 'deleted';
   paused_reason: string | null;
+  /** What a person typed when they paused it by hand; the worker's pauses have none. */
+  paused_note: string | null;
   consecutive_failures: number;
   created_at: string;
   updated_at: string;
@@ -272,11 +274,26 @@ export class WebhooksRepository extends RepositoryBase {
     );
   }
 
-  async setStatus(tx: Tx, id: string, status: SubscriptionRow['status'], reason: string | null): Promise<void> {
+  async setStatus(
+    tx: Tx,
+    id: string,
+    status: SubscriptionRow['status'],
+    reason: string | null,
+    note: string | null = null,
+  ): Promise<void> {
     await tx.query(
-      'update acct.webhook_subscriptions set status = $2, paused_reason = $3, version = version + 1 where id = $1',
-      [id, status, reason],
+      'update acct.webhook_subscriptions set status = $2, paused_reason = $3, paused_note = $4, version = version + 1 where id = $1',
+      [id, status, reason, note],
     );
+  }
+
+  /**
+   * A resumed subscription counts its failures again from zero. Without
+   * this the automatic pause would fire on the first failure after a
+   * resume, because the counter that paused it is still at the threshold.
+   */
+  async resetFailures(tx: Tx, id: string): Promise<void> {
+    await tx.query('update acct.webhook_subscriptions set consecutive_failures = 0 where id = $1', [id]);
   }
 
   async recordOutcome(tx: Tx, id: string, delivered: boolean): Promise<number> {
@@ -369,6 +386,74 @@ export class WebhooksRepository extends RepositoryBase {
       'select * from acct.webhook_deliveries where subscription_id = $1 order by created_at desc limit $2',
       [subscriptionId, limit],
     );
+  }
+
+  /**
+   * Every live subscription of one account, whichever client registered
+   * it, with that client named: the console administers an account, not a
+   * credential, so it lists them together.
+   */
+  subscriptionsOfAccount(
+    tx: Tx,
+    accountId: string,
+  ): Promise<(SubscriptionRow & { client_name: string; client_status: string })[]> {
+    return this.many(
+      tx,
+      `select s.*, c.name as client_name, c.status as client_status
+         from acct.webhook_subscriptions s join op.api_clients c on c.id = s.api_client_id
+        where s.account_id = $1 and s.status <> 'deleted' order by s.created_at`,
+      [accountId],
+    );
+  }
+
+  /** Whether a client is live and granted this account: what a console registration may name. */
+  async clientGranted(tx: Tx, clientId: string, accountId: string): Promise<boolean> {
+    const result = await tx.query(
+      `select 1 from op.api_clients c join op.api_client_grants g on g.api_client_id = c.id
+        where c.id = $1 and g.account_id = $2 and c.status = 'active' limit 1`,
+      [clientId, accountId],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Dead letters of an account, newest first, each with the endpoint that
+   * refused it and when the event first failed, which is what the dead
+   * letters tab shows (Integrations functional 5.2).
+   */
+  deadLetters(
+    tx: Tx,
+    accountId: string,
+    subscriptionId: string | null,
+    limit = 100,
+  ): Promise<(DeliveryRow & { endpoint_url: string; first_failed_at: string })[]> {
+    return this.many(
+      tx,
+      `select d.*, s.endpoint_url,
+              (select min(f.created_at) from acct.webhook_deliveries f
+                where f.subscription_id = d.subscription_id and f.outbox_id = d.outbox_id) as first_failed_at
+         from acct.webhook_deliveries d join acct.webhook_subscriptions s on s.id = d.subscription_id
+        where d.account_id = $1 and d.status = 'dead_lettered' and ($2::uuid is null or d.subscription_id = $2)
+        order by d.created_at desc limit $3`,
+      [accountId, subscriptionId, limit],
+    );
+  }
+
+  delivery(tx: Tx, id: string): Promise<DeliveryRow> {
+    return this.one(tx, 'webhook_delivery', 'select * from acct.webhook_deliveries where id = $1', [id]);
+  }
+
+  /**
+   * Claims a dead letter for replay. The update is the claim: two people
+   * pressing Replay on the same row send the event once, because the second
+   * update matches nothing.
+   */
+  async claimDeadLetter(tx: Tx, id: string): Promise<boolean> {
+    const result = await tx.query(
+      `update acct.webhook_deliveries set status = 'replayed' where id = $1 and status = 'dead_lettered'`,
+      [id],
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 }
 
@@ -537,12 +622,6 @@ export class WebhooksService {
     return principal.sessionId;
   }
 
-  private sealingKey(): string {
-    const key = loadEnv().WEBHOOK_SECRETS_KEY;
-    if (!key) throw new ServiceUnavailableException({ code: 'webhooks_unconfigured' });
-    return key;
-  }
-
   list(principal: Principal) {
     const clientId = this.clientId(principal);
     return this.uow.run(principal, async (tx) =>
@@ -557,7 +636,7 @@ export class WebhooksService {
       throw new NotFoundException({ code: 'not_found', entity: 'account' });
     const problem = endpointProblem(dto.endpoint_url, loadEnv().WEBHOOK_ALLOW_PRIVATE === 'true');
     if (problem) throw new BadRequestException({ code: 'invalid_endpoint', problem });
-    const key = this.sealingKey();
+    const key = sealingKey();
     return this.uow.run(principal, async (tx) => {
       const { secret, kid } = newSecret();
       let row: SubscriptionRow;
@@ -588,7 +667,7 @@ export class WebhooksService {
 
   rotate(principal: Principal, ctx: RequestContext, id: string) {
     const clientId = this.clientId(principal);
-    const key = this.sealingKey();
+    const key = sealingKey();
     return this.uow.run(principal, async (tx) => {
       const row = await this.repo.subscription(tx, id);
       if (row.api_client_id !== clientId || row.status === 'deleted')
@@ -638,18 +717,50 @@ export class WebhooksService {
   }
 }
 
+/**
+ * The signing key of the deployment. Both the client routes and the console
+ * routes seal with it, and neither may fall back to storing a secret in
+ * clear, so an unconfigured deployment refuses the registration outright.
+ */
+function sealingKey(): string {
+  const key = loadEnv().WEBHOOK_SECRETS_KEY;
+  if (!key) throw new ServiceUnavailableException({ code: 'webhooks_unconfigured' });
+  return key;
+}
+
 function publicSubscription(row: SubscriptionRow) {
   return {
     id: row.id,
     account_id: row.account_id,
+    api_client_id: row.api_client_id,
     endpoint_url: row.endpoint_url,
     event_types: row.event_types,
     secret_kid: row.secret_kid,
     status: row.status,
+    // Why it is paused, in the worker's vocabulary and in the operator's
+    // own words: a screen reads the first and shows the second.
     paused_reason: row.paused_reason,
+    paused_note: row.paused_note,
     consecutive_failures: row.consecutive_failures,
     created_at: row.created_at,
     version: row.version,
+  };
+}
+
+/** One delivery attempt as a screen reads it: the outcome and what the endpoint answered. */
+function publicDelivery(row: DeliveryRow) {
+  return {
+    id: row.id,
+    subscription_id: row.subscription_id,
+    outbox_id: row.outbox_id,
+    event_type: row.event_type,
+    attempt: row.attempt,
+    status: row.status,
+    response_status: row.response_status,
+    duration_ms: row.duration_ms,
+    error: row.error,
+    next_attempt_at: row.next_attempt_at,
+    created_at: row.created_at,
   };
 }
 
@@ -674,6 +785,18 @@ export class WebhookDeliveryService {
 
   retryJob(intervalMs = 60_000): Job {
     return { name: 'webhook.retry', intervalMs, run: () => this.retryDue() };
+  }
+
+  /**
+   * One more delivery of an event that dead-lettered, at an operator's
+   * request (Integrations functional 5.2: Replay from the console; success
+   * criterion "a replay delivers it once"). It is a fresh attempt on the
+   * same envelope, signed, recorded and judged exactly as the retry ladder
+   * judges its own, so a replay that fails dead-letters again rather than
+   * disappearing.
+   */
+  replay(tx: Tx, subscription: SubscriptionRow, dead: DeliveryRow): Promise<DeliveryRow> {
+    return this.attempt(tx, subscription, dead.payload, dead.attempt + 1);
   }
 
   /** Outbox handler: one first attempt per active subscription of the account for the event's public type. */
@@ -731,7 +854,7 @@ export class WebhookDeliveryService {
     subscription: SubscriptionRow,
     envelope: WebhookEnvelope,
     attempt: number,
-  ): Promise<void> {
+  ): Promise<DeliveryRow> {
     const env = loadEnv();
     const body = canonicalBody(envelope);
     const timestamp = String(Math.floor(Date.now() / 1000));
@@ -778,7 +901,7 @@ export class WebhookDeliveryService {
     const delivered = error === null;
     const final = !delivered && attempt >= MAX_ATTEMPTS;
     const next = delivered || final ? null : nextAttemptAt(attempt, new Date());
-    await this.repo.insertDelivery(tx, {
+    const recorded = await this.repo.insertDelivery(tx, {
       accountId: subscription.account_id,
       subscriptionId: subscription.id,
       outboxId: envelope.id,
@@ -806,6 +929,7 @@ export class WebhookDeliveryService {
         this.logger.warn(`webhook ${subscription.id} paused after ${failures} dead-lettered events`);
       }
     }
+    return recorded;
   }
 
   /** Retries due deliveries; each retry is a new attempt row and the retried row becomes replayed. */
@@ -924,20 +1048,370 @@ export class WebhooksController {
   }
 }
 
+// Webhook administration from the console -----------------------------------------------------
+
+export class CreateAccountSubscriptionDto {
+  /** Subscriptions belong to an API client; the console says which one this endpoint is for. */
+  @IsUUID('4') api_client_id!: string;
+  @IsString() @MaxLength(2000) endpoint_url!: string;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
+  @IsIn(PUBLIC_EVENT_TYPES, { each: true })
+  event_types!: PublicEventType[];
+}
+
+/**
+ * Why a person paused an endpoint. It is required, because a paused
+ * integration with no stated reason is the thing nobody can safely resume.
+ * The validator sees it as optional on purpose, so a missing, empty or
+ * blank reason is one refusal in one shape rather than three.
+ */
+export class PauseSubscriptionDto {
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+}
+
+/**
+ * Webhook administration for signed-in people (Integrations functional 5.2
+ * and 5.4). The routes above are an integrator's view of its own
+ * subscriptions through its own key; these are the console's view of one
+ * account: every endpoint registered against it whichever client owns it,
+ * the pause and resume an operator applies by hand, the delivery health,
+ * the dead letters and the replay.
+ *
+ * The two are deliberately separate. A session has no client behind it and
+ * so could never have used the client routes; a credential is not a person
+ * and must not reach an account's other endpoints, so it is refused here
+ * in the same shape and for the same reason.
+ */
+@Injectable()
+export class WebhookAdminService {
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly repo: WebhooksRepository,
+    private readonly dispatcher: WebhookDeliveryService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /** A person, on an account they are granted; anything else learns nothing. */
+  private assertAccount(principal: Principal, accountId: string): void {
+    if (principal.kind === 'api_client' || !principal.accountIds.includes(accountId))
+      throw new NotFoundException({ code: 'not_found', entity: 'account' });
+  }
+
+  /** One live subscription of this account, or nothing. */
+  private async live(tx: Tx, accountId: string, id: string): Promise<SubscriptionRow> {
+    const row = await this.repo.subscription(tx, id);
+    if (row.account_id !== accountId || row.status === 'deleted')
+      throw new NotFoundException({ code: 'not_found', entity: 'webhook_subscription' });
+    return row;
+  }
+
+  list(principal: Principal, accountId: string) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) =>
+      (await this.repo.subscriptionsOfAccount(tx, accountId)).map((row) => ({
+        ...publicSubscription(row),
+        client: { id: row.api_client_id, name: row.client_name, status: row.client_status },
+      })),
+    );
+  }
+
+  /** Registers an endpoint for a client of this account; the signing secret is returned once. */
+  create(principal: Principal, ctx: RequestContext, accountId: string, dto: CreateAccountSubscriptionDto) {
+    this.assertAccount(principal, accountId);
+    const problem = endpointProblem(dto.endpoint_url, loadEnv().WEBHOOK_ALLOW_PRIVATE === 'true');
+    if (problem) throw new BadRequestException({ code: 'invalid_endpoint', problem });
+    const key = sealingKey();
+    return this.uow.run(principal, async (tx) => {
+      if (!(await this.repo.clientGranted(tx, dto.api_client_id, accountId)))
+        throw new NotFoundException({ code: 'not_found', entity: 'api_client' });
+      const { secret, kid } = newSecret();
+      let row: SubscriptionRow;
+      try {
+        row = await this.repo.insertSubscription(tx, {
+          accountId,
+          clientId: dto.api_client_id,
+          endpointUrl: dto.endpoint_url,
+          eventTypes: [...new Set(dto.event_types)],
+          secretCiphertext: sealSecret(secret, key),
+          secretKid: kid,
+        });
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') throw new ConflictException({ code: 'endpoint_exists' });
+        throw error;
+      }
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'webhook_subscription',
+          entityId: row.id,
+          eventType: 'webhook.subscribed',
+          newValue: { endpoint: row.endpoint_url, event_types: row.event_types, api_client_id: dto.api_client_id },
+        },
+      ]);
+      return { ...publicSubscription(row), secret };
+    });
+  }
+
+  rotate(principal: Principal, ctx: RequestContext, accountId: string, id: string) {
+    this.assertAccount(principal, accountId);
+    const key = sealingKey();
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.live(tx, accountId, id);
+      const { secret, kid } = newSecret();
+      await this.repo.rotateSecret(tx, row.id, sealSecret(secret, key), kid);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'webhook_subscription',
+          entityId: row.id,
+          eventType: 'webhook.secret_rotated',
+          newValue: { kid },
+        },
+      ]);
+      return { id: row.id, secret_kid: kid, secret };
+    });
+  }
+
+  /** A pause by hand: the endpoint stops receiving and the reason stays on the row. */
+  pause(principal: Principal, ctx: RequestContext, accountId: string, id: string, dto: PauseSubscriptionDto) {
+    const reason = (dto.reason ?? '').trim();
+    if (!reason) throw new BadRequestException({ code: 'reason_required' });
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.live(tx, accountId, id);
+      if (row.status === 'paused')
+        throw new ConflictException({ code: 'already_paused', paused_reason: row.paused_reason });
+      await this.repo.setStatus(tx, row.id, 'paused', 'owner', reason);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'webhook_subscription',
+          entityId: row.id,
+          eventType: 'webhook.paused',
+          oldValue: { status: row.status },
+          newValue: { reason: 'owner', note: reason },
+        },
+      ]);
+      return publicSubscription({ ...row, status: 'paused', paused_reason: 'owner', paused_note: reason });
+    });
+  }
+
+  /** Resume: deliveries start again, and the failure count starts again with them. */
+  resume(principal: Principal, ctx: RequestContext, accountId: string, id: string) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.live(tx, accountId, id);
+      if (row.status !== 'paused') throw new ConflictException({ code: 'not_paused', status: row.status });
+      await this.repo.setStatus(tx, row.id, 'active', null, null);
+      await this.repo.resetFailures(tx, row.id);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'webhook_subscription',
+          entityId: row.id,
+          eventType: 'webhook.resumed',
+          oldValue: { paused_reason: row.paused_reason, paused_note: row.paused_note },
+          newValue: { status: 'active' },
+        },
+      ]);
+      return publicSubscription({
+        ...row,
+        status: 'active',
+        paused_reason: null,
+        paused_note: null,
+        consecutive_failures: 0,
+      });
+    });
+  }
+
+  remove(principal: Principal, ctx: RequestContext, accountId: string, id: string) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.live(tx, accountId, id);
+      await this.repo.setStatus(tx, row.id, 'deleted', null, null);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        { entityKind: 'webhook_subscription', entityId: row.id, eventType: 'webhook.unsubscribed' },
+      ]);
+      return { removed: row.id };
+    });
+  }
+
+  deliveries(principal: Principal, accountId: string, id: string, limit: number) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) => {
+      const row = await this.live(tx, accountId, id);
+      return (await this.repo.deliveriesOf(tx, row.id, limit)).map(publicDelivery);
+    });
+  }
+
+  deadLetters(principal: Principal, accountId: string, subscriptionId: string | null) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) =>
+      (await this.repo.deadLetters(tx, accountId, subscriptionId)).map((row) => ({
+        ...publicDelivery(row),
+        endpoint_url: row.endpoint_url,
+        first_failed_at: row.first_failed_at,
+      })),
+    );
+  }
+
+  /**
+   * Replay one dead letter (Integrations success criterion: a replay
+   * delivers it once). The row is claimed before it is sent, so two people
+   * pressing the button send the event once.
+   */
+  replay(principal: Principal, ctx: RequestContext, accountId: string, deliveryId: string) {
+    this.assertAccount(principal, accountId);
+    return this.uow.run(principal, async (tx) => {
+      const dead = await this.repo.delivery(tx, deliveryId);
+      if (dead.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'webhook_delivery' });
+      if (dead.status !== 'dead_lettered')
+        throw new ConflictException({ code: 'not_dead_lettered', status: dead.status });
+      const subscription = await this.live(tx, accountId, dead.subscription_id);
+      if (subscription.status !== 'active')
+        throw new ConflictException({ code: 'subscription_not_active', status: subscription.status });
+      if (!(await this.repo.claimDeadLetter(tx, dead.id)))
+        throw new ConflictException({ code: 'not_dead_lettered', status: dead.status });
+      const sent = await this.dispatcher.replay(tx, subscription, dead);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'webhook_subscription',
+          entityId: subscription.id,
+          eventType: 'webhook.replayed',
+          newValue: {
+            delivery_id: dead.id,
+            outbox_id: dead.outbox_id,
+            event_type: dead.event_type,
+            attempt: sent.attempt,
+            outcome: sent.status,
+          },
+        },
+      ]);
+      return { replayed: dead.id, delivery: publicDelivery(sent) };
+    });
+  }
+}
+
+@ApiTags('integrations')
+@ApiBearerAuth()
+@Controller('accounts/:accountId/webhooks')
+@RequirePermission('webhooks:manage')
+export class AccountWebhooksController {
+  constructor(private readonly admin: WebhookAdminService) {}
+
+  @Get()
+  list(@CurrentPrincipal() principal: Principal, @Param('accountId', ParseUUIDPipe) accountId: string) {
+    return this.admin.list(principal, accountId);
+  }
+
+  @Post()
+  create(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Body() dto: CreateAccountSubscriptionDto,
+  ) {
+    return this.admin.create(principal, ctx, accountId, dto);
+  }
+
+  @Get('dead-letters')
+  deadLetters(
+    @CurrentPrincipal() principal: Principal,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Query('subscription') subscription?: string,
+  ) {
+    return this.admin.deadLetters(principal, accountId, UUID_V4.test(subscription ?? '') ? subscription! : null);
+  }
+
+  @Post('dead-letters/:deliveryId/replay')
+  @HttpCode(200)
+  replay(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('deliveryId', ParseUUIDPipe) deliveryId: string,
+  ) {
+    return this.admin.replay(principal, ctx, accountId, deliveryId);
+  }
+
+  @Get(':id/deliveries')
+  deliveries(
+    @CurrentPrincipal() principal: Principal,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.admin.deliveries(principal, accountId, id, boundedLimit(limit));
+  }
+
+  @Post(':id/rotate-secret')
+  @HttpCode(200)
+  rotate(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.admin.rotate(principal, ctx, accountId, id);
+  }
+
+  @Post(':id/pause')
+  @HttpCode(200)
+  pause(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PauseSubscriptionDto,
+  ) {
+    return this.admin.pause(principal, ctx, accountId, id, dto);
+  }
+
+  @Post(':id/resume')
+  @HttpCode(200)
+  resume(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.admin.resume(principal, ctx, accountId, id);
+  }
+
+  @Delete(':id')
+  @HttpCode(200)
+  remove(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.admin.remove(principal, ctx, accountId, id);
+  }
+}
+
+/** A subscription filter on the dead letters tab is a uuid or it is nothing. */
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The page a delivery list returns: the client asks, the server decides. */
+function boundedLimit(value: string | undefined): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return 100;
+  return Math.min(parsed, 500);
+}
+
 export function isPublic(type: string): boolean {
   return isPublicEventType(type);
 }
 
 @Module({
   imports: [AdminCoreModule, TicketsCoreModule],
-  providers: [WebhooksRepository, ApiClientsService, WebhooksService, WebhookDeliveryService],
-  exports: [WebhookDeliveryService, WebhooksService, ApiClientsService],
+  providers: [WebhooksRepository, ApiClientsService, WebhooksService, WebhookDeliveryService, WebhookAdminService],
+  exports: [WebhookDeliveryService, WebhooksService, ApiClientsService, WebhookAdminService],
 })
 export class WebhooksCoreModule {}
 
 @Module({
   imports: [WebhooksCoreModule],
-  controllers: [ApiClientsController, WebhooksController],
+  controllers: [ApiClientsController, WebhooksController, AccountWebhooksController],
   exports: [WebhooksCoreModule],
 })
 export class WebhooksModule {}

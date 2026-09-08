@@ -431,6 +431,96 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/webhooks",
+    "controller": "AccountWebhooksController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/webhooks",
+    "controller": "AccountWebhooksController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/accounts/:accountId/webhooks/:id",
+    "controller": "AccountWebhooksController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/webhooks/:id/deliveries",
+    "controller": "AccountWebhooksController",
+    "handler": "deliveries",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/webhooks/:id/pause",
+    "controller": "AccountWebhooksController",
+    "handler": "pause",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/webhooks/:id/resume",
+    "controller": "AccountWebhooksController",
+    "handler": "resume",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/webhooks/:id/rotate-secret",
+    "controller": "AccountWebhooksController",
+    "handler": "rotate",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/webhooks/dead-letters",
+    "controller": "AccountWebhooksController",
+    "handler": "deadLetters",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/webhooks/dead-letters/:deliveryId/replay",
+    "controller": "AccountWebhooksController",
+    "handler": "replay",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/ai-settings",
     "controller": "AiSettingsController",
     "handler": "get",

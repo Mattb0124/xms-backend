@@ -170,6 +170,8 @@ export const AUDIT_EVENT_TYPES = [
   'webhook.unsubscribed',
   'webhook.secret_rotated',
   'webhook.paused',
+  'webhook.resumed',
+  'webhook.replayed',
   'finance.destination.set',
   'finance.delivered',
   'finance.delivery_failed',
