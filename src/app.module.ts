@@ -8,6 +8,7 @@ import { MigrationModule } from './modules/migration/migration.module.js';
 import { RosterModule } from './modules/roster/roster.module.js';
 import { CapacityModule } from './modules/capacity/capacity.module.js';
 import { ReportSchedulesModule } from './modules/reporting/schedules.module.js';
+import { ContactsModule } from './modules/portal/contacts.module.js';
 import { CsatModule } from './modules/portal/csat.module.js';
 import { WebhooksModule } from './modules/integrations/webhooks.module.js';
 import { FinanceModule } from './modules/integrations/finance.module.js';
@@ -63,6 +64,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     RosterModule,
     CapacityModule,
     ReportSchedulesModule,
+    ContactsModule,
     CsatModule,
     WebhooksModule,
     FinanceModule,

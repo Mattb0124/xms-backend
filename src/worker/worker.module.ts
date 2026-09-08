@@ -136,6 +136,7 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.archive.archiveJob());
     this.runner.schedule(this.schedules.scheduleJob());
     this.runner.schedule(this.csat.reminderJob());
+    this.runner.schedule(this.csat.quarterlyJob());
     this.runner.schedule(this.webhooks.retryJob());
   }
 }

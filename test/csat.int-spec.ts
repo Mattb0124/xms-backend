@@ -333,3 +333,218 @@ describe('CSAT on ticket close (CP-07)', () => {
     expect(late.body.code).toBe('survey_closed');
   });
 });
+
+/**
+ * The quarterly relationship survey (CP-07 remainder, functional 5.7): on
+ * or after the first business day following a quarter end, one survey per
+ * period and recipient for the account's portal admins and the contacts
+ * flagged executive sponsor; five keyed questions plus a comment, two
+ * reminders over three weeks, then expiry.
+ */
+describe('the quarterly relationship survey', () => {
+  // 2027-12-31 is a Friday, so the first business day of the new quarter is
+  // Monday 2028-01-03 and the Saturday before it is too early.
+  const tooEarly = new Date('2028-01-01T09:00:00Z');
+  const opensOn = new Date('2028-01-03T09:00:00Z');
+  let adminPortalToken: string;
+  let sponsorContactId: string;
+
+  it('goes to the account admins and the flagged sponsors, once per period and recipient', async () => {
+    const roles = await api().get('/v1/admin/roles?catalog=portal').set(bearer(adminToken)).expect(200);
+    const accountAdmin = roles.body.find((role: { name: string }) => role.name === 'Account Admin');
+    await api()
+      .post(`/v1/admin/accounts/${accountId}/portal-users`)
+      .set(bearer(adminToken))
+      .send({ email: 'ava@client.test', first_name: 'Ava', last_name: 'Admin', role_ids: [accountAdmin.id] })
+      .expect(201);
+    adminPortalToken = await devToken({ sub: 'dev_ava', email: 'ava@client.test', org: 'acct-brk', sid: 'sess_ava' });
+
+    // An executive sponsor need not hold a portal account: Chris is an
+    // email-only contact of the account, and the flag is what puts them on
+    // the quarterly list.
+    await withSuperuser((client) =>
+      client.query(`insert into acct.contacts (account_id, email, display_name) values ($1, $2, $3)`, [
+        accountId,
+        'chris@client.test',
+        'Chris Ngata',
+      ]),
+    );
+    const contacts = await api().get(`/v1/admin/accounts/${accountId}/contacts`).set(bearer(adminToken)).expect(200);
+    const chris = contacts.body.find((row: { email: string }) => row.email === 'chris@client.test');
+    expect(chris.flags).toEqual([]);
+    sponsorContactId = chris.id;
+    const flagged = await api()
+      .patch(`/v1/admin/accounts/${accountId}/contacts/${chris.id}/flags`)
+      .set(bearer(adminToken))
+      .send({ version: chris.version, flags: ['executive_sponsor'] })
+      .expect(200);
+    expect(flagged.body.flags).toEqual(['executive_sponsor']);
+    // The vocabulary is closed, and the route is the operator's alone.
+    await api()
+      .patch(`/v1/admin/accounts/${accountId}/contacts/${chris.id}/flags`)
+      .set(bearer(adminToken))
+      .send({ version: flagged.body.version, flags: ['vip'] })
+      .expect(400);
+    await api()
+      .patch(`/v1/admin/accounts/${accountId}/contacts/${chris.id}/flags`)
+      .set(bearer(portalToken))
+      .send({ version: flagged.body.version, flags: [] })
+      .expect(403);
+
+    // The Saturday after the quarter end is before the first business day.
+    expect(await csat.quarterlyTick(tooEarly)).toBe('created 0, skipped 0');
+    expect(await csat.quarterlyTick(opensOn)).toBe('created 2, skipped 0');
+    // The Tuesday after: the period and recipient already hold one.
+    expect(await csat.quarterlyTick(new Date('2028-01-04T09:00:00Z'))).toBe('created 0, skipped 2');
+
+    const rows = await withSuperuser((client) =>
+      client.query(
+        `select s.period, s.status, c.email::text as email from acct.csat_surveys s
+           join acct.contacts c on c.id = s.contact_id
+          where s.kind = 'quarterly' order by c.email`,
+      ),
+    );
+    expect(rows.rows).toEqual([
+      { period: '2027-Q4', status: 'sent', email: 'ava@client.test' },
+      { period: '2027-Q4', status: 'sent', email: 'chris@client.test' },
+    ]);
+    // Pat and Sam are requesters with no sponsor flag, so no survey reached them.
+    expect(rows.rows.some((row: { email: string }) => row.email.startsWith('pat') || row.email.startsWith('sam'))).toBe(
+      false,
+    );
+  });
+
+  it('shows both kinds in the portal list, each with its own questions', async () => {
+    const mine = await api().get('/v1/portal/surveys').set(bearer(adminPortalToken)).expect(200);
+    expect(mine.body.pending).toHaveLength(1);
+    const survey = mine.body.pending[0];
+    expect(survey).toMatchObject({ kind: 'quarterly', period: '2027-Q4', ticket_key: null });
+    expect(survey.questions.map((question: { key: string }) => question.key)).toEqual([
+      'responsiveness',
+      'quality',
+      'communication',
+      'value',
+      'recommend',
+    ]);
+    // Pat's list still carries the ticket-close survey with its one question.
+    const pat = await api().get('/v1/portal/surveys').set(bearer(portalToken)).expect(200);
+    const closed = pat.body.answered[0];
+    expect(closed.kind).toBe('ticket_close');
+    expect(closed.questions.map((question: { key: string }) => question.key)).toEqual(['score']);
+  });
+
+  it('accepts the five keyed scores and a comment, and refuses the wrong shape for the kind', async () => {
+    const mine = await api().get('/v1/portal/surveys').set(bearer(adminPortalToken)).expect(200);
+    const surveyId = mine.body.pending[0].id;
+    // A single score answers a ticket-close survey, not this one.
+    const wrongShape = await api()
+      .post(`/v1/portal/surveys/${surveyId}/answer`)
+      .set(bearer(adminPortalToken))
+      .send({ score: 4 })
+      .expect(400);
+    expect(wrongShape.body.code).toBe('scores_required');
+    const answered = await api()
+      .post(`/v1/portal/surveys/${surveyId}/answer`)
+      .set(bearer(adminPortalToken))
+      .send({
+        scores: { responsiveness: 5, quality: 4, communication: 4, value: 3, recommend: 4 },
+        comment: 'Steady quarter, watch the invoicing.',
+      })
+      .expect(200);
+    expect(answered.body).toMatchObject({ kind: 'quarterly', period: '2027-Q4', score: 4 });
+    expect(answered.body.answers).toEqual({
+      responsiveness: 5,
+      quality: 4,
+      communication: 4,
+      value: 3,
+      recommend: 4,
+    });
+    await api()
+      .post(`/v1/portal/surveys/${surveyId}/answer`)
+      .set(bearer(adminPortalToken))
+      .send({ scores: { responsiveness: 5, quality: 5, communication: 5, value: 5, recommend: 5 } })
+      .expect(409);
+    // A score outside the five-point scale is refused before the service.
+    const sponsorSurvey = await withSuperuser((client) =>
+      client.query(`select id from acct.csat_surveys where kind = 'quarterly' and contact_id = $1`, [sponsorContactId]),
+    );
+    await api()
+      .post(`/v1/csat/${sponsorSurvey.rows[0].id}/answer`)
+      .send({
+        token: 'x'.repeat(30),
+        scores: { responsiveness: 9, quality: 1, communication: 1, value: 1, recommend: 1 },
+      })
+      .expect(400);
+  });
+
+  it('reminds twice over three weeks and then expires', async () => {
+    // The cadence is walked by ageing the sponsor's unanswered survey a week
+    // at a time, which is what the calendar does in production.
+    const age = (days: number, id?: string) =>
+      withSuperuser(async (client) => {
+        const rows = await client.query(
+          `update acct.csat_surveys set sent_at = now() - ($2 || ' days')::interval,
+                  remind_at = now() - interval '1 hour', expires_at = now() + interval '7 days'
+             where kind = 'quarterly' and contact_id = $1 and ($3::uuid is null or id = $3) returning id`,
+          [sponsorContactId, String(days), id ?? null],
+        );
+        return rows.rows[0].id as string;
+      });
+
+    const surveyId = await age(8);
+    expect(await csat.tick()).toBe('reminded 1, expired 0');
+    const afterFirst = await withSuperuser((client) =>
+      client.query('select status, remind_at from acct.csat_surveys where id = $1', [surveyId]),
+    );
+    // The second reminder is stamped on the row, a week after the first, so
+    // the survey is not touched again until it falls due.
+    expect(afterFirst.rows[0].status).toBe('reminded');
+    expect(afterFirst.rows[0].remind_at).not.toBeNull();
+    expect(await csat.tick()).toBe('reminded 0, expired 0');
+
+    // A week later the second reminder is due.
+    await age(15, surveyId);
+    expect(await csat.tick()).toBe('reminded 1, expired 0');
+    const afterSecond = await withSuperuser((client) =>
+      client.query('select remind_at from acct.csat_surveys where id = $1', [surveyId]),
+    );
+    // Two reminders is the whole cadence; nothing is due after them.
+    expect(afterSecond.rows[0].remind_at).toBeNull();
+    expect(await csat.tick()).toBe('reminded 0, expired 0');
+    await withSuperuser((client) =>
+      client.query(`update acct.csat_surveys set expires_at = now() - interval '1 minute' where id = $1`, [surveyId]),
+    );
+    expect(await csat.tick()).toBe('reminded 0, expired 1');
+  });
+
+  it('summarises the quarter for the operator: averages per question and the trend', async () => {
+    // A second, older quarter so the trend has two points.
+    await withSuperuser(async (client) => {
+      const survey = await client.query(
+        `insert into acct.csat_surveys (account_id, kind, period, contact_id, token_hash, status, answered_at)
+         values ($1, 'quarterly', '2027-Q3', $2, 'x', 'answered', now()) returning id`,
+        [accountId, sponsorContactId],
+      );
+      await client.query(
+        `insert into acct.csat_responses (account_id, survey_id, answers, comment)
+         values ($1, $2, '{"responsiveness":3,"quality":3,"communication":3,"value":3,"recommend":3}'::jsonb, null)`,
+        [accountId, survey.rows[0].id],
+      );
+    });
+    const view = await api().get(`/v1/accounts/${accountId}/csat`).set(bearer(adminToken)).expect(200);
+    expect(view.body.quarterly).toMatchObject({
+      latest_period: '2027-Q4',
+      responses: 1,
+      averages: { responsiveness: 5, quality: 4, communication: 4, value: 3, recommend: 4 },
+      average: 4,
+    });
+    expect(view.body.quarterly.trend).toEqual([
+      { period: '2027-Q3', responses: 1, average: 3 },
+      { period: '2027-Q4', responses: 1, average: 4 },
+    ]);
+    expect(view.body.quarterly.questions).toHaveLength(5);
+    // The ticket-close summary is untouched by the relationship survey: the
+    // two answer different questions and are never averaged together.
+    expect(view.body.summary).toMatchObject({ responses: 2, average: 3.5 });
+  });
+});

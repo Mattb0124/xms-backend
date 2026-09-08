@@ -431,6 +431,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/admin/accounts/:accountId/contacts",
+    "controller": "AdminContactsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/accounts/:accountId/contacts/:id/flags",
+    "controller": "AdminContactsController",
+    "handler": "setFlags",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/accounts/:id",
     "controller": "AdminAccountsController",
     "handler": "get",
