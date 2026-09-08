@@ -11,6 +11,7 @@ import { requestContextMiddleware } from '../src/common/request-context.middlewa
 import { resetEnvForTests } from '../src/config/env.js';
 import { verifySignature } from '../src/domain/integrations/webhooks.js';
 import { WebhookDeliveryService } from '../src/modules/integrations/webhooks.module.js';
+import { OutboxDispatcher } from '../src/worker/outbox-dispatcher.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
@@ -78,6 +79,12 @@ beforeAll(async () => {
   const workerRef = await Test.createTestingModule({ imports: [WorkerModule] }).compile();
   worker = workerRef.createNestApplication({ bufferLogs: true });
   await worker.init();
+  // The worker's outbox dispatcher ticks every second on its own. This file
+  // hands rows to the handler itself and asserts on what arrived; a
+  // background tick doing the same work races the explicit drain and
+  // delivers some events twice. Stop the timer and keep the drain the only
+  // thing that dispatches.
+  worker.get(OutboxDispatcher).onModuleDestroy();
   delivery = worker.get(WebhookDeliveryService);
 
   adminToken = await devToken({ sub: 'dev_admin', email: ADMIN_EMAIL, sid: 'sess_admin' });

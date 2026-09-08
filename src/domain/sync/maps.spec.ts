@@ -375,6 +375,20 @@ describe('the outbound loop guard and conflict policy', () => {
     expect(decideEnqueue({ ...base, event: 'work_note.created', syncWorkNotes: true })).toEqual({ enqueue: true });
   });
 
+  it('sends a public file to the client record and keeps an internal one internal', () => {
+    expect(decideEnqueue({ ...base, event: 'attachment.scanned', attachmentVisibility: 'public' })).toEqual({
+      enqueue: true,
+    });
+    expect(decideEnqueue({ ...base, event: 'attachment.scanned', attachmentVisibility: 'internal' })).toEqual({
+      enqueue: false,
+      reason: 'internal_attachment',
+    });
+    expect(decideEnqueue({ ...base, event: 'attachment.scanned' })).toEqual({
+      enqueue: false,
+      reason: 'internal_attachment',
+    });
+  });
+
   it('reads a stamp inside the clock tolerance as our own write rather than a change', () => {
     const known = new Date('2026-09-08T10:00:00Z');
     expect(externalChangedSince(known, new Date('2026-09-08T10:00:03Z'), 5)).toBe(false);

@@ -80,7 +80,7 @@ export interface OutboundRow {
   instance_id: string;
   ticket_id: string;
   link_id: string;
-  event: 'ticket.updated' | 'ticket.transitioned' | 'comment.created' | 'work_note.created';
+  event: 'ticket.updated' | 'ticket.transitioned' | 'comment.created' | 'work_note.created' | 'attachment.scanned';
   outbox_id: string | null;
   payload: Record<string, unknown>;
   origin: string;
@@ -381,6 +381,73 @@ export class ConnectorsRepository extends RepositoryBase {
       'select 1 from acct.sync_journal_links where instance_id = $1 and xms_kind = $2 and xms_id = $3',
       [instanceId, kind, xmsId],
     ).then((row) => row !== undefined);
+  }
+
+  /** The attachment an outbound row names, read for its scan state, visibility and object key. */
+  attachment(
+    tx: Tx,
+    id: string,
+  ): Promise<
+    | {
+        id: string;
+        ticket_id: string;
+        file_name: string;
+        content_type: string;
+        size_bytes: string;
+        s3_key: string;
+        scan_state: string;
+        visibility: string;
+      }
+    | undefined
+  > {
+    return this.maybeOne(
+      tx,
+      `select id, ticket_id, file_name, content_type, size_bytes, s3_key, scan_state, visibility
+         from acct.attachments where id = $1 and deleted_at is null`,
+      [id],
+    );
+  }
+
+  attachmentLinkExists(tx: Tx, instanceId: string, externalSysId: string): Promise<boolean> {
+    return this.maybeOne(
+      tx,
+      'select 1 from acct.sync_attachment_links where instance_id = $1 and external_attachment_sys_id = $2',
+      [instanceId, externalSysId],
+    ).then((row) => row !== undefined);
+  }
+
+  attachmentLinkExistsForXms(tx: Tx, instanceId: string, attachmentId: string): Promise<boolean> {
+    return this.maybeOne(tx, 'select 1 from acct.sync_attachment_links where instance_id = $1 and attachment_id = $2', [
+      instanceId,
+      attachmentId,
+    ]).then((row) => row !== undefined);
+  }
+
+  async insertAttachmentLink(
+    tx: Tx,
+    input: {
+      accountId: string;
+      instanceId: string;
+      ticketId: string;
+      attachmentId: string | null;
+      externalSysId: string;
+      direction: 'in' | 'out';
+      outcome: 'copied' | 'linked' | 'skipped';
+    },
+  ): Promise<void> {
+    await tx.query(
+      `insert into acct.sync_attachment_links (account_id, instance_id, ticket_id, attachment_id, external_attachment_sys_id, direction, outcome)
+       values ($1, $2, $3, $4, $5, $6, $7) on conflict do nothing`,
+      [
+        input.accountId,
+        input.instanceId,
+        input.ticketId,
+        input.attachmentId,
+        input.externalSysId,
+        input.direction,
+        input.outcome,
+      ],
+    );
   }
 
   journalLinkExists(tx: Tx, instanceId: string, externalJournalSysId: string): Promise<boolean> {

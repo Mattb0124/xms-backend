@@ -106,6 +106,7 @@ export const OUTBOUND_EVENTS = [
   'ticket.transitioned',
   'comment.created',
   'work_note.created',
+  'attachment.scanned',
 ] as const;
 
 export type OutboundEvent = (typeof OUTBOUND_EVENTS)[number];
@@ -130,13 +131,15 @@ export interface EnqueueInput {
   /** Whether the ticket is linked to a record on this instance. */
   readonly hasLink: boolean;
   readonly syncWorkNotes: boolean;
+  /** For `attachment.scanned`: an internal file never reaches a client's record. */
+  readonly attachmentVisibility?: string;
 }
 
 export type EnqueueDecision =
   | { readonly enqueue: true }
   | {
       readonly enqueue: false;
-      readonly reason: 'own_origin' | 'mode' | 'unsubscribed' | 'work_notes_off' | 'no_link';
+      readonly reason: 'own_origin' | 'mode' | 'unsubscribed' | 'work_notes_off' | 'internal_attachment' | 'no_link';
     };
 
 /**
@@ -158,6 +161,8 @@ export function decideEnqueue(input: EnqueueInput): EnqueueDecision {
   if (input.mode !== 'bidirectional') return { enqueue: false, reason: 'mode' };
   if (!input.subscribedEvents.includes(input.event)) return { enqueue: false, reason: 'unsubscribed' };
   if (input.event === 'work_note.created' && !input.syncWorkNotes) return { enqueue: false, reason: 'work_notes_off' };
+  if (input.event === 'attachment.scanned' && input.attachmentVisibility !== 'public')
+    return { enqueue: false, reason: 'internal_attachment' };
   if (!input.hasLink) return { enqueue: false, reason: 'no_link' };
   return { enqueue: true };
 }

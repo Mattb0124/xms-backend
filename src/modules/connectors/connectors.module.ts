@@ -36,6 +36,7 @@ import { join } from 'node:path';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { loadEnv } from '../../config/env.js';
+import { AttachmentsCoreModule } from '../attachments/attachments.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import { ConnectorsRepository } from './connectors.repository.js';
 import { ConnectorsService } from './connectors.service.js';
@@ -338,7 +339,7 @@ export function secretsProviderFromEnv(): SecretsProvider {
 }
 
 @Module({
-  imports: [TicketsCoreModule],
+  imports: [TicketsCoreModule, AttachmentsCoreModule],
   providers: [
     ConnectorsRepository,
     ConnectorsService,

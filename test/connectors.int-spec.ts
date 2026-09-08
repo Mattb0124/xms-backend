@@ -100,7 +100,9 @@ beforeAll(async () => {
   resetEnvForTests();
   const { AppModule } = await import('../src/app.module.js');
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  app = moduleRef.createNestApplication({ bufferLogs: true });
+  // rawBody: the attachment upload through the local signed URL is a binary
+  // body express does not parse.
+  app = moduleRef.createNestApplication({ bufferLogs: true, rawBody: true });
   app.use(requestContextMiddleware);
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
@@ -1057,6 +1059,144 @@ describe('the outbound conflict policy (SN-04)', () => {
       .set(bearer(adminToken))
       .expect(200);
     expect(runs.body[0].detail.fields).toEqual(['short_description']);
+  });
+});
+
+describe('attachments both ways (SN-06)', () => {
+  const localPath = (url: string): string => url.replace(/^https?:\/\/[^/]+/, '');
+
+  /** The presign, upload and confirm a consultant's browser performs. */
+  async function upload(fileName: string, body: Buffer, visibility: 'public' | 'internal') {
+    const presigned = await api()
+      .post(`/v1/tickets/${ticketBId}/attachments/presign`)
+      .set(bearer(adminToken))
+      .send({ file_name: fileName, content_type: 'text/plain', size_bytes: body.length })
+      .expect(201);
+    await request(app.getHttpServer())
+      .put(localPath(presigned.body.upload.url))
+      .set('content-type', 'text/plain')
+      .send(body)
+      .expect(200);
+    const confirmed = await api()
+      .post(`/v1/tickets/${ticketBId}/attachments/${presigned.body.attachment.id}/confirm`)
+      .set(bearer(adminToken))
+      .send({ visibility })
+      .expect(201);
+    return confirmed.body;
+  }
+
+  /** Touches the case so the next poll carries it, and its files, again. */
+  function touchCase(stamp: string): void {
+    standIn.records.get(TABLE)!.get(String(caseB.sys_id))!.sys_updated_on = stamp;
+  }
+
+  it('copies a file under the limit into the object store through the scan gate', async () => {
+    standIn.addAttachment(String(caseB.sys_id), 'runbook.txt', 'text/plain', Buffer.from('close step 4 by hand'));
+    touchCase('2028-01-01 00:00:00');
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const stored = await withSuperuser((client) =>
+      client.query(
+        `select file_name, content_type, size_bytes, origin, visibility, scan_state from acct.attachments where ticket_id = $1`,
+        [ticketBId],
+      ),
+    );
+    expect(stored.rows).toEqual([
+      {
+        file_name: 'runbook.txt',
+        content_type: 'text/plain',
+        size_bytes: '20',
+        origin: 'sync',
+        visibility: 'public',
+        scan_state: 'clean',
+      },
+    ]);
+    const links = await withSuperuser((client) =>
+      client.query(`select direction, outcome from acct.sync_attachment_links where ticket_id = $1`, [ticketBId]),
+    );
+    expect(links.rows).toEqual([{ direction: 'in', outcome: 'copied' }]);
+    // A second poll of the same file does not copy it twice.
+    touchCase('2028-01-02 00:00:00');
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const again = await withSuperuser((client) =>
+      client.query(`select count(*)::int as n from acct.attachments where ticket_id = $1`, [ticketBId]),
+    );
+    expect(again.rows[0].n).toBe(1);
+  });
+
+  it('turns a file over the limit into a work note rather than a copy', async () => {
+    await refreshVersion();
+    await api()
+      .patch(`/v1/connectors/${instanceId}`)
+      .set(bearer(adminToken))
+      .send({ version: instanceVersion, attachment_limit_bytes: 16 })
+      .expect(200);
+    standIn.addAttachment(
+      String(caseB.sys_id),
+      'trace.log',
+      'text/plain',
+      Buffer.from('a trace far longer than the limit allows'),
+    );
+    touchCase('2028-02-01 00:00:00');
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const links = await withSuperuser((client) =>
+      client.query(
+        `select outcome from acct.sync_attachment_links where ticket_id = $1 and direction = 'in' order by created_at`,
+        [ticketBId],
+      ),
+    );
+    expect(links.rows.map((row) => row.outcome)).toEqual(['copied', 'linked']);
+    const notes = await withSuperuser((client) =>
+      client.query(`select body from acct.work_notes where ticket_id = $1 order by created_at desc limit 1`, [
+        ticketBId,
+      ]),
+    );
+    expect(notes.rows[0].body).toContain('trace.log');
+    expect(notes.rows[0].body).toContain('over the 16 byte copy limit');
+    await refreshVersion();
+    await api()
+      .patch(`/v1/connectors/${instanceId}`)
+      .set(bearer(adminToken))
+      .send({ version: instanceVersion, attachment_limit_bytes: 10485760 })
+      .expect(200);
+  });
+
+  it('pushes a scanned public file to the case and keeps an internal one internal', async () => {
+    const internal = await upload('internal-only.txt', Buffer.from('for the delivery team'), 'internal');
+    expect(internal).toMatchObject({ scan_state: 'clean', visibility: 'internal' });
+    await drainOutbox();
+    const refused = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=skipped_policy`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(refused.body[0].detail).toMatchObject({ event: 'attachment.scanned', reason: 'internal_attachment' });
+    const queued = await withSuperuser((client) =>
+      client.query(`select count(*)::int as n from acct.sync_outbound where event = 'attachment.scanned'`),
+    );
+    expect(queued.rows[0].n).toBe(0);
+
+    const shared = await upload('for-the-client.txt', Buffer.from('the workaround, step by step'), 'public');
+    expect(shared).toMatchObject({ scan_state: 'clean', visibility: 'public' });
+    await drainOutbox();
+    expect(await sync.deliverPending()).toBe('delivered 1, skipped 0, retried 0, failed 0');
+    const sent = [...standIn.attachments.values()].filter((one) => one.sys_created_by === 'xms.integration');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].file_name).toBe('for-the-client.txt');
+    expect(sent[0].body.toString('utf8')).toBe('the workaround, step by step');
+    const links = await withSuperuser((client) =>
+      client.query(`select outcome from acct.sync_attachment_links where direction = 'out'`),
+    );
+    expect(links.rows).toEqual([{ outcome: 'copied' }]);
+    // The file we pushed does not come back as a copy of itself.
+    touchCase('2028-03-01 00:00:00');
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const total = await withSuperuser((client) =>
+      client.query(`select count(*)::int as n from acct.attachments where ticket_id = $1`, [ticketBId]),
+    );
+    expect(total.rows[0].n).toBe(3);
   });
 });
 

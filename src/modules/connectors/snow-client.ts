@@ -20,6 +20,16 @@ export interface JournalEntry {
   readonly sys_created_by: string;
 }
 
+/** One file on a record, as `/api/now/attachment` lists it. */
+export interface SnowAttachment {
+  readonly sys_id: string;
+  readonly file_name: string;
+  readonly content_type: string;
+  readonly size_bytes: number;
+  readonly table_sys_id: string;
+  readonly sys_created_by?: string;
+}
+
 export interface DictionaryEntry {
   readonly name: string;
   readonly mandatory: boolean;
@@ -58,6 +68,17 @@ export interface SnowClient {
     element: 'comments' | 'work_notes',
     text: string,
   ): Promise<{ entry: JournalEntry; record: SnowRecord }>;
+  /** The files on a record, metadata only. */
+  attachments(sysId: string): Promise<SnowAttachment[]>;
+  /** The bytes of one file, refused above `maxBytes` rather than read into memory. */
+  downloadAttachment(sysId: string, maxBytes: number): Promise<Buffer>;
+  uploadAttachment(
+    table: string,
+    sysId: string,
+    fileName: string,
+    contentType: string,
+    body: Buffer,
+  ): Promise<SnowAttachment>;
 }
 
 export class SnowError extends Error {
@@ -198,6 +219,86 @@ export class HttpSnowClient implements SnowClient {
     const entry = entries.filter((one) => one.element === element).at(-1);
     if (!entry) throw new SnowError(0, `journal entry not returned for ${sysId}`);
     return { entry, record };
+  }
+
+  async attachments(sysId: string): Promise<SnowAttachment[]> {
+    const result = await this.request<{
+      result: {
+        sys_id: string;
+        file_name: string;
+        content_type: string;
+        size_bytes: string | number;
+        table_sys_id: string;
+        sys_created_by?: string;
+      }[];
+    }>('GET', '/api/now/attachment', {
+      sysparm_query: `table_sys_id=${sysId}`,
+      sysparm_limit: '100',
+    });
+    return result.result.map((row) => ({
+      sys_id: row.sys_id,
+      file_name: row.file_name,
+      content_type: row.content_type,
+      size_bytes: Number(row.size_bytes ?? 0),
+      table_sys_id: row.table_sys_id,
+      sys_created_by: row.sys_created_by,
+    }));
+  }
+
+  async downloadAttachment(sysId: string, maxBytes: number): Promise<Buffer> {
+    const response = await this.send(
+      'GET',
+      new URL(`/api/now/attachment/${encodeURIComponent(sysId)}/file`, this.baseUrl),
+      { accept: '*/*' },
+    );
+    const declared = Number(response.headers.get('content-length') ?? 0);
+    if (declared > maxBytes) throw new SnowError(0, `attachment ${sysId} is ${declared} bytes, over the limit`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.length > maxBytes) throw new SnowError(0, `attachment ${sysId} is over the limit`);
+    return bytes;
+  }
+
+  async uploadAttachment(
+    table: string,
+    sysId: string,
+    fileName: string,
+    contentType: string,
+    body: Buffer,
+  ): Promise<SnowAttachment> {
+    const url = new URL('/api/now/attachment/file', this.baseUrl);
+    url.searchParams.set('table_name', table);
+    url.searchParams.set('table_sys_id', sysId);
+    url.searchParams.set('file_name', fileName);
+    const response = await this.send('POST', url, { 'content-type': contentType, accept: 'application/json' }, body);
+    const payload = await readCappedJson<{ result: SnowAttachment & { size_bytes: string | number } }>(response);
+    return { ...payload.result, size_bytes: Number(payload.result.size_bytes ?? body.length) };
+  }
+
+  /** One authenticated call with the shared timeout, redirect refusal and error classification. */
+  private async send(method: string, url: URL, headers: Record<string, string>, body?: Buffer): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method,
+        headers: { ...headers, authorization: await this.authorization() },
+        body: body as unknown as BodyInit | undefined,
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw new SnowError(0, (error as Error).name === 'AbortError' ? 'timeout' : (error as Error).message);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (response.status >= 300 && response.status < 400) throw new SnowError(response.status, 'redirect refused');
+    if (!response.ok) {
+      const detail = await readCappedText(response, ERROR_BODY_BYTES).catch(() => '');
+      if (response.status === 401) this.token = undefined;
+      throw new SnowError(response.status, detail);
+    }
+    return response;
   }
 
   private async request<T>(

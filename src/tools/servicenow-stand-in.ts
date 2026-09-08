@@ -28,18 +28,40 @@ export interface Fault {
   invalidToken?: boolean;
 }
 
+/** One file on a record: the metadata the list returns and the bytes the download serves. */
+export interface StandInAttachment {
+  sys_id: string;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  table_name: string;
+  table_sys_id: string;
+  sys_created_by: string;
+  sys_created_on: string;
+  body: Buffer;
+}
+
 export interface StandIn {
   readonly server: Server;
   readonly url: string;
   readonly records: Map<string, Map<string, Record<string, unknown>>>;
   readonly journal: Record<string, unknown>[];
+  readonly attachments: Map<string, StandInAttachment>;
   readonly calls: { method: string; path: string; body?: unknown }[];
   fault: Fault;
   autoEcho: boolean;
   /** Creates a record the way a client user would, stamped at `at`. */
   seed(table: string, body: Record<string, unknown>, at?: Date): Record<string, unknown>;
   addJournal(sysId: string, element: string, value: string, by?: string, at?: Date): Record<string, unknown>;
+  /** Attaches a file to a record the way a client user would. */
+  addAttachment(sysId: string, fileName: string, contentType: string, body: Buffer): StandInAttachment;
   close(): Promise<void>;
+}
+
+/** The metadata face of an attachment: everything but the bytes, sizes as strings the way the Table API returns them. */
+function meta(attachment: StandInAttachment): Omit<StandInAttachment, 'body' | 'size_bytes'> & { size_bytes: string } {
+  const { body: _body, size_bytes: size, ...rest } = attachment;
+  return { ...rest, size_bytes: String(size) };
 }
 
 const DICTIONARY: Record<
@@ -84,6 +106,7 @@ export function stamp(date: Date): string {
 export async function startStandIn(options: StandInOptions = {}): Promise<StandIn> {
   const records = new Map<string, Map<string, Record<string, unknown>>>();
   const journal: Record<string, unknown>[] = [];
+  const attachments = new Map<string, StandInAttachment>();
   const calls: StandIn['calls'] = [];
   const now = options.now ?? (() => new Date());
   let counter = 1000;
@@ -133,6 +156,29 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
     return entry;
   };
 
+  const addAttachment = (
+    tableSysId: string,
+    fileName: string,
+    contentType: string,
+    body: Buffer,
+    tableName = 'sn_customerservice_case',
+    by = 'client.user',
+  ): StandInAttachment => {
+    const created: StandInAttachment = {
+      sys_id: randomUUID().replace(/-/g, ''),
+      file_name: fileName,
+      content_type: contentType.split(';')[0].trim(),
+      size_bytes: body.length,
+      table_name: tableName,
+      table_sys_id: tableSysId,
+      sys_created_by: by,
+      sys_created_on: stamp(now()),
+      body,
+    };
+    attachments.set(created.sys_id, created);
+    return created;
+  };
+
   const authorised = (request: IncomingMessage): boolean => {
     const header = request.headers.authorization ?? '';
     if (state.fault.invalidToken) return false;
@@ -144,9 +190,13 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
   };
 
   const server = createServer((request, response) => {
-    let raw = '';
-    request.on('data', (chunk: Buffer) => (raw += chunk.toString('utf8')));
+    // Collected as bytes, not as a string: the Attachment API carries
+    // binary, and decoding it as UTF-8 on the way in corrupts it.
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
     request.on('end', () => {
+      const rawBody = Buffer.concat(chunks);
+      const raw = rawBody.toString('utf8');
       const url = new URL(request.url ?? '/', 'http://stand-in');
       const body = raw ? (safeJson(raw) as Record<string, unknown>) : undefined;
       calls.push({ method: request.method ?? 'GET', path: url.pathname + url.search, body });
@@ -187,6 +237,39 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
         const status = state.fault.status;
         state.fault = remaining > 0 ? { ...state.fault, times: remaining } : {};
         json(status, { error: { message: `injected ${status}` } });
+        return;
+      }
+
+      // Attachment API (ServiceNow Sync technical 3.1): the metadata list
+      // for a record, the binary download, and the upload the outbound
+      // side posts. Bodies are held in memory; nothing here is a fixture
+      // of a real client's file.
+      if (url.pathname === '/api/now/attachment' && request.method === 'GET') {
+        const recordId = /table_sys_id=([a-z0-9]+)/i.exec(url.searchParams.get('sysparm_query') ?? '')?.[1];
+        json(200, { result: [...attachments.values()].filter((one) => one.table_sys_id === recordId).map(meta) });
+        return;
+      }
+      const file = url.pathname.match(/^\/api\/now\/attachment\/([a-z0-9]+)\/file$/i);
+      if (file && request.method === 'GET') {
+        const found = attachments.get(file[1]);
+        if (!found) {
+          json(404, { error: { message: 'No Record found' } });
+          return;
+        }
+        response.writeHead(200, { 'content-type': found.content_type, 'content-length': String(found.body.length) });
+        response.end(found.body);
+        return;
+      }
+      if (url.pathname === '/api/now/attachment/file' && request.method === 'POST') {
+        const created = addAttachment(
+          url.searchParams.get('table_sys_id') ?? '',
+          url.searchParams.get('file_name') ?? 'file',
+          request.headers['content-type'] ?? 'application/octet-stream',
+          rawBody,
+          url.searchParams.get('table_name') ?? '',
+          'xms.integration',
+        );
+        json(201, { result: meta(created) });
         return;
       }
 
@@ -270,6 +353,7 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
     url,
     records,
     journal,
+    attachments,
     calls,
     get fault() {
       return state.fault;
@@ -285,6 +369,7 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
     },
     seed,
     addJournal,
+    addAttachment: (sysId, fileName, contentType, body) => addAttachment(sysId, fileName, contentType, body),
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

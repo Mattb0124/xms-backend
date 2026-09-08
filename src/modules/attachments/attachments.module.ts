@@ -326,6 +326,48 @@ export class AttachmentsService {
     return principal.kind === 'portal' ? this.uow.portalWrite(principal, work) : this.uow.run(principal, work);
   }
 
+  /**
+   * Registers a file that arrived from a connector (ServiceNow Sync
+   * technical 3.4 step 6). The bytes are already in hand, so the presign
+   * dance does not apply, but everything after it does: the object goes to
+   * the store, the row is written, and the file passes through the same
+   * scan gate as an upload, so a quarantined file is moved and notified
+   * about exactly as one a person uploaded. Runs in the caller's
+   * transaction.
+   */
+  async ingest(
+    tx: Tx,
+    input: {
+      accountId: string;
+      ticketId: string;
+      fileName: string;
+      contentType: string;
+      body: Buffer;
+      uploadedBy: string;
+      uploadedByName: string;
+      visibility?: 'public' | 'internal';
+    },
+    ctx: RequestContext,
+  ): Promise<AttachmentRow> {
+    const safeName = input.fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+    const objectKey = `accounts/${input.accountId}/tickets/${input.ticketId}/${randomUUID()}-${safeName}`;
+    await this.store.putObject(objectKey, input.body, input.contentType);
+    const row = await this.attachments.insert(tx, {
+      accountId: input.accountId,
+      ticketId: input.ticketId,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      sizeBytes: input.body.length,
+      key: objectKey,
+      origin: 'sync',
+      visibility: input.visibility ?? 'public',
+      uploadedBy: input.uploadedBy,
+      uploadedByName: input.uploadedByName,
+    });
+    const verdict = await this.scanner.scan(input.body);
+    return this.applyScan(tx, row, verdict.verdict, verdict.detail, ctx);
+  }
+
   /** The scan result consumer (worker in AWS, inline locally): quarantine moves the object and notifies. */
   async applyScan(
     tx: Tx,
@@ -334,7 +376,22 @@ export class AttachmentsService {
     detail: Record<string, unknown>,
     ctx: RequestContext,
   ): Promise<AttachmentRow> {
-    if (verdict === 'clean') return this.attachments.setScan(tx, row.id, 'clean', detail);
+    if (verdict === 'clean') {
+      const clean = await this.attachments.setScan(tx, row.id, 'clean', detail);
+      // A file that passed the scan announces itself, so a connector can
+      // send it on; one that failed never does (the quarantine event
+      // below is for the people who need to know, not for a client).
+      await this.outbox.write(tx, {
+        accountId: row.account_id,
+        aggregate: 'ticket',
+        aggregateId: row.ticket_id,
+        eventType: 'attachment.scanned',
+        correlationId: ctx.requestId ?? row.id,
+        origin: ctx.origin ?? 'user',
+        payload: { attachment_id: row.id, visibility: clean.visibility },
+      });
+      return clean;
+    }
     const quarantineKey = row.s3_key.replace(/^accounts\//, 'quarantine/accounts/');
     await this.store.moveObject(row.s3_key, quarantineKey);
     const updated = await this.attachments.setScan(tx, row.id, 'quarantined', detail, quarantineKey);

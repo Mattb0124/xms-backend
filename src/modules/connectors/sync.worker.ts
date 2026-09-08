@@ -1,4 +1,6 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { OBJECT_STORE } from '../../common/storage/storage.module.js';
+import type { ObjectStore } from '../../common/storage/object-store.js';
 import type { RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { AuditService, SYSTEM_ACTOR } from '../../common/audit/audit.service.js';
@@ -32,6 +34,7 @@ import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import type { Job } from '../../worker/jobs.js';
 import type { OutboxRow } from '../../worker/outbox-dispatcher.js';
+import { AttachmentsService } from '../attachments/attachments.module.js';
 import { TicketsService, type TicketView } from '../tickets/tickets.service.js';
 import type { CreateTicketDto, PatchTicketDto, TransitionDto } from '../tickets/tickets.dto.js';
 import { coerceFieldMap, ConnectorsService } from './connectors.service.js';
@@ -42,7 +45,14 @@ import {
   type LinkRow,
   type OutboundRow,
 } from './connectors.repository.js';
-import { fromSnowTime, SnowError, type JournalEntry, type SnowRecord } from './snow-client.js';
+import {
+  fromSnowTime,
+  SnowError,
+  type JournalEntry,
+  type SnowAttachment,
+  type SnowClient,
+  type SnowRecord,
+} from './snow-client.js';
 import { SnowClientFactory } from './snow-client.factory.js';
 
 const PAGE = 200;
@@ -68,8 +78,10 @@ export class SyncWorker {
     private readonly connectors: ConnectorsService,
     private readonly clients: SnowClientFactory,
     private readonly tickets: TicketsService,
+    private readonly attachments: AttachmentsService,
     private readonly audit: AuditService,
     private readonly security: SecurityEventsService,
+    @Inject(OBJECT_STORE) private readonly store: ObjectStore,
   ) {}
 
   pollJob(intervalMs = 10_000): Job {
@@ -114,12 +126,15 @@ export class SyncWorker {
       let duplicates = 0;
       for (const record of records) {
         const journal = await client.journal(record.sys_id, watermark.getTime() > 0 ? watermark : null);
+        // Metadata only: the bytes are fetched on apply, once the row has a
+        // ticket to hang them on and the size has been judged.
+        const attachments = await client.attachments(record.sys_id);
         const id = await this.repo.insertInbox(tx, {
           instanceId: instance.id,
           externalId: record.sys_id,
           externalVersion: record.sys_updated_on,
           accountId: instance.account_id,
-          payload: { instance_id: instance.id, record, journal },
+          payload: { instance_id: instance.id, record, journal, attachments },
         });
         if (id) inserted += 1;
         else duplicates += 1;
@@ -479,6 +494,7 @@ export class SyncWorker {
       journalApplied += 1;
     }
     detail.journal_applied = journalApplied;
+    detail.attachments = await this.pullAttachments(tx, instance, principal, ctx, ticket, row);
 
     await this.repo.touchLink(tx, currentLink.id, {
       last_inbound_at: new Date(),
@@ -516,6 +532,86 @@ export class SyncWorker {
     return 'applied';
   }
 
+  /**
+   * Files on the client's case (ServiceNow Sync technical 3.4 step 6;
+   * SN-06). One under the instance's limit is downloaded, stored and
+   * scanned like any upload; one over it becomes a work note naming the
+   * file, or nothing at all, as the instance is configured. Every outcome
+   * is recorded on the attachment links, which is also what stops a file
+   * arriving twice and what stops one we pushed coming back.
+   */
+  private async pullAttachments(
+    tx: Tx,
+    instance: InstanceRow,
+    principal: Principal,
+    ctx: RequestContext,
+    ticket: TicketView,
+    row: InboxRow,
+  ): Promise<{ copied: number; linked: number; skipped: number }> {
+    const listed = (row.payload.attachments ?? []) as SnowAttachment[];
+    const outcome = { copied: 0, linked: 0, skipped: 0 };
+    if (listed.length === 0) return outcome;
+    let client: SnowClient | undefined;
+    for (const file of listed) {
+      if (!file?.sys_id) continue;
+      if (await this.repo.attachmentLinkExists(tx, instance.id, file.sys_id)) continue;
+      const size = Number(file.size_bytes ?? 0);
+      if (size > instance.attachment_limit_bytes) {
+        if (instance.attachment_over_limit === 'link') {
+          await this.tickets.addWorkNote(
+            principal,
+            ctx,
+            ticket.id,
+            {
+              body: `${file.file_name} (${size} bytes) is attached to ${ticket.external_refs.servicenow ?? 'the case'} in ServiceNow and is over the ${instance.attachment_limit_bytes} byte copy limit. Open it in the client instance.`,
+            },
+            tx,
+          );
+          outcome.linked += 1;
+        } else {
+          outcome.skipped += 1;
+        }
+        await this.repo.insertAttachmentLink(tx, {
+          accountId: instance.account_id,
+          instanceId: instance.id,
+          ticketId: ticket.id,
+          attachmentId: null,
+          externalSysId: file.sys_id,
+          direction: 'in',
+          outcome: instance.attachment_over_limit === 'link' ? 'linked' : 'skipped',
+        });
+        continue;
+      }
+      client ??= await this.clients.forInstance(instance);
+      const body = await client.downloadAttachment(file.sys_id, instance.attachment_limit_bytes);
+      const stored = await this.attachments.ingest(
+        tx,
+        {
+          accountId: instance.account_id,
+          ticketId: ticket.id,
+          fileName: file.file_name,
+          contentType: file.content_type || 'application/octet-stream',
+          body,
+          uploadedBy: principal.userId,
+          uploadedByName: principal.displayName,
+          visibility: 'public',
+        },
+        ctx,
+      );
+      await this.repo.insertAttachmentLink(tx, {
+        accountId: instance.account_id,
+        instanceId: instance.id,
+        ticketId: ticket.id,
+        attachmentId: stored.id,
+        externalSysId: file.sys_id,
+        direction: 'in',
+        outcome: 'copied',
+      });
+      outcome.copied += 1;
+    }
+    return outcome;
+  }
+
   // Outbound queue -----------------------------------------------------------
 
   /** Whether an outbox event type can reach a connector at all (the dispatcher's filter). */
@@ -550,9 +646,14 @@ export class SyncWorker {
           subscribedEvents: subscriptions[instance.type] ?? [],
           hasLink: link !== undefined,
           syncWorkNotes: instance.sync_work_notes,
+          attachmentVisibility: String(row.payload.visibility ?? ''),
         });
         if (!decision.enqueue) {
-          if (decision.reason === 'own_origin' || decision.reason === 'work_notes_off') {
+          if (
+            decision.reason === 'own_origin' ||
+            decision.reason === 'work_notes_off' ||
+            decision.reason === 'internal_attachment'
+          ) {
             await this.repo.insertRun(tx, {
               accountId: row.account_id,
               instanceId: instance.id,
@@ -761,6 +862,65 @@ export class SyncWorker {
       });
       detail.journal = { element, entry: written.entry.sys_id, kind };
       await this.echoGuard(tx, link.id, fieldMap, written.record);
+      return this.settleSent(tx, instance, row, ticket, started, detail, ctx, null);
+    }
+
+    // Files: only a scanned, public attachment crosses, and only once
+    // (SN-06; Security & Tenancy on visibility).
+    if (row.event === 'attachment.scanned') {
+      const attachmentId = String(row.payload.attachment_id ?? '');
+      const attachment = attachmentId ? await this.repo.attachment(tx, attachmentId) : undefined;
+      if (!attachment) throw new NotFoundException({ code: 'not_found', entity: 'attachment' });
+      if (attachment.scan_state !== 'clean' || attachment.visibility !== 'public')
+        return this.settleSkip(tx, instance, row, started, 'skipped_policy', {
+          ...detail,
+          reason: attachment.scan_state !== 'clean' ? 'not_scanned_clean' : 'internal_attachment',
+        });
+      if (await this.repo.attachmentLinkExistsForXms(tx, instance.id, attachment.id))
+        return this.settleSkip(tx, instance, row, started, 'noop', { ...detail, reason: 'already_sent' });
+      const size = Number(attachment.size_bytes);
+      if (size > instance.attachment_limit_bytes) {
+        if (instance.attachment_over_limit === 'link') {
+          await client.createJournal(
+            instance.table_name,
+            link.external_sys_id,
+            journalElement(instance.journal_public),
+            `${journalMarker(attachment.id)} ${ticket.key}: ${attachment.file_name} (${size} bytes) is over the ${instance.attachment_limit_bytes} byte copy limit and stays in XMS.`,
+          );
+        }
+        await this.repo.insertAttachmentLink(tx, {
+          accountId: instance.account_id,
+          instanceId: instance.id,
+          ticketId: row.ticket_id,
+          attachmentId: attachment.id,
+          externalSysId: `over-limit:${attachment.id}`,
+          direction: 'out',
+          outcome: instance.attachment_over_limit === 'link' ? 'linked' : 'skipped',
+        });
+        return this.settleSkip(tx, instance, row, started, 'skipped_policy', {
+          ...detail,
+          reason: 'over_limit',
+          file: attachment.file_name,
+          size,
+        });
+      }
+      const uploaded = await client.uploadAttachment(
+        instance.table_name,
+        link.external_sys_id,
+        attachment.file_name,
+        attachment.content_type,
+        await this.store.getObject(attachment.s3_key),
+      );
+      await this.repo.insertAttachmentLink(tx, {
+        accountId: instance.account_id,
+        instanceId: instance.id,
+        ticketId: row.ticket_id,
+        attachmentId: attachment.id,
+        externalSysId: uploaded.sys_id,
+        direction: 'out',
+        outcome: 'copied',
+      });
+      detail.attachment = { file: attachment.file_name, size, external: uploaded.sys_id };
       return this.settleSent(tx, instance, row, ticket, started, detail, ctx, null);
     }
 
