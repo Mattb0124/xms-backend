@@ -112,6 +112,30 @@ export interface ResponseRow {
   created_at: string;
 }
 
+/**
+ * A survey row as anything outside this module may see it. The stored token
+ * hash never leaves the module: it is the credential of the email link, and
+ * a hash in a response is a hash an attacker can work on offline.
+ */
+export type PublicSurveyRow = Omit<SurveyRow, 'token_hash'>;
+
+/** Those columns, in the order the row declares them, for a select that names them. */
+export const SURVEY_COLUMNS: readonly string[] = [
+  'id',
+  'account_id',
+  'kind',
+  'ticket_id',
+  'period',
+  'contact_id',
+  'status',
+  'sent_at',
+  'remind_at',
+  'expires_at',
+  'answered_at',
+  'suppression_reason',
+  'created_at',
+];
+
 /** The contact columns the survey needs to address someone. */
 export interface ContactLike {
   id: string;
@@ -301,12 +325,18 @@ export class CsatRepository extends RepositoryBase {
     ]);
   }
 
-  /** The recipient's own surveys of both kinds, newest first, with the ticket key and the answers when answered. */
+  /**
+   * The recipient's own surveys of both kinds, newest first, with the ticket
+   * key and the answers when answered. The columns are named rather than
+   * taken with `s.*` because `token_hash` is the credential of the email
+   * link and this row is served to a browser: a select star here would put
+   * every recipient's stored hash in a response.
+   */
   surveysOfContact(
     tx: Tx,
     contactId: string,
   ): Promise<
-    (SurveyRow & {
+    (PublicSurveyRow & {
       ticket_key: string | null;
       short_description: string | null;
       score: number | null;
@@ -315,7 +345,8 @@ export class CsatRepository extends RepositoryBase {
   > {
     return this.many(
       tx,
-      `select s.*, case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end as ticket_key,
+      `select ${SURVEY_COLUMNS.map((column) => `s.${column}`).join(', ')},
+              case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end as ticket_key,
               t.short_description, (r.answers->>'score')::int as score, r.answers
          from acct.csat_surveys s
          left join acct.tickets t on t.id = s.ticket_id

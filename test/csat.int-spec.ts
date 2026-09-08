@@ -227,6 +227,14 @@ describe('CSAT on ticket close (CP-07)', () => {
     expect(outbox.rows[0].payload).toMatchObject({ score: 2, has_comment: true });
   });
 
+  it('never carries the stored token hash, which is the credential of the email link', async () => {
+    const mine = await api().get('/v1/portal/surveys').set(bearer(portalToken)).expect(200);
+    const rows = [...mine.body.pending, ...mine.body.answered];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(Object.keys(row)).not.toContain('token_hash');
+    expect(JSON.stringify(mine.body)).not.toContain('token_hash');
+  });
+
   it('mails the link with the token in the fragment, where no server and no log sees it', async () => {
     // The token is the sole credential for the public answer route. In the
     // query string it lands in browser history, proxy and load balancer
