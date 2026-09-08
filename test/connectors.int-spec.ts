@@ -1240,6 +1240,32 @@ describe('attachments both ways (SN-06)', () => {
     );
     expect(total.rows[0].n).toBe(3);
   });
+
+  it('quarantines a file whose declared type is not one an attachment may be', async () => {
+    // The browser upload path refuses the type outright; the connector has
+    // to store what it is handed to keep the run record honest, so the file
+    // lands quarantined and is never downloadable.
+    standIn.addAttachment(String(caseB.sys_id), 'payload.exe', 'application/x-msdownload', Buffer.from('MZ...'));
+    touchCase('2028-04-01 00:00:00');
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const stored = await withSuperuser((client) =>
+      client.query(
+        `select file_name, scan_state, scan_detail from acct.attachments where ticket_id = $1 and file_name = 'payload.exe'`,
+        [ticketBId],
+      ),
+    );
+    expect(stored.rows).toHaveLength(1);
+    expect(stored.rows[0].scan_state).toBe('quarantined');
+    expect(stored.rows[0].scan_detail).toMatchObject({ reason: 'unsupported_type' });
+    const rejected = await withSuperuser((client) =>
+      client.query(
+        `select attrs from sys.security_events where event_type = 'abuse.upload.rejected' and attrs->>'via' = 'sync'`,
+      ),
+    );
+    expect(rejected.rows).toHaveLength(1);
+    expect(rejected.rows[0].attrs).toMatchObject({ reason: 'type', contentType: 'application/x-msdownload' });
+  });
 });
 
 describe('the outbound queue routes and the Sync card (SN-07, SN-09)', () => {

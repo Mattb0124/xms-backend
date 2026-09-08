@@ -427,16 +427,41 @@ export class AttachmentsService {
     },
     ctx: RequestContext,
   ): Promise<AttachmentRow> {
-    // Bytes in hand, so the image re-encode applies here exactly as it does
-    // to an image off an email: normalised format, no metadata, dimensions
-    // capped, before storage and before the scan gate (Security section 6).
     let body = input.body;
-    let storedType = input.contentType.toLowerCase();
+    let storedType = input.contentType.toLowerCase().split(';')[0].trim();
     let storedName = input.fileName;
     let reEncode: Record<string, unknown> | null = null;
     let undecodable: string | null = null;
-    let undecodableCode: 'image_not_decodable' | 'image_too_large' = 'image_not_decodable';
-    if (isReEncodedImage(storedType)) {
+    let undecodableCode: 'image_not_decodable' | 'image_too_large' | 'unsupported_type' = 'image_not_decodable';
+    // The allowlist is the platform's one statement about what an
+    // attachment may be, and a file arriving from a connector is one of the
+    // three ways an attachment arrives. The declared type comes from the
+    // polled metadata, so a hostile or compromised instance chooses it: the
+    // file is stored quarantined rather than served, and the run row says
+    // why.
+    const extension = storedName.toLowerCase().split('.').pop() ?? '';
+    const extensions = Object.hasOwn(ALLOWED_TYPES, storedType) ? ALLOWED_TYPES[storedType] : undefined;
+    const allowed = Boolean(extensions?.includes(extension));
+    if (!allowed) {
+      undecodableCode = 'unsupported_type';
+      undecodable = `the instance declared ${storedType} for a file named ${storedName}, which is not a type an attachment may be`;
+      await this.security.write(
+        {
+          type: 'abuse.upload.rejected',
+          outcome: 'denied',
+          accountId: input.accountId,
+          actorKind: 'system',
+          actorId: 'sync',
+          requestId: ctx.requestId,
+          attrs: { reason: 'type', contentType: storedType, extension, via: 'sync' },
+        },
+        tx,
+      );
+    }
+    // Bytes in hand, so the image re-encode applies here exactly as it does
+    // to an image off an email: normalised format, no metadata, dimensions
+    // capped, before storage and before the scan gate (Security section 6).
+    if (allowed && isReEncodedImage(storedType)) {
       try {
         const encoded = await reEncodeImage(input.body, storedType, input.fileName);
         body = encoded.body;
