@@ -254,6 +254,8 @@ describe('dashboards', () => {
       .set(bearer(adminToken))
       .send({ name: 'Finance', scopes: ['exports:read'], account_ids: [accountId] })
       .expect(201);
+    let subscriptionId = '';
+    let instanceId = '';
     await withSuperuser(async (client) => {
       for (const actor of ['client-a', 'client-a', 'client-b']) {
         await client.query(
@@ -266,18 +268,24 @@ describe('dashboards', () => {
         `insert into sys.security_events (event_type, outcome, actor_kind, actor_id)
          values ('abuse.webhook.bad_signature', 'denied', 'anonymous', 'anonymous')`,
       );
-      await client.query(
-        `insert into acct.webhook_subscriptions
-           (account_id, api_client_id, endpoint_url, event_types, secret_ciphertext, secret_kid, status, paused_reason)
-         values ($1, $2, 'https://client.test/hook', array['ticket.created'], 'ciphertext', 'k1', 'paused', 'continuous_failure')`,
-        [accountId, apiClient.body.id],
-      );
-      await client.query(
-        `insert into acct.connector_instances
-           (account_id, type, name, base_url, auth_kind, credential_secret_name, kill_switch, trip_reason)
-         values ($1, 'servicenow', 'Paused CSM', 'https://snow.test', 'basic', 'xms/secret', 'tripped', 'error ratio')`,
-        [accountId],
-      );
+      subscriptionId = (
+        await client.query<{ id: string }>(
+          `insert into acct.webhook_subscriptions
+             (account_id, api_client_id, endpoint_url, event_types, secret_ciphertext, secret_kid, status, paused_reason)
+           values ($1, $2, 'https://client.test/hook', array['ticket.created'], 'ciphertext', 'k1', 'paused', 'continuous_failure')
+           returning id`,
+          [accountId, apiClient.body.id],
+        )
+      ).rows[0].id;
+      instanceId = (
+        await client.query<{ id: string }>(
+          `insert into acct.connector_instances
+             (account_id, type, name, base_url, auth_kind, credential_secret_name, kill_switch, trip_reason)
+           values ($1, 'servicenow', 'Paused CSM', 'https://snow.test', 'basic', 'xms/secret', 'tripped', 'error ratio')
+           returning id`,
+          [accountId],
+        )
+      ).rows[0].id;
       await client.query(
         `insert into acct.attachments
            (account_id, ticket_id, file_name, content_type, size_bytes, s3_key, scan_state, origin, visibility, uploaded_by)
@@ -288,6 +296,13 @@ describe('dashboards', () => {
         `insert into sys.dead_letters (queue, account_id, payload, error, attempts)
          values ('outbox', $1, '{}'::jsonb, 'the endpoint refused the payload', 3)`,
         [accountId],
+      );
+      // A connector queue names the instance in its payload, which is what
+      // lets the dashboard row link to the instance rather than the queue.
+      await client.query(
+        `insert into sys.dead_letters (queue, account_id, payload, error, attempts)
+         values ('outbound', $1, jsonb_build_object('instance_id', $2::text, 'outbound_id', gen_random_uuid()::text), 'the instance refused the update', 5)`,
+        [accountId, instanceId],
       );
     });
 
@@ -303,15 +318,73 @@ describe('dashboards', () => {
       principal_kind: 'api_client',
       n: 2,
     });
+    // Each paused row names the record it stands for, so the screen can
+    // link to it rather than describing it.
     expect(dashboard.body.paused_integrations).toEqual(
       expect.arrayContaining([
-        { kind: 'webhook', reason: 'continuous_failure', n: 1 },
-        { kind: 'connector', reason: 'error ratio', n: 1 },
+        {
+          kind: 'connector_instance',
+          id: instanceId,
+          account_id: accountId,
+          account_key: 'BRK',
+          name: 'Paused CSM',
+          reason: 'error ratio',
+        },
+        {
+          kind: 'webhook_subscription',
+          id: subscriptionId,
+          account_id: accountId,
+          account_key: 'BRK',
+          name: 'https://client.test/hook',
+          reason: 'continuous_failure',
+        },
+      ]),
+    );
+    // The counts the tile reads are still there, beside the list.
+    expect(dashboard.body.paused_integrations_by_reason).toEqual(
+      expect.arrayContaining([
+        { kind: 'webhook_subscription', reason: 'continuous_failure', n: 1 },
+        { kind: 'connector_instance', reason: 'error ratio', n: 1 },
       ]),
     );
     expect(dashboard.body.quarantined_attachments).toEqual([{ origin: 'email', n: 1 }]);
-    expect(dashboard.body.open_dead_letters[0]).toMatchObject({ queue: 'outbox', n: 1 });
-    expect(new Date(dashboard.body.open_dead_letters[0].oldest).getTime()).toBeLessThanOrEqual(Date.now());
+    // A platform queue names its account and no instance; a connector
+    // queue names both, from the instance id its payload carries.
+    const letters = dashboard.body.open_dead_letters as {
+      queue: string;
+      n: number;
+      oldest: string;
+      account_id: string | null;
+      instance_id: string | null;
+      instance_name: string | null;
+    }[];
+    expect(letters).toEqual(
+      expect.arrayContaining([
+        {
+          queue: 'outbox',
+          n: 1,
+          oldest: expect.any(String),
+          account_id: accountId,
+          instance_id: null,
+          instance_name: null,
+        },
+        {
+          queue: 'outbound',
+          n: 1,
+          oldest: expect.any(String),
+          account_id: accountId,
+          instance_id: instanceId,
+          instance_name: 'Paused CSM',
+        },
+      ]),
+    );
+    expect(new Date(letters[0].oldest).getTime()).toBeLessThanOrEqual(Date.now());
+    expect(dashboard.body.open_dead_letters_by_queue).toEqual(
+      expect.arrayContaining([
+        { queue: 'outbox', n: 1, oldest: expect.any(String) },
+        { queue: 'outbound', n: 1, oldest: expect.any(String) },
+      ]),
+    );
     // Denied requests come from the same stream and keep their outcome.
     expect(
       dashboard.body.by_type.some(

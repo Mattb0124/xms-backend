@@ -288,15 +288,46 @@ export class ReportingRepository extends RepositoryBase {
    * neither `acct.webhook_subscriptions` nor `acct.connector_instances`
    * timestamps the pause, and a subscription that has been off for a month
    * is the more urgent of the two anyway. Both tables are account scoped,
-   * so the binding decides which accounts are counted.
+   * so the binding decides which accounts are listed.
+   *
+   * One row per paused thing rather than a count per reason, because the
+   * Security dashboard's job here is to hand the reader the record: the
+   * kind says which screen opens it, the id says which row, and the
+   * account says under which client. The counts stay beside it in
+   * `pausedIntegrationsByReason`.
    */
-  pausedIntegrations(tx: Tx): Promise<{ kind: string; reason: string; n: number }[]> {
+  pausedIntegrations(tx: Tx): Promise<
+    {
+      kind: 'webhook_subscription' | 'connector_instance';
+      id: string;
+      account_id: string;
+      account_key: string;
+      name: string;
+      reason: string;
+    }[]
+  > {
     return this.many(
       tx,
-      `select 'webhook' as kind, coalesce(paused_reason, 'unstated') as reason, count(*)::int as n
+      `select 'webhook_subscription' as kind, w.id::text as id, w.account_id::text as account_id,
+              a.key as account_key, w.endpoint_url as name, coalesce(w.paused_reason, 'unstated') as reason
+         from acct.webhook_subscriptions w join op.accounts a on a.id = w.account_id
+        where w.status = 'paused'
+       union all
+       select 'connector_instance', c.id::text, c.account_id::text, a.key, c.name, coalesce(c.trip_reason, 'unstated')
+         from acct.connector_instances c join op.accounts a on a.id = c.account_id
+        where c.kill_switch = 'tripped'
+       order by 1, 4, 5`,
+    );
+  }
+
+  /** The same two tables counted by kind and reason: the tile above the list. */
+  pausedIntegrationsByReason(tx: Tx): Promise<{ kind: string; reason: string; n: number }[]> {
+    return this.many(
+      tx,
+      `select 'webhook_subscription' as kind, coalesce(paused_reason, 'unstated') as reason, count(*)::int as n
          from acct.webhook_subscriptions where status = 'paused' group by 1, 2
        union all
-       select 'connector', coalesce(trip_reason, 'unstated'), count(*)::int
+       select 'connector_instance', coalesce(trip_reason, 'unstated'), count(*)::int
          from acct.connector_instances where kill_switch = 'tripped' group by 1, 2
        order by 3 desc`,
     );
@@ -315,10 +346,46 @@ export class ReportingRepository extends RepositoryBase {
 
   /**
    * The queues with work nobody has claimed back (`sys.dead_letters`,
-   * `resolution = 'open'`). Operator wide, like the rest of the sys stream:
-   * a dead letter is an operations signal before it is an account one.
+   * `resolution = 'open'`), split far enough for the reader to open the
+   * record: the queue, the account the failure belongs to and, where the
+   * queue is a connector queue, the instance its payload names
+   * (`inbox` and `outbound` both carry `instance_id`).
+   *
+   * `sys.dead_letters` is an operator table with no policy of its own, so
+   * this half binds to the grants the way the usage tiles and the audit
+   * search do: an account row is listed only where the reader is bound to
+   * that account, and a row with no account (the platform queues) is
+   * always listed. The portfolio count stays operator wide in
+   * `openDeadLettersByQueue`, which is the figure the tile shows.
    */
-  openDeadLetters(tx: Tx): Promise<{ queue: string; n: number; oldest: string }[]> {
+  openDeadLetters(
+    tx: Tx,
+    accountIds: readonly string[],
+  ): Promise<
+    {
+      queue: string;
+      n: number;
+      oldest: string;
+      account_id: string | null;
+      instance_id: string | null;
+      instance_name: string | null;
+    }[]
+  > {
+    return this.many(
+      tx,
+      `select d.queue, count(*)::int as n, min(d.first_failed_at) as oldest,
+              d.account_id::text as account_id, d.payload->>'instance_id' as instance_id, max(c.name) as instance_name
+         from sys.dead_letters d
+         left join acct.connector_instances c on c.id::text = d.payload->>'instance_id'
+        where d.resolution = 'open' and (d.account_id is null or d.account_id = any ($1::uuid[]))
+        group by d.queue, d.account_id, d.payload->>'instance_id'
+        order by 2 desc, 1`,
+      [[...accountIds]],
+    );
+  }
+
+  /** The portfolio depth per queue, operator wide: a dead letter is an operations signal first. */
+  openDeadLettersByQueue(tx: Tx): Promise<{ queue: string; n: number; oldest: string }[]> {
     return this.many(
       tx,
       `select queue, count(*)::int as n, min(first_failed_at) as oldest from sys.dead_letters

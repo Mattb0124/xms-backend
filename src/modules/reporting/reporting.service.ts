@@ -397,9 +397,17 @@ export class ReportingService {
    *   `by_type` carries with its outcome.
    * - `paused_integrations` from `acct.webhook_subscriptions.status` and
    *   `acct.connector_instances.kill_switch`, both account scoped, so the
-   *   binding decides which accounts are counted.
+   *   binding decides which accounts are listed. One row per paused thing,
+   *   carrying the `kind` (`webhook_subscription` or `connector_instance`),
+   *   its `id`, its account and a display name, so the reader can open the
+   *   record instead of going looking for it;
+   *   `paused_integrations_by_reason` keeps the count per kind and reason.
    * - `quarantined_attachments` from `acct.attachments.scan_state`.
-   * - `open_dead_letters` from `sys.dead_letters`.
+   * - `open_dead_letters` from `sys.dead_letters`, split by queue, account
+   *   and the connector instance its payload names where the queue has
+   *   one, and bound to the reader's grants because that table carries no
+   *   policy of its own; `open_dead_letters_by_queue` is the operator-wide
+   *   depth per queue.
    *
    * Nothing here is derived from a table the platform does not have; a
    * signal with no source is left out rather than guessed at.
@@ -412,8 +420,10 @@ export class ReportingService {
       abuse_by_kind: await this.reporting.abuseByKind(tx, days),
       rate_limited_clients: await this.reporting.rateLimitedClients(tx, days),
       paused_integrations: await this.reporting.pausedIntegrations(tx),
+      paused_integrations_by_reason: await this.reporting.pausedIntegrationsByReason(tx),
       quarantined_attachments: await this.reporting.quarantinedAttachments(tx, days),
-      open_dead_letters: await this.reporting.openDeadLetters(tx),
+      open_dead_letters: await this.reporting.openDeadLetters(tx, principal.accountIds),
+      open_dead_letters_by_queue: await this.reporting.openDeadLettersByQueue(tx),
     }));
   }
 
