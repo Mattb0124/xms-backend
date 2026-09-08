@@ -299,6 +299,16 @@ export class ReportingService {
       const limit = Math.min(query.limit ?? 100, 500);
       const translated = translateEvents(query, 0);
       const values = [...translated.values];
+      // The grant clause, not the conditions, decides which accounts are
+      // readable. Two of the four tables behind rpt.events_v carry forced
+      // row-level security and the binding filters them already;
+      // sys.security_events is an operator table with no policy of its own,
+      // so without this an audit:read holder bound to one account would
+      // read another account's security rows. Rows with no account (the
+      // operator audit stream and the portfolio-wide security events) stay
+      // visible: that is the operator scope the permission grants.
+      values.push(principal.accountIds);
+      const grantClause = ` and (account_id is null or account_id = any ($${values.length}::uuid[]))`;
       let cursorClause = '';
       if (query.cursor) {
         const parsed = decodeCursor(query.cursor);
@@ -307,7 +317,7 @@ export class ReportingService {
       }
       values.push(limit + 1);
       const rows = await tx.query<Record<string, unknown>>(
-        `select * from rpt.events_v where ${translated.sql}${cursorClause} order by occurred_at desc, id desc limit $${values.length}`,
+        `select * from rpt.events_v where ${translated.sql}${grantClause}${cursorClause} order by occurred_at desc, id desc limit $${values.length}`,
         values,
       );
       const items = rows.rows.slice(0, limit);

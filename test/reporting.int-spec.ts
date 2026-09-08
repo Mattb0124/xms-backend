@@ -335,6 +335,66 @@ describe('audit search', () => {
       .expect(201);
     expect(second.body.items.map((row: { id: string }) => row.id)).not.toContain(first.body.items[0].id);
   });
+
+  it('answers from the operator audit stream and stops at the searcher’s account grants', async () => {
+    // An auditor holds audit:read on one account only; the bootstrap
+    // administrator binds every live account, so the two see a different
+    // slice of the same streams.
+    const role = await api()
+      .post('/v1/admin/roles')
+      .set(bearer(adminToken))
+      .send({ catalog: 'operator', name: 'Auditor', permissions: ['audit:read'] })
+      .expect(201);
+    await api()
+      .post('/v1/admin/users')
+      .set(bearer(adminToken))
+      .send({
+        email: 'ada@example.test',
+        first_name: 'Ada',
+        last_name: 'Reed',
+        role_ids: [role.body.id],
+        account_ids: [accountId],
+      })
+      .expect(201);
+    const auditorToken = await devToken({ sub: 'dev_ada', email: 'ada@example.test', sid: 'sess_ada' });
+    const search = (token: string, body: Record<string, unknown>) =>
+      api().post('/v1/audit/search').set(bearer(token)).send(body).expect(201);
+
+    // Administering a user is audited without an account, so the search
+    // has to reach op.audit_events as well as the account stream.
+    const operator = await search(auditorToken, {
+      conditions: [
+        { field: 'stream', op: 'eq', value: 'audit' },
+        { field: 'entity_kind', op: 'eq', value: 'user' },
+      ],
+      limit: 50,
+    });
+    expect(operator.body.items.length).toBeGreaterThan(0);
+    expect(operator.body.items.every((row: { account_id: string | null }) => row.account_id === null)).toBe(true);
+    expect(operator.body.items.every((row: { attrs: { scope?: string } }) => row.attrs.scope === 'operator')).toBe(
+      true,
+    );
+
+    // The other account's rows are invisible to a grant that does not name it.
+    const foreign = { field: 'account_id', op: 'eq', value: otherAccountId };
+    const refused = await search(auditorToken, { conditions: [foreign], limit: 50 });
+    expect(refused.body.items).toEqual([]);
+    const seen = await search(adminToken, { conditions: [foreign], limit: 50 });
+    expect(seen.body.items.length).toBeGreaterThan(0);
+
+    // Its own account reads normally, and an unfiltered page never leaks
+    // the other one either.
+    const own = await search(auditorToken, {
+      conditions: [{ field: 'account_id', op: 'eq', value: accountId }],
+      limit: 50,
+    });
+    expect(own.body.items.length).toBeGreaterThan(0);
+    const everything = await search(auditorToken, { conditions: [], limit: 500 });
+    expect(everything.body.items.some((row: { account_id: string | null }) => row.account_id === otherAccountId)).toBe(
+      false,
+    );
+    expect(everything.body.items.some((row: { account_id: string | null }) => row.account_id === accountId)).toBe(true);
+  });
 });
 
 describe('report packs and snapshots', () => {
