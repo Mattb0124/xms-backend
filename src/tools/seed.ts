@@ -8,6 +8,7 @@ import { expandPermissions, OPERATOR_PERMISSIONS, type Permission } from '../con
 import { UnitOfWork } from '../db/unit-of-work.js';
 import { AiSettingsService } from '../modules/ai/ai-settings.service.js';
 import { ConnectorsService } from '../modules/connectors/connectors.service.js';
+import { CapacityService } from '../modules/capacity/capacity.module.js';
 import { RosterService } from '../modules/roster/roster.module.js';
 import { AccountsRepository } from '../modules/admin/accounts/accounts.repository.js';
 import { BootstrapService } from '../modules/admin/bootstrap.service.js';
@@ -131,6 +132,67 @@ const SEED_STATE_MAP = {
   },
 };
 
+/** The skills matrix reads a catalog and a level per person; four levels, one meaning each. */
+const SKILLS = [
+  { kind: 'technology', code: 'onestream', name: 'OneStream platform' },
+  { kind: 'technology', code: 'sql', name: 'SQL and data loads' },
+  { kind: 'technology', code: 'networking', name: 'Networking and VPN' },
+  { kind: 'process', code: 'financial_close', name: 'Financial close' },
+  { kind: 'process', code: 'incident_management', name: 'Incident management' },
+  { kind: 'account', code: 'brookfield_estate', name: 'Brookfield estate' },
+] as const;
+
+/** Levels per role, so the matrix reads as a team rather than as noise. */
+const SKILL_LEVELS: Record<string, readonly (readonly [string, number])[]> = {
+  Consultant: [
+    ['onestream', 3],
+    ['sql', 3],
+    ['financial_close', 2],
+    ['incident_management', 3],
+  ],
+  Dispatcher: [
+    ['incident_management', 4],
+    ['networking', 2],
+  ],
+  'Account Owner': [
+    ['financial_close', 3],
+    ['brookfield_estate', 4],
+    ['incident_management', 2],
+  ],
+  Finance: [['financial_close', 4]],
+};
+
+/** Pipeline and project demand for the Demand screen, in the three months ahead. */
+const DEMAND = [
+  { source: 'project', account: 'BRK', role: 'consultant', hours: 120, monthOffset: 0, probability: 1 },
+  { source: 'project', account: 'AUS', role: 'consultant', hours: 80, monthOffset: 0, probability: 1 },
+  { source: 'project', account: 'BRK', role: 'consultant', hours: 90, monthOffset: 1, probability: 1 },
+  { source: 'pipeline', prospect: 'Meridian Foods', role: 'consultant', hours: 160, monthOffset: 1, probability: 0.6 },
+  { source: 'pipeline', prospect: 'Calder Energy', role: 'dispatcher', hours: 60, monthOffset: 2, probability: 0.3 },
+  { source: 'pipeline', prospect: 'Meridian Foods', role: 'consultant', hours: 200, monthOffset: 2, probability: 0.6 },
+] as const;
+
+/** One rate card per account, the roles the roster actually uses. */
+const RATES: Record<string, readonly { role: string; bill_rate: number }[]> = {
+  BRK: [
+    { role: 'consultant', bill_rate: 185 },
+    { role: 'dispatcher', bill_rate: 120 },
+    { role: 'account_owner', bill_rate: 240 },
+    { role: 'finance', bill_rate: 140 },
+  ],
+  AUS: [
+    { role: 'consultant', bill_rate: 210 },
+    { role: 'dispatcher', bill_rate: 135 },
+    { role: 'account_owner', bill_rate: 265 },
+    { role: 'finance', bill_rate: 155 },
+  ],
+};
+
+const CSAT_ANSWERS = [
+  { score: 5, comment: 'Fixed the same morning and explained what had changed.' },
+  { score: 4, comment: 'Good work; the update could have come a little sooner.' },
+] as const;
+
 const CATEGORIES = ['Network / VPN', 'Access', 'Finance close', 'Reporting', 'Hardware', 'Integration'] as const;
 const LEVELS = ['high', 'medium', 'low'] as const;
 const ACTIVITIES = ['analysis', 'development', 'testing', 'client_meeting', 'documentation'] as const;
@@ -163,6 +225,7 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
   const knowledge = app.get(KnowledgeService);
   const aiSettings = app.get(AiSettingsService);
   const connectors = app.get(ConnectorsService);
+  const capacity = app.get(CapacityService);
   const random = generator(20260907);
   const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
   const between = (low: number, high: number): number => low + Math.floor(random() * (high - low + 1));
@@ -218,7 +281,10 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
       accounts.insert(tx, { key: seed.key, name: seed.name, default_time_zone: seed.tz }),
     );
     accountIds.set(seed.key, account.id);
-    await uow.worker([account.id], async (tx) => {
+    // The seed is a tool, not the worker: it acts as the administrator on
+    // the accounts it is creating, so it binds them on the app role. The
+    // worker role is deliberately narrower in the operator schema (0026).
+    await uow.system([account.id], async (tx) => {
       await accounts.insertSettings(tx, account.id);
       await audit.account(tx, account.id, SYSTEM_ACTOR, {}, [
         {
@@ -274,6 +340,12 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
           allAccounts.map((accountId) => ({ roleId: role.id, accountId })),
         );
       }
+      // An account-scoped role assignment only counts where a grant row
+      // exists, so without this every desk user but the bootstrap
+      // administrator resolves to no accounts and no permissions
+      // (REVIEW-frontend 2026-09-08 finding 5). Idempotent: replaceGrants
+      // adds only what is missing.
+      await users.replaceGrants(tx, user.id, allAccounts, 'seed');
       team.set(member.email, user.id);
       if (member.group) membership.set(member.group, [...(membership.get(member.group) ?? []), user.id]);
     }
@@ -295,6 +367,8 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
         service.id,
         allAccounts.map((accountId) => ({ roleId: consultant.id, accountId })),
       );
+      // The worker's AI intake runs as this principal and needs the same grants.
+      await users.replaceGrants(tx, service.id, allAccounts, 'seed');
       usersCreated += 1;
     }
     for (const seed of ACCOUNTS) {
@@ -398,7 +472,7 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
   const consultants = TEAM.filter((member) => member.role === 'Consultant').map((member) => team.get(member.email)!);
   for (const seed of ACCOUNTS) {
     const accountId = accountIds.get(seed.key)!;
-    const count = await uow.worker([accountId], (tx) =>
+    const count = await uow.system([accountId], (tx) =>
       tx.query<{ n: number }>(`select count(*)::int as n from acct.tickets where account_id = $1`, [accountId]),
     );
     const missing = perAccount - Number(count.rows[0].n);
@@ -499,7 +573,7 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
   async function backdate(ticketId: string, accountId: string, ageDays: number): Promise<void> {
     if (ageDays === 0) return;
     const shift = `${ageDays} days`;
-    await uow.worker([accountId], async (tx) => {
+    await uow.system([accountId], async (tx) => {
       await audit.account(tx, accountId, SYSTEM_ACTOR, ctx, [
         {
           entityKind: 'ticket',
@@ -535,6 +609,164 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
   const roster = app.get(RosterService);
   const imported = await roster.importFromDirectory(principal, ctx);
   if (imported.created > 0) log(`roster: ${imported.created} people imported from the directory`);
+
+  // Skills, allocations and demand -------------------------------------------
+  // Whole screens had nothing to show because these tables were empty
+  // (REVIEW-frontend 2026-09-08 finding 6). Everything below is idempotent
+  // and derived from the deterministic generator, so a second run adds
+  // nothing and two environments look the same.
+  const people = await roster.list(principal, {});
+  const personByEmail = new Map(people.map((person) => [person.email.toLowerCase(), person]));
+  const roleOf = new Map(TEAM.map((member) => [member.email, member.role as string]));
+
+  const catalog = await roster.skillsCatalog(principal, true);
+  for (const skill of SKILLS) {
+    if (catalog.some((row) => row.code === skill.code)) continue;
+    await roster.createSkill(principal, ctx, {
+      kind: skill.kind,
+      code: skill.code,
+      name: skill.name,
+      account_id: skill.code === 'brookfield_estate' ? accountIds.get('BRK') : undefined,
+    } as never);
+  }
+  let skillsSet = 0;
+  for (const member of TEAM) {
+    const person = personByEmail.get(member.email);
+    if (!person) continue;
+    if ((await roster.personSkills(principal, person.id)).length > 0) continue;
+    const levels = SKILL_LEVELS[roleOf.get(member.email) ?? ''] ?? [];
+    if (levels.length === 0) continue;
+    await roster.setSkills(principal, ctx, person.id, {
+      skills: levels.map(([code, level]) => ({ code, level })),
+    } as never);
+    skillsSet += 1;
+  }
+  if (skillsSet > 0) log(`skills: catalog of ${SKILLS.length}, levels set for ${skillsSet} people`);
+
+  const monthOf = (offset: number): string => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + offset, 1)).toISOString().slice(0, 10);
+  };
+  const thisMonth = monthOf(0);
+  const existingAllocations = await capacity.allocations(principal, { from: thisMonth, to: monthOf(2) });
+  if ((existingAllocations as { cells?: unknown[] }).cells?.length === 0 || !('cells' in existingAllocations)) {
+    const cells: { person_id: string; account_id: string; month: string; planned_minutes: number }[] = [];
+    for (const member of TEAM) {
+      const person = personByEmail.get(member.email);
+      if (!person) continue;
+      for (const [index, key] of ACCOUNTS.map((account) => account.key).entries()) {
+        for (const offset of [0, 1]) {
+          // Half a week per account per month for the first, a third for the
+          // second, so the grid shows a split rather than a flat line.
+          const hours = index === 0 ? 60 : 40;
+          cells.push({
+            person_id: person.id,
+            account_id: accountIds.get(key)!,
+            month: monthOf(offset),
+            planned_minutes: (hours - offset * 10) * 60,
+          });
+        }
+      }
+    }
+    if (cells.length > 0) {
+      await capacity.putAllocations(principal, ctx, { cells } as never);
+      log(`capacity: ${cells.length} allocation cells`);
+    }
+  }
+
+  const currentDemand = await capacity.demand(principal, { from: thisMonth, to: monthOf(3) });
+  if (((currentDemand as { rows?: unknown[] }).rows ?? []).length === 0) {
+    for (const row of DEMAND) {
+      await capacity.addDemand(principal, ctx, {
+        source: row.source,
+        account_id: 'account' in row ? accountIds.get(row.account)! : undefined,
+        prospect_name: 'prospect' in row ? row.prospect : undefined,
+        month: monthOf(row.monthOffset),
+        hours: row.hours,
+        probability: row.probability,
+        role: row.role,
+      } as never);
+    }
+    log(`demand: ${DEMAND.length} rows`);
+  }
+
+  // Rate cards, a billing period and satisfaction ----------------------------
+  for (const seed of ACCOUNTS) {
+    const accountId = accountIds.get(seed.key)!;
+    if ((await time.rateCards(principal, accountId)).length === 0) {
+      await time.createRateCard(principal, ctx, accountId, {
+        effective_from: monthOf(-6),
+        currency: seed.key === 'AUS' ? 'AUD' : 'GBP',
+        note: 'Seeded standard rates',
+        entries: RATES[seed.key],
+      } as never);
+      log(`account ${seed.key}: rate card from ${monthOf(-6)}`);
+    }
+    if ((await time.billingPeriods(principal, accountId)).length === 0) {
+      const startsOn = monthOf(-1);
+      const endsOn = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 0))
+        .toISOString()
+        .slice(0, 10);
+      await time.createBillingPeriod(principal, ctx, accountId, { starts_on: startsOn, ends_on: endsOn } as never);
+      log(`account ${seed.key}: billing period ${startsOn} to ${endsOn}`);
+    }
+  }
+
+  // Two answered surveys per account so Satisfaction and the portal have
+  // something to show. The link token is never needed here, so only its
+  // hash is written, exactly as the service does.
+  let surveysCreated = 0;
+  for (const seed of ACCOUNTS) {
+    const accountId = accountIds.get(seed.key)!;
+    await uow.system([accountId], async (tx) => {
+      const existing = await tx.query<{ n: number }>(
+        'select count(*)::int as n from acct.csat_surveys where account_id = $1',
+        [accountId],
+      );
+      if (Number(existing.rows[0].n) > 0) return;
+      const closed = await tx.query<{ id: string; requester_contact_id: string | null }>(
+        `select id, requester_contact_id from acct.tickets
+          where account_id = $1 and state in ('closed', 'resolved') and requester_contact_id is not null
+          order by number limit $2`,
+        [accountId, CSAT_ANSWERS.length],
+      );
+      for (const [index, ticket] of closed.rows.entries()) {
+        const answer = CSAT_ANSWERS[index];
+        const survey = await tx.query<{ id: string }>(
+          `insert into acct.csat_surveys (account_id, kind, ticket_id, contact_id, token_hash, status, sent_at, answered_at)
+           values ($1, 'ticket_close', $2, $3, encode(sha256(gen_random_uuid()::text::bytea), 'hex'), 'answered',
+                   now() - interval '5 days', now() - interval '4 days')
+           on conflict do nothing returning id`,
+          [accountId, ticket.id, ticket.requester_contact_id],
+        );
+        const surveyId = survey.rows[0]?.id;
+        if (!surveyId) continue;
+        await tx.query(
+          `insert into acct.csat_responses (account_id, survey_id, answers, comment) values ($1, $2, $3, $4)`,
+          [accountId, surveyId, JSON.stringify({ score: answer.score }), answer.comment],
+        );
+        surveysCreated += 1;
+      }
+    });
+  }
+  if (surveysCreated > 0) log(`satisfaction: ${surveysCreated} answered surveys`);
+
+  // Published articles the client portal can actually find.
+  let visibilityRows = 0;
+  for (const seed of ACCOUNTS) {
+    const accountId = accountIds.get(seed.key)!;
+    for (const articleId of articleIds.get(seed.key) ?? []) {
+      await uow.system([accountId], async (tx) => {
+        const inserted = await tx.query(
+          `insert into acct.article_visibility (article_id, account_id, visible_account_id, granted_by)
+           values ($1, $2, $2, 'seed') on conflict do nothing`,
+          [articleId, accountId],
+        );
+        visibilityRows += inserted.rowCount ?? 0;
+      });
+    }
+  }
+  if (visibilityRows > 0) log(`knowledge: ${visibilityRows} articles visible to their account portal`);
 
   // A ServiceNow instance against the local stand-in, when one is reachable ------
   let connectorsCreated = 0;

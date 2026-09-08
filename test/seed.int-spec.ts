@@ -99,6 +99,57 @@ describe('seed:dev', () => {
     expect(ai.rows).toEqual([{ key: 'BRK', enabled: true }]);
   });
 
+  it('grants every desk user the accounts their roles name, so the desk is usable on first run', async () => {
+    // Without the grant rows an account-scoped role assignment counts for
+    // nothing and every seeded user but the bootstrap administrator resolves
+    // to no accounts and no permissions (REVIEW-frontend 2026-09-08 finding 5).
+    const grants = await withSuperuser((client) =>
+      client.query<{ email: string; n: number }>(
+        `select u.email, count(g.account_id)::int as n from op.users u
+           left join op.account_grants g on g.user_id = u.id
+          where u.kind in ('internal', 'service') group by u.email order by u.email`,
+      ),
+    );
+    const desk = grants.rows.filter((row) => row.email !== 'admin@example.test');
+    expect(desk.length).toBeGreaterThanOrEqual(7);
+    for (const row of desk) expect(row.n, row.email).toBe(2);
+  });
+
+  it('fills the screens that were empty: skills, capacity, demand, rates, billing and satisfaction', async () => {
+    const counts = await withSuperuser((client) =>
+      client.query<Record<string, number>>(
+        `select (select count(*)::int from op.skills) as skills,
+                (select count(*)::int from op.person_skills) as person_skills,
+                (select count(distinct person_id)::int from op.person_skills) as skilled_people,
+                (select count(*)::int from op.allocations) as allocations,
+                (select count(distinct account_id)::int from op.allocations) as allocated_accounts,
+                (select count(*)::int from op.pipeline_demand) as demand,
+                (select count(*)::int from op.pipeline_demand where source = 'pipeline') as pipeline,
+                (select count(*)::int from acct.rate_cards) as rate_cards,
+                (select count(*)::int from acct.rate_card_entries) as rate_entries,
+                (select count(*)::int from acct.billing_periods) as periods,
+                (select count(*)::int from acct.csat_surveys where status = 'answered') as answered,
+                (select count(*)::int from acct.csat_responses) as responses,
+                (select count(*)::int from acct.article_visibility) as visibility`,
+      ),
+    );
+    const row = counts.rows[0];
+    expect(row.skills).toBe(6);
+    expect(row.skilled_people).toBeGreaterThanOrEqual(6);
+    expect(row.person_skills).toBeGreaterThan(row.skilled_people);
+    expect(row.allocations).toBeGreaterThan(0);
+    expect(row.allocated_accounts).toBe(2);
+    expect(row.demand).toBe(6);
+    expect(row.pipeline).toBeGreaterThan(0);
+    expect(row.rate_cards).toBe(2);
+    expect(row.rate_entries).toBe(8);
+    expect(row.periods).toBe(2);
+    expect(row.answered).toBe(4);
+    expect(row.responses).toBe(4);
+    // One row per published article, so the portal knowledge base is not empty.
+    expect(row.visibility).toBe(4);
+  });
+
   it('is idempotent: a second run creates nothing', async () => {
     const before = await withSuperuser((client) =>
       client.query<{ n: number }>(`select count(*)::int as n from acct.tickets`),
@@ -109,5 +160,27 @@ describe('seed:dev', () => {
       client.query<{ n: number }>(`select count(*)::int as n from acct.tickets`),
     );
     expect(after.rows[0].n).toBe(before.rows[0].n);
+    const repeated = await withSuperuser((client) =>
+      client.query<Record<string, number>>(
+        `select (select count(*)::int from op.skills) as skills,
+                (select count(*)::int from op.allocations) as allocations,
+                (select count(*)::int from op.pipeline_demand) as demand,
+                (select count(*)::int from acct.rate_cards) as rate_cards,
+                (select count(*)::int from acct.billing_periods) as periods,
+                (select count(*)::int from acct.csat_surveys) as surveys,
+                (select count(*)::int from op.account_grants) as grants,
+                (select count(*)::int from acct.article_visibility) as visibility`,
+      ),
+    );
+    expect(repeated.rows[0]).toEqual({
+      skills: 6,
+      allocations: 24,
+      demand: 6,
+      rate_cards: 2,
+      periods: 2,
+      surveys: 4,
+      grants: 14,
+      visibility: 4,
+    });
   });
 });
