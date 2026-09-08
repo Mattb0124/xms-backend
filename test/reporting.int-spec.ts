@@ -539,6 +539,59 @@ describe('audit search', () => {
     );
     expect(everything.body.items.some((row: { account_id: string | null }) => row.account_id === accountId)).toBe(true);
   });
+
+  it('the null tests express the Portfolio-wide filter and its complement', async () => {
+    const search = (body: Record<string, unknown>) =>
+      api().post('/v1/audit/search').set(bearer(adminToken)).send(body).expect(201);
+
+    // Portfolio-wide: the rows that belong to no client. In the audit
+    // stream those are exactly the operator rows, which is what the screen
+    // labels Portfolio.
+    const portfolio = await search({
+      conditions: [
+        { field: 'stream', op: 'eq', value: 'audit' },
+        { field: 'account_id', op: 'is_null' },
+      ],
+      limit: 200,
+    });
+    expect(portfolio.body.items.length).toBeGreaterThan(0);
+    expect(portfolio.body.items.every((row: { account_id: string | null }) => row.account_id === null)).toBe(true);
+    expect(portfolio.body.items.every((row: { attrs: { scope?: string } }) => row.attrs.scope === 'operator')).toBe(
+      true,
+    );
+
+    // Its complement excludes them and names an account on every row.
+    const clients = await search({
+      conditions: [
+        { field: 'stream', op: 'eq', value: 'audit' },
+        { field: 'account_id', op: 'is_not_null' },
+      ],
+      limit: 200,
+    });
+    expect(clients.body.items.length).toBeGreaterThan(0);
+    expect(clients.body.items.every((row: { account_id: string | null }) => row.account_id !== null)).toBe(true);
+    expect(clients.body.items.some((row: { attrs: { scope?: string } }) => row.attrs.scope === 'operator')).toBe(false);
+    const portfolioIds = new Set(portfolio.body.items.map((row: { id: string }) => row.id));
+    expect(clients.body.items.some((row: { id: string }) => portfolioIds.has(row.id))).toBe(false);
+
+    // A null test on a column every branch of the view writes is refused,
+    // and so is one that carries a value.
+    const notNullable = await api()
+      .post('/v1/audit/search')
+      .set(bearer(adminToken))
+      .send({ conditions: [{ field: 'stream', op: 'is_null' }] })
+      .expect(400);
+    expect(notNullable.body).toMatchObject({
+      code: 'invalid_conditions',
+      problems: ['condition 0: is_null needs a nullable field'],
+    });
+    const withValue = await api()
+      .post('/v1/audit/search')
+      .set(bearer(adminToken))
+      .send({ conditions: [{ field: 'account_id', op: 'is_null', value: accountId }] })
+      .expect(400);
+    expect(withValue.body.problems).toEqual(['condition 0: is_null takes no value']);
+  });
 });
 
 describe('report packs and snapshots', () => {
