@@ -42,7 +42,7 @@ import type { AuditEventType } from '../../contracts/events.js';
 import { OutboxService } from '../../common/outbox/outbox.service.js';
 import type { Principal } from '../../common/auth/principal.js';
 import type { MailTransport } from '../../common/mail/mail-transport.js';
-import type { ObjectStore } from '../../common/storage/object-store.js';
+import { MAX_PRESIGN_SECONDS, type ObjectStore } from '../../common/storage/object-store.js';
 import { MAIL_TRANSPORT, OBJECT_STORE, StorageCoreModule } from '../../common/storage/storage.module.js';
 import { DbPools } from '../../db/pool.js';
 import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
@@ -84,12 +84,21 @@ import { PDF_CONTENT_TYPE, PPTX_CONTENT_TYPE, ReportingService } from './reporti
 
 /**
  * Presigned delivery and review links live as long as the delivery email
- * says they do: fourteen days (Dashboards & Report Packs functional 5.7).
- * The number is written once, and the email copy words it from the same
- * constant, so a link cannot outlive or undercut what the client was told.
+ * says they do, and the email copy is worded from this constant, so a link
+ * cannot outlive or undercut what the client was told.
+ *
+ * Dashboards & Reporting functional 5.7 asks for fourteen days. A presigned
+ * URL cannot carry that: SigV4 refuses an `X-Amz-Expires` over seven days
+ * at redemption, so fourteen would have told the client a fortnight and
+ * handed them an error. Seven days is the signer's maximum and is what the
+ * link and the email both now say. Meeting 5.7 in full needs a stored,
+ * revocable, account-bound delivery token that redeems into a short
+ * presign, in the shape the CSAT survey token already demonstrates; that is
+ * a redemption route and a rate-limit policy, and is recorded as the
+ * follow-up rather than smuggled in here.
  */
-const DELIVERY_LINK_DAYS = 14;
-const LINK_SECONDS = DELIVERY_LINK_DAYS * 24 * 3600;
+const DELIVERY_LINK_DAYS = MAX_PRESIGN_SECONDS / (24 * 3600);
+const LINK_SECONDS = MAX_PRESIGN_SECONDS;
 
 /** Recipient ids are user uuids; a distribution row may carry an address instead. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

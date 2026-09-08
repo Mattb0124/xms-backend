@@ -39,6 +39,22 @@ export interface ObjectStore {
   deleteObject(key: string): Promise<void>;
 }
 
+/**
+ * The longest life a presigned link may be given. AWS SigV4 refuses an
+ * `X-Amz-Expires` over 604800 seconds at redemption, so a longer one is not
+ * a longer link, it is a link that does not work, and with instance-role
+ * credentials it dies with them sooner than that. The assertion lives here
+ * rather than at the call sites so no caller can mint an invalid URL.
+ */
+export const MAX_PRESIGN_SECONDS = 7 * 24 * 3600;
+
+export function assertPresignLife(seconds: number | undefined): number {
+  const life = seconds ?? 300;
+  if (life <= 0 || life > MAX_PRESIGN_SECONDS)
+    throw new Error(`A presigned link may live at most ${MAX_PRESIGN_SECONDS} seconds, not ${life}`);
+  return life;
+}
+
 const KEY = /^[A-Za-z0-9._\-/]{1,512}$/;
 
 export function assertObjectKey(key: string): string {
@@ -100,7 +116,7 @@ export class LocalObjectStore implements ObjectStore {
     options: { fileName: string; contentType: string; expiresSeconds?: number },
   ): Promise<string> {
     assertObjectKey(key);
-    const expires = Math.floor(Date.now() / 1000) + (options.expiresSeconds ?? 300);
+    const expires = Math.floor(Date.now() / 1000) + assertPresignLife(options.expiresSeconds);
     // The URL also carries the file name and the content type, and both go
     // straight into the response headers, so both are signed: a link holder
     // must not be able to flip the type to text/html.

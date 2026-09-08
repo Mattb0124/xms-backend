@@ -8,7 +8,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { assertObjectKey, type ObjectStore, type PresignedUpload } from './object-store.js';
+import { assertObjectKey, assertPresignLife, type ObjectStore, type PresignedUpload } from './object-store.js';
 
 /** S3 implementation (Security & Tenancy 6): presigned POST with content-length-range and a content type condition. */
 export class S3ObjectStore implements ObjectStore {
@@ -61,7 +61,7 @@ export class S3ObjectStore implements ObjectStore {
         ResponseContentDisposition: `attachment; filename="${options.fileName.replace(/["\r\n]/g, '')}"`,
         ResponseContentType: options.contentType,
       }),
-      { expiresIn: options.expiresSeconds ?? 300 },
+      { expiresIn: assertPresignLife(options.expiresSeconds) },
     );
   }
 
