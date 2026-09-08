@@ -17,6 +17,15 @@ import { TimeCoreModule, TimeService } from '../time/time.module.js';
  *
  * The counts overlap on purpose: a low satisfaction score is also an unread
  * notification. The rail names both because they are two different actions.
+ *
+ * Every link is an address the internal web application registers
+ * (`frontend/lib/routes.ts`), written in that application's own URL grammar
+ * (`frontend/lib/tickets/queue-views.ts` for the Queue, `?tab=` for the
+ * account records). The rail used to answer a URL space of its own
+ * invention (`/queue`, `/timesheet`, `/reports/runs`), which the browser
+ * had to translate before it could follow anything; nothing here invents an
+ * address any more, and a row whose action has no screen carries no link
+ * rather than a broken one.
  */
 
 /**
@@ -48,7 +57,14 @@ export interface WaitingItem {
   readonly key: string;
   readonly label: string;
   readonly count: number;
-  readonly link: string;
+  /** Where the application opens this row; absent when the desk has no screen for it. */
+  readonly link?: string;
+}
+
+/** A count and, where the row opens one record, the account that record belongs to. */
+interface CountWithAccount {
+  readonly count: number;
+  readonly account_id: string | null;
 }
 
 export interface WaitingOnMe {
@@ -100,10 +116,16 @@ export class WaitingRepository extends RepositoryBase {
    * no owner column, so account ownership is what "schedules I own" means
    * here; the day a schedule gains an owner this clause follows it.
    */
-  reportReviews(tx: Tx, userId: string): Promise<number> {
-    return this.scalar(
+  reportReviews(tx: Tx, userId: string): Promise<CountWithAccount> {
+    return this.countWithAccount(
       tx,
-      `select count(*)::int as count from acct.report_runs r
+      `select count(*)::int as count,
+              (select r2.account_id from acct.report_runs r2
+                where r2.status = any ($2::text[])
+                  and (r2.reviewer_id = $1
+                       or (r2.reviewer_id is null and r2.account_id in (select id from op.accounts where owner_user_id = $1)))
+                order by r2.created_at desc limit 1) as account_id
+         from acct.report_runs r
         where r.status = any ($2::text[])
           and (r.reviewer_id = $1
                or (r.reviewer_id is null and r.account_id in (select id from op.accounts where owner_user_id = $1)))`,
@@ -126,11 +148,15 @@ export class WaitingRepository extends RepositoryBase {
    * those is exactly "a low score on my accounts that I must act on", with
    * no second definition of who the contract managers are.
    */
-  csatLowScores(tx: Tx, userId: string): Promise<number> {
-    return this.scalar(
+  csatLowScores(tx: Tx, userId: string): Promise<CountWithAccount> {
+    return this.countWithAccount(
       tx,
-      `select count(*)::int as count from acct.notifications
-        where recipient_id = $1 and read_at is null and type = 'csat.low_score'`,
+      `select count(*)::int as count,
+              (select n2.account_id from acct.notifications n2
+                where n2.recipient_id = $1 and n2.read_at is null and n2.type = 'csat.low_score'
+                order by n2.created_at desc limit 1) as account_id
+         from acct.notifications n
+        where n.recipient_id = $1 and n.read_at is null and n.type = 'csat.low_score'`,
       [userId],
     );
   }
@@ -138,6 +164,11 @@ export class WaitingRepository extends RepositoryBase {
   private async scalar(tx: Tx, text: string, values: unknown[]): Promise<number> {
     const rows = await this.many<{ count: number }>(tx, text, values);
     return rows[0]?.count ?? 0;
+  }
+
+  private async countWithAccount(tx: Tx, text: string, values: unknown[]): Promise<CountWithAccount> {
+    const rows = await this.many<CountWithAccount>(tx, text, values);
+    return { count: rows[0]?.count ?? 0, account_id: rows[0]?.account_id ?? null };
   }
 }
 
@@ -173,43 +204,62 @@ export class WaitingService {
           key: 'tickets_assigned',
           label: 'Tickets assigned to me',
           count: counts.tickets_assigned,
-          link: '/queue?view=my-tickets',
+          // The Queue's own system view for the signed-in person.
+          link: '/tickets?view=mine',
         },
         {
           key: 'scope_approvals',
           label: 'Out-of-scope flags to approve',
           count: counts.scope_approvals,
-          link: '/queue?view=awaiting-approval',
+          // The out-of-scope flag is a ticket field, not a state or a
+          // priority, so the Queue's grammar has no dimension for it yet:
+          // the row opens the Queue and the count says how many are there.
+          // When the Queue gains the chip this link takes its value.
+          link: '/tickets',
         },
         {
           key: 'articles_in_review',
           label: 'My articles in review',
           count: counts.articles_in_review,
-          link: '/knowledge?status=in_review&owner=me',
+          // `in_review` is the article status vocabulary the Solutions
+          // screen filters on; `review` alone matches no article.
+          link: '/knowledge?status=in_review',
         },
         {
           key: 'report_reviews',
           label: 'Report packs to review',
-          count: counts.report_reviews,
-          link: '/reports/runs?status=awaiting_review',
+          count: counts.report_reviews.count,
+          // Runs live on the account record's Report packs tab. The newest
+          // waiting run names the account to open; with none waiting the
+          // row points at the report packs screen.
+          link: counts.report_reviews.account_id
+            ? `/admin/accounts/${counts.report_reviews.account_id}?tab=reports`
+            : '/reports',
         },
         {
           key: 'unread_notifications',
           label: 'Unread notifications',
           count: counts.unread_notifications,
-          link: '/notifications',
+          // No link on purpose: notifications live in the shell's bell menu,
+          // which is on every page, so there is no screen to open.
         },
         {
           key: 'pending_time',
           label: 'Days this week with unlogged time',
           count: pendingDays,
-          link: `/timesheet?week=${week.from}`,
+          // The timesheet opens on the current week, which is the week this
+          // count is about; it takes no week parameter, so none is invented.
+          link: '/time',
         },
         {
           key: 'csat_low_scores',
           label: 'Low satisfaction scores to answer',
-          count: counts.csat_low_scores,
-          link: '/notifications?type=csat.low_score',
+          count: counts.csat_low_scores.count,
+          // The Satisfaction tab of the account dashboard carries the scores
+          // and the comments; the newest unread low score names the account.
+          link: counts.csat_low_scores.account_id
+            ? `/accounts/${counts.csat_low_scores.account_id}?tab=satisfaction`
+            : '/accounts',
         },
       ],
     };

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
+import { weekBounds } from '../src/domain/time/unlogged.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
@@ -125,10 +126,10 @@ afterAll(async () => {
 const api = () => request(app.getHttpServer());
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-async function waiting(token: string): Promise<Record<string, { count: number; link: string; label: string }>> {
+async function waiting(token: string): Promise<Record<string, { count: number; link?: string; label: string }>> {
   const response = await api().get('/v1/me/waiting').set(bearer(token)).expect(200);
   expect(response.body.as_of).toBe(today);
-  const items: { key: string; label: string; count: number; link: string }[] = response.body.items;
+  const items: { key: string; label: string; count: number; link?: string }[] = response.body.items;
   return Object.fromEntries(items.map((item) => [item.key, item]));
 }
 
@@ -152,8 +153,32 @@ describe('GET /v1/me/waiting', () => {
       'csat_low_scores',
     ])
       expect(rail[key].count, key).toBe(0);
-    expect(rail.tickets_assigned.link).toBe('/queue?view=my-tickets');
+    expect(rail.tickets_assigned.link).toBe('/tickets?view=mine');
     expect(rail.tickets_assigned.label).toBe('Tickets assigned to me');
+  });
+
+  /**
+   * Every address the rail answers is a route the web application registers
+   * (frontend/lib/routes.ts) written in that application's own URL grammar,
+   * so the browser follows it as it stands. The rail used to answer
+   * `/queue`, `/timesheet`, `/reports/runs` and `/notifications`, none of
+   * which the desk serves, and the browser had to translate every one.
+   */
+  it('links only to addresses the web application serves, and leaves the bell without one', async () => {
+    const rail = await waiting(strangerToken);
+    expect(rail.tickets_assigned.link).toBe('/tickets?view=mine');
+    expect(rail.scope_approvals.link).toBe('/tickets');
+    expect(rail.articles_in_review.link).toBe('/knowledge?status=in_review');
+    expect(rail.pending_time.link).toBe('/time');
+    // Nothing is waiting for this person, so the two account-scoped rows
+    // fall back to their list screens rather than naming an account.
+    expect(rail.report_reviews.link).toBe('/reports');
+    expect(rail.csat_low_scores.link).toBe('/accounts');
+    // The bell is in the shell on every page, so there is no screen to open.
+    expect(rail.unread_notifications.link).toBeUndefined();
+    // No row keeps one of the addresses the desk never served.
+    for (const item of Object.values(rail))
+      expect(item.link ?? '/tickets', item.label).toMatch(/^\/(tickets|knowledge|time|reports|accounts|admin)\b/);
   });
 
   it('counts tickets assigned to me and leaves out the ones waiting on the client or closed', async () => {
@@ -244,8 +269,13 @@ describe('GET /v1/me/waiting', () => {
     );
     // One naming the administrator, one unclaimed on the account they own;
     // the unclaimed run on Austral and the sent run count for nobody.
-    expect((await waiting(adminToken)).report_reviews.count).toBe(2);
-    expect((await waiting(consultantToken)).report_reviews.count).toBe(0);
+    const admin = await waiting(adminToken);
+    expect(admin.report_reviews.count).toBe(2);
+    // The runs live on the account record's Report packs tab.
+    expect(admin.report_reviews.link).toBe(`/admin/accounts/${accountId}?tab=reports`);
+    const cara = await waiting(consultantToken);
+    expect(cara.report_reviews.count).toBe(0);
+    expect(cara.report_reviews.link).toBe('/reports');
   });
 
   it('counts my unread notifications, and the low satisfaction scores among them separately', async () => {
@@ -264,7 +294,8 @@ describe('GET /v1/me/waiting', () => {
     expect(admin.unread_notifications.count).toBe(bell.body.count);
     expect(admin.unread_notifications.count).toBeGreaterThanOrEqual(2);
     expect(admin.csat_low_scores.count).toBe(1);
-    expect(admin.csat_low_scores.link).toBe('/notifications?type=csat.low_score');
+    // The scores and their comments live on the account's Satisfaction tab.
+    expect(admin.csat_low_scores.link).toBe(`/accounts/${accountId}?tab=satisfaction`);
     // The low score routed to Cara is hers alone, and the administrator's is his.
     const cara = await waiting(consultantToken);
     expect(cara.csat_low_scores.count).toBe(1);
@@ -273,7 +304,11 @@ describe('GET /v1/me/waiting', () => {
 
   it('counts the days this week with unlogged time, agreeing with the timesheet', async () => {
     const rail = await waiting(consultantToken);
-    const monday = rail.pending_time.link.replace('/timesheet?week=', '');
+    // The timesheet screen opens on the current week and takes no week
+    // parameter, so the rail links to it plainly; the count is still the
+    // one the timesheet route answers for the same week.
+    expect(rail.pending_time.link).toBe('/time');
+    const monday = weekBounds(today).from;
     const unlogged = await api()
       .get(`/v1/timesheets/me/unlogged?from=${monday}&to=${today}`)
       .set(bearer(consultantToken))
