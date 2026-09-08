@@ -281,6 +281,7 @@ export class PortalService {
           category: submission.category,
           impact: submission.impact,
           urgency: submission.urgency,
+          configuration_item_id: submission.configuration_item_id,
           form_version_id: submission.form_version_id,
           form_data: submission.form_data,
           requester_email: contact.email,
@@ -309,6 +310,7 @@ export class PortalService {
     category?: string;
     impact?: 'high' | 'medium' | 'low';
     urgency?: 'high' | 'medium' | 'low';
+    configuration_item_id?: string;
     form_version_id: string | null;
     form_data: Record<string, unknown>;
   }> {
@@ -353,6 +355,9 @@ export class PortalService {
       category: (mapped.columns.category as string | undefined) ?? dto.category,
       impact: (mapped.columns.impact as 'high' | 'medium' | 'low' | undefined) ?? dto.impact,
       urgency: (mapped.columns.urgency as 'high' | 'medium' | 'low' | undefined) ?? dto.urgency,
+      // A ci_picker answer names an item; the ticket service refuses one that
+      // is not of this account before the row is written (TM-19).
+      configuration_item_id: mapped.columns.configuration_item_id as string | undefined,
       form_version_id: published?.version_id ?? null,
       form_data: mapped.custom,
     };

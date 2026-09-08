@@ -25,6 +25,7 @@ import { WaitingModule } from './modules/me/waiting.module.js';
 import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
 import { IntegrityModule } from './modules/integrity/integrity.module.js';
+import { ConfigurationItemsModule } from './modules/knowledge/configuration-items.module.js';
 import { KnowledgeModule } from './modules/knowledge/knowledge.module.js';
 import { PortalModule } from './modules/portal/portal.module.js';
 import { ReportingModule } from './modules/reporting/reporting.module.js';
@@ -60,6 +61,7 @@ import { ChangeWindowsModule } from './modules/tickets/change-windows.module.js'
     FormsModule,
     TimeModule,
     KnowledgeModule,
+    ConfigurationItemsModule,
     AttachmentsModule,
     EmailModule,
     ReportingModule,

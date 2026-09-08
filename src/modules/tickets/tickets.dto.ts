@@ -69,6 +69,11 @@ export class CreateTicketDto {
   @IsUUID('4')
   ticket_group_id?: string;
 
+  /** The configuration item the work is about (TM-19); asserted in-account by the service. */
+  @IsOptional()
+  @IsUUID('4')
+  configuration_item_id?: string | null;
+
   @IsOptional()
   @IsEmail()
   requester_email?: string;
@@ -144,6 +149,11 @@ export class PatchTicketDto {
   @IsOptional()
   @IsUUID('4')
   ticket_group_id?: string | null;
+
+  /** The configuration item the work is about (TM-19); null clears it. */
+  @IsOptional()
+  @IsUUID('4')
+  configuration_item_id?: string | null;
 
   @IsOptional()
   @IsObject()

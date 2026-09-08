@@ -112,6 +112,8 @@ export interface TicketView {
   source: string;
   requester: { id: string; email: string; display_name: string } | null;
   group_id: string | null;
+  /** The configuration item the work is about (TM-19). */
+  configuration_item_id: string | null;
   /** The project or change window the ticket belongs to (TM-10). */
   ticket_group_id: string | null;
   assignee_id: string | null;
@@ -399,6 +401,7 @@ export class TicketsService {
       // starting point, so a ticket with no matching rule simply has no group.
       const groupId = dto.group_id ?? (await this.routing.resolve(tx, dto.account_id, dto.type, dto.category ?? null));
       if (dto.ticket_group_id) await this.assertTicketGroup(tx, dto.account_id, dto.ticket_group_id);
+      if (dto.configuration_item_id) await this.assertConfigurationItem(tx, dto.account_id, dto.configuration_item_id);
 
       const row = await this.tickets.insert(tx, {
         account_id: dto.account_id,
@@ -424,6 +427,7 @@ export class TicketsService {
         assignee_id: assignee?.id ?? null,
         assignee_name: assignee ? name(assignee) : null,
         contract_id: contract.id,
+        configuration_item_id: dto.configuration_item_id ?? null,
         // CP-03: which published form version the request answered, and the
         // answers that have no ticket column of their own.
         form_version_id: dto.form_version_id ?? null,
@@ -566,6 +570,11 @@ export class TicketsService {
           newValue: dto.ticket_group_id,
         });
       }
+      if (dto.configuration_item_id !== undefined && dto.configuration_item_id !== before.configuration_item_id) {
+        if (dto.configuration_item_id)
+          await this.assertConfigurationItem(tx, before.account_id, dto.configuration_item_id);
+        assignments.configuration_item_id = dto.configuration_item_id;
+      }
       let newAssignee: { id: string; first_name: string; last_name: string; email: string } | null | undefined;
       if (dto.assignee_id !== undefined && dto.assignee_id !== before.assignee_id) {
         newAssignee = dto.assignee_id ? await this.assertAssignable(tx, dto.assignee_id) : null;
@@ -625,6 +634,7 @@ export class TicketsService {
             'priority',
             'group_id',
             'contract_id',
+            'configuration_item_id',
             'external_refs',
           ],
           { ticketId: before.id },
@@ -1699,6 +1709,22 @@ export class TicketsService {
     return this.groups.conflictsOnItem(tx, before.account_id, before.configuration_item_id, before.id, span);
   }
 
+  /**
+   * The configuration item a client named belongs to this ticket's account
+   * (TM-19; Ticket Management technical 133). Row-level security hides
+   * another account's items, so an id it hides is a not-found rather than a
+   * forbidden, and the register's own routes answer the same way. Until
+   * this existed the column could only be written by a superuser, which is
+   * why `ci_picker` form answers were kept as answers.
+   */
+  private async assertConfigurationItem(tx: Tx, accountId: string, itemId: string): Promise<void> {
+    const found = await tx.query('select 1 from acct.configuration_items where id = $1 and account_id = $2', [
+      itemId,
+      accountId,
+    ]);
+    if (found.rowCount === 0) throw new NotFoundException({ code: 'not_found', entity: 'configuration_item' });
+  }
+
   private async assertTicketGroup(tx: Tx, accountId: string, groupId: string): Promise<void> {
     const group = await this.groups.byId(tx, groupId);
     if (group.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'ticket_group' });
@@ -1841,6 +1867,7 @@ export class TicketsService {
       assignee_id: row.assignee_id,
       assignee_name: row.assignee_name,
       contract_id: row.contract_id,
+      configuration_item_id: row.configuration_item_id,
       resolution: {
         code: row.resolution_code,
         notes: row.resolution_notes,

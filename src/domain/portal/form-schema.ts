@@ -29,11 +29,19 @@ export type FormFieldKind = (typeof FORM_FIELD_KINDS)[number];
 
 /**
  * Ticket columns a form field may write. Everything else lands in
- * `form_data`. The configuration item is deliberately absent: nothing yet
- * checks that an id a client posted is a configuration item of that account,
- * so a `ci_picker` answer is kept as an answer until that check exists.
+ * `form_data`. The configuration item is here since TM-19: the ticket
+ * service asserts that a posted id is a configuration item of that ticket's
+ * account before it writes the column, so a `ci_picker` answer maps onto
+ * the column instead of being kept as an answer.
  */
-export const FORM_TICKET_COLUMNS = ['short_description', 'description', 'category', 'impact', 'urgency'] as const;
+export const FORM_TICKET_COLUMNS = [
+  'short_description',
+  'description',
+  'category',
+  'impact',
+  'urgency',
+  'configuration_item_id',
+] as const;
 export type FormTicketColumn = (typeof FORM_TICKET_COLUMNS)[number];
 
 /** Which columns each kind may write. A kind absent from a list writes `custom.<key>` only. */
@@ -45,7 +53,7 @@ const COLUMNS_BY_KIND: Record<FormFieldKind, readonly FormTicketColumn[]> = {
   date: [],
   number: [],
   boolean: [],
-  ci_picker: [],
+  ci_picker: ['configuration_item_id'],
   contact_picker: [],
   urgency: ['urgency'],
   impact: ['impact'],
