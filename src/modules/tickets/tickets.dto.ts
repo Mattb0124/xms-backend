@@ -10,6 +10,7 @@ import {
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -17,6 +18,13 @@ import {
 } from 'class-validator';
 import { MaxJsonSize } from '../../common/validation/max-json-size.js';
 import { OUT_OF_SCOPE } from './conditions.js';
+
+/**
+ * The ceiling on an approved out-of-scope allowance, in minutes: a
+ * person-year of billable work. The value is added straight to the
+ * contract period budget, so it is bounded here rather than trusted.
+ */
+export const MAX_SCOPE_ALLOWANCE_MINUTES = 60 * 8 * 5 * 52;
 
 const TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
 const LEVELS = ['high', 'medium', 'low'] as const;
@@ -387,9 +395,17 @@ export class ScopeDecisionDto {
    * Minutes added to the contract period's budget when the work is
    * approved, so the time logged against the ticket is inside budget
    * instead of over it. Absent means "approved, no extra budget".
+   *
+   * Bounded because it is added straight to the period's budget: with no
+   * ceiling one approval could add 2^31 minutes and make every subsequent
+   * overage check pass forever. The ceiling is a person-year of billable
+   * minutes, which is far past any single out-of-scope piece of work and
+   * small enough that a slip of the keyboard is refused rather than
+   * absorbed.
    */
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(MAX_SCOPE_ALLOWANCE_MINUTES)
   overage_allowance_minutes?: number;
 }

@@ -593,14 +593,14 @@ export class TimeRepository extends RepositoryBase {
    * to the contracted figure, so the allowance lands there; the caller writes
    * the audit that names it an allowance rather than a rollover.
    */
-  addCarriedOverMinutes(tx: Tx, id: string, minutes: number): Promise<ContractPeriodRow> {
+  addCarriedOverMinutes(tx: Tx, id: string, version: number, minutes: number): Promise<ContractPeriodRow> {
     return this.one<ContractPeriodRow>(
       tx,
       'contract_period',
       `update acct.contract_periods
-          set carried_over_minutes = carried_over_minutes + $2, version = version + 1
-        where id = $1 returning *`,
-      [id, minutes],
+          set carried_over_minutes = carried_over_minutes + $3, version = version + 1
+        where id = $1 and version = $2 returning *`,
+      [id, version, minutes],
     );
   }
 

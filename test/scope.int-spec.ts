@@ -310,6 +310,46 @@ describe('POST /v1/tickets/:key/scope/decision', () => {
     expect(settled.body.code).toBe('not_flagged');
   });
 
+  it('bounds the allowance and refuses one against a period Finance has locked', async () => {
+    // The allowance is added straight to the period budget, so an unbounded
+    // one would make every subsequent overage check pass forever.
+    const huge = await newTicket('Rebuild every integration');
+    const hugeFlag = await flag(huge.key, huge.version, 'A rebuild is not support.');
+    const refused = await api()
+      .post(`/v1/tickets/${huge.key}/scope/decision`)
+      .set(bearer(adminToken))
+      .send({ version: hugeFlag.body.version, decision: 'approve', overage_allowance_minutes: 2_147_483_647 })
+      .expect(400);
+    expect(JSON.stringify(refused.body)).toContain('overage_allowance_minutes');
+
+    // A locked period is Finance's final word: an allowance against it is
+    // refused in the words an entry dated inside it is refused in.
+    await withSuperuser((client) =>
+      client.query('update acct.contract_periods set locked = true where id = $1', [periodId]),
+    );
+    const before = await carried();
+    const locked = await api()
+      .post(`/v1/tickets/${huge.key}/scope/decision`)
+      .set(bearer(adminToken))
+      .send({ version: hugeFlag.body.version, decision: 'approve', overage_allowance_minutes: 60 })
+      .expect(409);
+    expect(locked.body.code).toBe('contract_period_locked');
+    expect(await carried()).toBe(before);
+
+    // Unlocked, the same decision goes through, so the refusal is the lock
+    // and not the ticket.
+    await withSuperuser((client) =>
+      client.query('update acct.contract_periods set locked = false where id = $1', [periodId]),
+    );
+    const approved = await api()
+      .post(`/v1/tickets/${huge.key}/scope/decision`)
+      .set(bearer(adminToken))
+      .send({ version: hugeFlag.body.version, decision: 'approve', overage_allowance_minutes: 60 })
+      .expect(201);
+    expect(approved.body.scope).toMatchObject({ out_of_scope: 'approved', overage_allowance_minutes: 60 });
+    expect(await carried()).toBe(before + 60);
+  });
+
   it('splits the permission: working a ticket is not deciding its scope, and the flagger never decides', async () => {
     const ticket = await newTicket('Rewrite the allocation rules');
     const flagged = await flag(ticket.key, ticket.version, 'Rules work is a change, not an incident.');
@@ -361,6 +401,7 @@ describe('filtering the queue on the flag', () => {
     const decided = await api().get('/v1/tickets?out_of_scope=approved,declined').set(bearer(adminToken)).expect(200);
     expect(descriptionsOf(decided.body)).toEqual([
       'Migrate the legacy cube',
+      'Rebuild every integration',
       'Rewrite the allocation rules',
       'Write the quarterly board deck',
     ]);

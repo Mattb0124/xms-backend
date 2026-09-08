@@ -1435,7 +1435,17 @@ export class TicketsService {
         const on = decidedAt.slice(0, 10);
         const current = await this.time.periodFor(tx, before.contract_id, on);
         if (!current) throw new ConflictException({ code: 'no_contract_period', on });
-        const updated = await this.time.addCarriedOverMinutes(tx, current.id, allowance);
+        // A locked period is Finance's final word on a commercial position
+        // (functional 5.7). `insertEntry` refuses an entry dated inside one;
+        // an allowance changes the same period's budget and is refused in
+        // the same words rather than silently moving the figure.
+        if (current.locked)
+          throw new ConflictException({
+            code: 'contract_period_locked',
+            period: [current.starts_on, current.ends_on],
+            permission: 'time:lock-period',
+          });
+        const updated = await this.time.addCarriedOverMinutes(tx, current.id, current.version, allowance);
         period = { id: updated.id, carried_over_minutes: updated.carried_over_minutes };
         entries.push({
           entityKind: 'contract_period',
