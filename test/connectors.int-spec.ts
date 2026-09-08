@@ -777,4 +777,130 @@ describe('the outbound queue (SN-03)', () => {
     expect(queued.rows.every((row) => row.ticket_id === ticketBId)).toBe(true);
     expect(unlinked.body.id).toBeTruthy();
   });
+
+  it('leaves the queue alone while the switch is tripped and drains it in order once it is armed', async () => {
+    await api()
+      .post(`/v1/connectors/${instanceId}/kill-switch`)
+      .set(bearer(adminToken))
+      .send({ action: 'trip', reason: 'pausing write-back for the change window' })
+      .expect(201);
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 0, retried 0, failed 0');
+    const held = await withSuperuser((client) =>
+      client.query(`select status from acct.sync_outbound where instance_id = $1`, [instanceId]),
+    );
+    expect(held.rows.every((row) => row.status === 'pending')).toBe(true);
+    await api()
+      .post(`/v1/connectors/${instanceId}/kill-switch`)
+      .set(bearer(adminToken))
+      .send({ action: 'arm' })
+      .expect(201);
+    expect(await sync.deliverPending()).toBe('delivered 2, skipped 0, retried 0, failed 0');
+  });
+
+  it('writes the comment into the client journal with the marker, the ticket key and the author', async () => {
+    const written = standIn.journal.filter(
+      (entry) => entry.element_id === caseB.sys_id && entry.sys_created_by === 'xms.integration',
+    );
+    expect(written).toHaveLength(1);
+    const ticket = await api().get(`/v1/tickets/${ticketBId}`).set(bearer(adminToken)).expect(200);
+    expect(String(written[0].value)).toMatch(/^\[XMS:[0-9a-f]{8}\] CS\d{7} .+: We are on it$/);
+    expect(String(written[0].value)).toContain(ticket.body.key);
+    const links = await withSuperuser((client) =>
+      client.query(
+        `select xms_kind, direction from acct.sync_journal_links where instance_id = $1 and direction = $2`,
+        [instanceId, 'out'],
+      ),
+    );
+    expect(links.rows).toEqual([{ xms_kind: 'comment', direction: 'out' }]);
+  });
+
+  it('translates the transition through the state map in reverse and records the run', async () => {
+    const record = standIn.records.get(TABLE)!.get(String(caseB.sys_id))!;
+    expect(record.state).toBe('10');
+    const rows = await withSuperuser((client) =>
+      client.query(`select event, status, attempts, sent_at from acct.sync_outbound where instance_id = $1`, [
+        instanceId,
+      ]),
+    );
+    expect(rows.rows.every((row) => row.status === 'sent' && row.attempts === 1 && row.sent_at !== null)).toBe(true);
+    const runs = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=success`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(runs.body).toHaveLength(2);
+    const transition = runs.body.find(
+      (run: { detail: { event: string } }) => run.detail.event === 'ticket.transitioned',
+    );
+    expect(transition.detail.state).toMatchObject({ to: 'in_progress', external: '10' });
+  });
+
+  it('records the ServiceNow stamp on the link so the next poll reads our own writes as reflections', async () => {
+    const before = await withSuperuser((client) =>
+      client.query(`select body from acct.comments where ticket_id = $1`, [ticketBId]),
+    );
+    const link = await withSuperuser((client) =>
+      client.query(
+        `select last_outbound_at, last_outbound_hash, last_inbound_sys_updated_on from acct.sync_links where ticket_id = $1`,
+        [ticketBId],
+      ),
+    );
+    expect(link.rows[0].last_outbound_at).not.toBeNull();
+    expect(link.rows[0].last_outbound_hash).toMatch(/^[0-9a-f]{64}$/);
+    // The seeded cases carry stamps far in the future so the earlier tests
+    // could order them; our own write carries the real clock, so the poll
+    // has to be looking behind it to see the record come back at all.
+    await api()
+      .post(`/v1/connectors/${instanceId}/watermark`)
+      .set(bearer(adminToken))
+      .send({ to: '2026-01-01T00:00:00Z' })
+      .expect(201);
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 0, failed 0');
+    const inbox = await withSuperuser((client) =>
+      client.query(`select outcome from sys.inbox order by id desc limit 1`),
+    );
+    expect(inbox.rows[0].outcome).toBe('dropped_reflection');
+    const after = await withSuperuser((client) =>
+      client.query(`select body from acct.comments where ticket_id = $1`, [ticketBId]),
+    );
+    expect(after.rows).toHaveLength(before.rows.length);
+  });
+
+  it('retries a 500, dead-letters a 400 with the payload, and a replay puts the row back in the queue', async () => {
+    await api()
+      .post(`/v1/tickets/${ticketBId}/comments`)
+      .set(bearer(adminToken))
+      .send({ body: 'The fix ships tonight' })
+      .expect(201);
+    await drainOutbox();
+    standIn.fault = { status: 500, times: 1 };
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 0, retried 1, failed 0');
+    const retried = await withSuperuser((client) =>
+      client.query(`select status, attempts, last_error from acct.sync_outbound where status = 'pending'`),
+    );
+    expect(retried.rows[0]).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(retried.rows[0].last_error).toContain('500');
+    // The backoff holds the row until it is due.
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 0, retried 0, failed 0');
+    standIn.fault = { status: 400, times: 1 };
+    const later = new Date(Date.now() + 3_600_000);
+    expect(await sync.deliverPending(later)).toBe('delivered 0, skipped 0, retried 0, failed 1');
+    const letters = await api()
+      .get(`/v1/connectors/${instanceId}/dead-letters?resolution=open`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(letters.body).toHaveLength(1);
+    expect(letters.body[0].payload).toMatchObject({ instance_id: instanceId, event: 'comment.created' });
+    standIn.fault = {};
+    await api()
+      .post(`/v1/connectors/${instanceId}/dead-letters/replay`)
+      .set(bearer(adminToken))
+      .send({ ids: [letters.body[0].id], reason: 'the instance is back' })
+      .expect(201);
+    expect(await sync.deliverPending()).toBe('delivered 1, skipped 0, retried 0, failed 0');
+    const settled = await withSuperuser((client) =>
+      client.query(`select status from acct.sync_outbound where instance_id = $1 and status <> 'sent'`, [instanceId]),
+    );
+    expect(settled.rows).toEqual([]);
+  });
 });

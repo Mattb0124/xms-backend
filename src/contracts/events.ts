@@ -130,6 +130,8 @@ export const AUDIT_EVENT_TYPES = [
   'connector.dead_letter.replayed',
   'connector.dead_letter.discarded',
   'sync.applied',
+  'sync.pushed',
+  'sync.conflict',
   'budget.threshold_crossed',
   'engagement.renewal_due',
   'engagement.status_changed',

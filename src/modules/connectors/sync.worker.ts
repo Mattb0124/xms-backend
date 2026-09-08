@@ -6,17 +6,26 @@ import { SecurityEventsService } from '../../common/events/security-events.servi
 import {
   defaultSor,
   resolveInboundState,
+  resolveOutboundState,
   translateInbound,
+  translateOutbound,
+  XMS_FIELDS,
+  type FieldMap,
   type StateMap,
   type XmsField,
 } from '../../domain/sync/maps.js';
 import {
   decideEnqueue,
   decideInbound,
+  decideOutbound,
+  externalChangedSince,
   hasJournalMarker,
   isOutboundEvent,
   isReflection,
+  journalMarker,
   outboundHash,
+  outboundNextAttempt,
+  syncOrigin,
 } from '../../domain/sync/rules.js';
 import { DbPools } from '../../db/pool.js';
 import type { Tx } from '../../db/repository.base.js';
@@ -26,7 +35,13 @@ import type { OutboxRow } from '../../worker/outbox-dispatcher.js';
 import { TicketsService, type TicketView } from '../tickets/tickets.service.js';
 import type { CreateTicketDto, PatchTicketDto, TransitionDto } from '../tickets/tickets.dto.js';
 import { coerceFieldMap, ConnectorsService } from './connectors.service.js';
-import { ConnectorsRepository, type InboxRow, type InstanceRow, type LinkRow } from './connectors.repository.js';
+import {
+  ConnectorsRepository,
+  type InboxRow,
+  type InstanceRow,
+  type LinkRow,
+  type OutboundRow,
+} from './connectors.repository.js';
 import { fromSnowTime, SnowError, type JournalEntry, type SnowRecord } from './snow-client.js';
 import { SnowClientFactory } from './snow-client.factory.js';
 
@@ -565,6 +580,364 @@ export class SyncWorker {
     });
   }
 
+  // Outbound delivery --------------------------------------------------------
+
+  outboundJob(intervalMs = 5_000): Job {
+    return { name: 'connectors.outbound', intervalMs, run: () => this.deliverPending() };
+  }
+
+  /**
+   * One pass over the queued rows of every armed bidirectional instance
+   * (ServiceNow Sync technical 3.5). Rows leave oldest first so a ticket's
+   * changes reach the instance in the order they were made.
+   */
+  async deliverPending(now = new Date()): Promise<string> {
+    const accounts = await this.liveAccounts();
+    if (accounts.length === 0) return 'delivered 0';
+    const instances = (await this.uow.perAccount(accounts, (tx) => this.repo.allInstances(tx))).flat();
+    let sent = 0;
+    let skipped = 0;
+    let retried = 0;
+    let failed = 0;
+    for (const instance of instances) {
+      if (instance.mode !== 'bidirectional' || instance.kill_switch === 'tripped') continue;
+      const rows = await this.uow.worker([instance.account_id], (tx) => this.repo.claimOutbound(tx, instance.id, now));
+      for (const row of rows) {
+        const outcome = await this.deliverOne(instance, row, now);
+        if (outcome === 'sent') sent += 1;
+        else if (outcome === 'skipped') skipped += 1;
+        else if (outcome === 'retry') retried += 1;
+        else if (outcome === 'failed') failed += 1;
+      }
+    }
+    return `delivered ${sent}, skipped ${skipped}, retried ${retried}, failed ${failed}`;
+  }
+
+  /** One outbound row in its own transaction; the row settles inside it. */
+  async deliverOne(
+    instance: InstanceRow,
+    row: OutboundRow,
+    now = new Date(),
+  ): Promise<'sent' | 'skipped' | 'failed' | 'retry' | 'deferred'> {
+    const started = Date.now();
+    try {
+      return await this.uow.worker([instance.account_id], async (tx) => {
+        // The switch and the mode are read again here: a trip while the
+        // batch was in flight leaves the row queued, untouched and in order.
+        const fresh = await this.repo.instance(tx, instance.id);
+        if (fresh.mode !== 'bidirectional' || fresh.kill_switch === 'tripped') return 'deferred';
+        return this.push(tx, fresh, row, started);
+      });
+    } catch (error) {
+      const detail = describe(error);
+      const terminal =
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof NotFoundException ||
+        (error instanceof SnowError && error.errorClass === 'terminal');
+      const attempts = row.attempts + 1;
+      const next = terminal ? null : outboundNextAttempt(attempts, now);
+      return this.uow.worker([instance.account_id], async (tx) => {
+        if (error instanceof SnowError && (error.status === 401 || error.status === 403))
+          await this.repo.touchInstance(tx, instance.id, { credential_state: 'invalid' });
+        if (!next) {
+          const letter = await this.repo.insertDeadLetter(tx, {
+            queue: 'outbound',
+            accountId: instance.account_id,
+            correlationId: row.correlation_id,
+            payload: {
+              outbound_id: row.id,
+              instance_id: instance.id,
+              ticket_id: row.ticket_id,
+              event: row.event,
+              outbox_id: row.outbox_id,
+            },
+            error: detail,
+            attempts,
+          });
+          await this.repo.settleOutbound(tx, row.id, {
+            status: 'dead_lettered',
+            attempts,
+            last_error: detail,
+          });
+          await this.repo.insertRun(tx, {
+            accountId: instance.account_id,
+            instanceId: instance.id,
+            direction: 'out',
+            ticketId: row.ticket_id,
+            outboxId: row.outbox_id,
+            attempt: attempts,
+            outcome: 'dead_lettered',
+            errorClass: 'terminal',
+            errorText: detail,
+            durationMs: Date.now() - started,
+            detail: { event: row.event, dead_letter_id: letter },
+          });
+          await this.repo.touchInstance(tx, instance.id, { last_error: detail, last_error_at: new Date() });
+          this.logger.error(`outbound ${row.id} for ${instance.name} dead-lettered: ${detail}`);
+          return 'failed';
+        }
+        await this.repo.settleOutbound(tx, row.id, {
+          status: 'pending',
+          attempts,
+          next_attempt_at: next,
+          last_error: detail,
+        });
+        await this.repo.insertRun(tx, {
+          accountId: instance.account_id,
+          instanceId: instance.id,
+          direction: 'out',
+          ticketId: row.ticket_id,
+          outboxId: row.outbox_id,
+          attempt: attempts,
+          outcome: 'retried',
+          errorClass: 'retryable',
+          errorText: detail,
+          durationMs: Date.now() - started,
+          detail: { event: row.event },
+        });
+        return 'retry';
+      });
+    }
+  }
+
+  private async push(tx: Tx, instance: InstanceRow, row: OutboundRow, started: number): Promise<'sent' | 'skipped'> {
+    const principal = syncPrincipal(instance);
+    const ctx: RequestContext = { requestId: `outbound-${row.id}`, origin: syncOrigin(instance.id) };
+    const link = await this.repo.linkByTicket(tx, instance.id, row.ticket_id);
+    if (!link || link.state === 'unlinked')
+      return this.settleSkip(tx, instance, row, started, 'noop', { reason: 'no_link' });
+    const fieldMapRow = instance.active_field_map_id
+      ? await this.repo.map<unknown>(tx, 'field', instance.active_field_map_id)
+      : undefined;
+    if (!fieldMapRow) throw new ConflictException({ code: 'no_active_field_map' });
+    const fieldMap = coerceFieldMap(fieldMapRow.entries);
+    const stateMap = instance.active_state_map_id
+      ? ((await this.repo.map<StateMap>(tx, 'state', instance.active_state_map_id)).entries ?? {})
+      : undefined;
+    const ticket = (await this.tickets.get(principal, row.ticket_id, tx)) as TicketView;
+    const client = await this.clients.forInstance(instance);
+    const record = await client.get(instance.table_name, link.external_sys_id);
+    if (!record) {
+      // The client deleted the case: XMS keeps the ticket and stops
+      // pushing at it (functional 5.7).
+      await this.repo.touchLink(tx, link.id, { state: 'unlinked' });
+      return this.settleSkip(tx, instance, row, started, 'noop', { reason: 'external_record_gone' });
+    }
+    const sysUpdatedOn = fromSnowTime(record.sys_updated_on);
+    const externalChanged = externalChangedSince(
+      link.last_inbound_sys_updated_on ? new Date(link.last_inbound_sys_updated_on) : null,
+      sysUpdatedOn,
+      instance.clock_tolerance_seconds,
+    );
+    const detail: Record<string, unknown> = { event: row.event, external_number: link.external_number };
+
+    // Journals: the policy on both journals is merge, so a comment always
+    // travels; the marker and the journal link are what stop it echoing.
+    if (row.event === 'comment.created' || row.event === 'work_note.created') {
+      const kind = row.event === 'comment.created' ? 'comment' : 'work_note';
+      const messageId = String(row.payload.comment_id ?? row.payload.work_note_id ?? '');
+      if (!messageId) throw new BadRequestException({ code: 'message_missing', event: row.event });
+      if (await this.repo.journalLinkExistsForXms(tx, instance.id, kind, messageId))
+        return this.settleSkip(tx, instance, row, started, 'noop', { ...detail, reason: 'already_sent' });
+      const message = await this.repo.message(tx, kind, messageId);
+      if (!message) throw new NotFoundException({ code: 'not_found', entity: kind });
+      if (message.source === 'sync')
+        return this.settleSkip(tx, instance, row, started, 'skipped_reflection', {
+          ...detail,
+          reason: 'arrived_from_sync',
+        });
+      const element = kind === 'comment' ? journalElement(instance.journal_public) : 'work_notes';
+      const text = `${journalMarker(message.id)} ${ticket.key} ${message.author_name}: ${message.body}`;
+      const written = await client.createJournal(instance.table_name, link.external_sys_id, element, text);
+      await this.repo.insertJournalLink(tx, {
+        accountId: instance.account_id,
+        instanceId: instance.id,
+        ticketId: row.ticket_id,
+        kind,
+        xmsId: message.id,
+        externalSysId: written.entry.sys_id,
+        direction: 'out',
+      });
+      detail.journal = { element, entry: written.entry.sys_id, kind };
+      await this.echoGuard(tx, link.id, fieldMap, written.record);
+      return this.settleSent(tx, instance, row, ticket, started, detail, ctx, null);
+    }
+
+    // Fields and state.
+    const body: Record<string, string> = {};
+    let sent: Partial<Record<XmsField, unknown>> = {};
+    let conflict: Record<string, unknown> | null = null;
+    if (row.event === 'ticket.transitioned') {
+      const entry = stateMap?.[ticket.type];
+      const resolved = entry ? resolveOutboundState(entry, ticket.state) : { reason: 'no_outbound' as const };
+      if (!resolved.value)
+        return this.settleSkip(tx, instance, row, started, 'skipped_policy', {
+          ...detail,
+          state: ticket.state,
+          reason: 'no_outbound',
+        });
+      body.state = resolved.value;
+      // XMS runs the state machine (technical 2.8), so the state is never
+      // dropped by policy; where the client's model cannot tell two XMS
+      // states apart the run says so.
+      detail.state = { from: row.payload.from ?? null, to: ticket.state, external: resolved.value };
+      if (resolved.shared) detail.state_shared = { with: resolved.shared, canonical: resolved.canonical ?? null };
+    } else {
+      const values = outboundValues(ticket);
+      const changed = (row.payload.fields as unknown[] | undefined)?.filter(
+        (field): field is string => typeof field === 'string',
+      );
+      const only = changed && changed.length > 0 ? changed : undefined;
+      const external = translateInbound(fieldMap, record).patch;
+      const allowed: string[] = [];
+      const dropped: { field: string; policy: string; reason: string }[] = [];
+      for (const entry of fieldMap.entries) {
+        if (entry.direction === 'in') continue;
+        if (only && !only.includes(entry.xms)) continue;
+        if (values[entry.xms] === undefined) continue;
+        const policy = (link.field_sor_overrides?.[entry.xms] ?? entry.sor ?? defaultSor(entry.xms)) as never;
+        const decision = decideOutbound({
+          policy,
+          externalChanged,
+          xmsValue: values[entry.xms],
+          externalValue: external[entry.xms],
+          xmsUpdatedAt: new Date(ticket.updated_at),
+          externalUpdatedAt: sysUpdatedOn,
+        });
+        if (decision.send) allowed.push(entry.xms);
+        else if (decision.reason !== 'same') dropped.push({ field: entry.xms, policy, reason: decision.reason });
+      }
+      const translation = translateOutbound(fieldMap, values, allowed);
+      Object.assign(body, translation.body);
+      sent = translation.sent;
+      if (translation.unmapped.length > 0) detail.unmapped = translation.unmapped;
+      if (dropped.length > 0) {
+        conflict = {
+          external_sys_updated_on: record.sys_updated_on,
+          external_changed: externalChanged,
+          kept: allowed,
+          dropped,
+        };
+        detail.conflict = conflict;
+        await this.repo.touchLink(tx, link.id, {
+          state: 'conflict',
+          last_conflict: {
+            direction: 'out',
+            fields: dropped.map((one) => one.field),
+            at: new Date().toISOString(),
+            sys_updated_on: record.sys_updated_on,
+          },
+        });
+      }
+      detail.fields = Object.keys(body);
+      if (Object.keys(body).length === 0)
+        return this.settleSkip(tx, instance, row, started, dropped.length > 0 ? 'skipped_policy' : 'noop', {
+          ...detail,
+          reason: dropped.length > 0 ? 'policy' : 'nothing_to_send',
+        });
+    }
+
+    const updated = await client.update(instance.table_name, link.external_sys_id, body);
+    detail.sent = Object.keys(sent);
+    await this.echoGuard(tx, link.id, fieldMap, updated);
+    return this.settleSent(tx, instance, row, ticket, started, detail, ctx, conflict);
+  }
+
+  /**
+   * The echo guard (ServiceNow Sync technical 2.7): the link records what
+   * the record reads as after our write, in XMS terms and over the same
+   * field set the reflection rule hashes on the way in, together with the
+   * `sys_updated_on` the instance stamped. The next poll then recognises
+   * our own write instead of applying it back.
+   */
+  private async echoGuard(tx: Tx, linkId: string, fieldMap: FieldMap, record: SnowRecord): Promise<void> {
+    const after = translateInbound(fieldMap, record).patch;
+    const echo = Object.fromEntries(
+      fieldMap.entries.filter((entry) => entry.direction !== 'in').map((entry) => [entry.xms, after[entry.xms]]),
+    );
+    await this.repo.touchLink(tx, linkId, {
+      last_outbound_at: new Date(),
+      last_outbound_hash: outboundHash(echo),
+      last_inbound_sys_updated_on: fromSnowTime(record.sys_updated_on),
+    });
+  }
+
+  private async settleSent(
+    tx: Tx,
+    instance: InstanceRow,
+    row: OutboundRow,
+    ticket: TicketView,
+    started: number,
+    detail: Record<string, unknown>,
+    ctx: RequestContext,
+    conflict: Record<string, unknown> | null,
+  ): Promise<'sent'> {
+    await this.repo.settleOutbound(tx, row.id, {
+      status: 'sent',
+      attempts: row.attempts + 1,
+      sent_at: new Date(),
+      last_error: null,
+      conflict,
+    });
+    await this.repo.insertRun(tx, {
+      accountId: instance.account_id,
+      instanceId: instance.id,
+      direction: 'out',
+      ticketId: row.ticket_id,
+      outboxId: row.outbox_id,
+      attempt: row.attempts + 1,
+      outcome: 'success',
+      durationMs: Date.now() - started,
+      detail,
+    });
+    await this.repo.touchInstance(tx, instance.id, { last_success_at: new Date(), last_error: null });
+    await this.audit.account(
+      tx,
+      instance.account_id,
+      { kind: 'system', id: syncOrigin(instance.id), name: `${instance.name} (sync)` },
+      ctx,
+      [
+        {
+          entityKind: 'ticket',
+          entityId: ticket.id,
+          ticketId: ticket.id,
+          eventType: conflict ? 'sync.conflict' : 'sync.pushed',
+          newValue: detail,
+        },
+      ],
+    );
+    return 'sent';
+  }
+
+  /** A row that reached no call: settled, with the reason on the run so the operator sees it. */
+  private async settleSkip(
+    tx: Tx,
+    instance: InstanceRow,
+    row: OutboundRow,
+    started: number,
+    outcome: 'noop' | 'skipped_policy' | 'skipped_reflection',
+    detail: Record<string, unknown>,
+  ): Promise<'skipped'> {
+    await this.repo.settleOutbound(tx, row.id, {
+      status: 'skipped',
+      attempts: row.attempts + 1,
+      conflict: (detail.conflict as Record<string, unknown> | undefined) ?? null,
+    });
+    await this.repo.insertRun(tx, {
+      accountId: instance.account_id,
+      instanceId: instance.id,
+      direction: 'out',
+      ticketId: row.ticket_id,
+      outboxId: row.outbox_id,
+      attempt: row.attempts + 1,
+      outcome,
+      durationMs: Date.now() - started,
+      detail,
+    });
+    return 'skipped';
+  }
+
   // Health -------------------------------------------------------------------
 
   async recomputeHealth(): Promise<string> {
@@ -669,6 +1042,21 @@ function ticketValue(ticket: TicketView, field: XmsField): unknown {
     default:
       return (ticket as unknown as Record<string, unknown>)[field] ?? null;
   }
+}
+
+/** The ticket in XMS field terms, for the outbound translation. */
+function outboundValues(ticket: TicketView): Partial<Record<XmsField, unknown>> {
+  const values: Partial<Record<XmsField, unknown>> = {};
+  for (const field of Object.keys(XMS_FIELDS) as XmsField[]) {
+    const value = ticketValue(ticket, field);
+    if (value !== null && value !== undefined) values[field] = value;
+  }
+  return values;
+}
+
+/** The instance's public journal, defaulting to `comments` for anything else the column holds. */
+function journalElement(configured: string): 'comments' | 'work_notes' {
+  return configured === 'work_notes' ? 'work_notes' : 'comments';
 }
 
 function pickValue(value: unknown): unknown {

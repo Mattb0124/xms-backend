@@ -46,7 +46,18 @@ export interface SnowClient {
   range(table: string, from: Date, to: Date, offset: number, limit: number): Promise<SnowRecord[]>;
   create(table: string, body: Record<string, unknown>): Promise<SnowRecord>;
   update(table: string, sysId: string, body: Record<string, unknown>): Promise<SnowRecord>;
-  addJournal(table: string, sysId: string, element: 'comments' | 'work_notes', text: string): Promise<JournalEntry>;
+  /**
+   * Appends a journal entry. The record comes back with it because a
+   * journal write bumps `sys_updated_on`, and that stamp is the echo guard
+   * the link records so the next poll does not read our own write as a
+   * change (ServiceNow Sync technical 2.7).
+   */
+  createJournal(
+    table: string,
+    sysId: string,
+    element: 'comments' | 'work_notes',
+    text: string,
+  ): Promise<{ entry: JournalEntry; record: SnowRecord }>;
 }
 
 export class SnowError extends Error {
@@ -176,15 +187,17 @@ export class HttpSnowClient implements SnowClient {
     return (await this.request<{ result: SnowRecord }>('PATCH', tablePath(table, sysId), {}, body)).result;
   }
 
-  async addJournal(
+  async createJournal(
     table: string,
     sysId: string,
     element: 'comments' | 'work_notes',
     text: string,
-  ): Promise<JournalEntry> {
-    await this.update(table, sysId, { [element]: text });
+  ): Promise<{ entry: JournalEntry; record: SnowRecord }> {
+    const record = await this.update(table, sysId, { [element]: text });
     const entries = await this.journal(sysId, null);
-    return entries.filter((entry) => entry.element === element).at(-1)!;
+    const entry = entries.filter((one) => one.element === element).at(-1);
+    if (!entry) throw new SnowError(0, `journal entry not returned for ${sysId}`);
+    return { entry, record };
   }
 
   private async request<T>(

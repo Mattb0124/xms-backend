@@ -357,6 +357,32 @@ export class ConnectorsRepository extends RepositoryBase {
     await tx.query(`update acct.sync_links set ${sets} where id = $1`, [id, ...keys.map((key) => values[key])]);
   }
 
+  /**
+   * The comment or work note an outbound row names. The connector reads the
+   * message tables directly rather than through the ticket service because
+   * it needs the stored row, author and source, not the caller's view.
+   */
+  message(
+    tx: Tx,
+    kind: 'comment' | 'work_note',
+    id: string,
+  ): Promise<{ id: string; body: string; author_name: string; source: string; created_at: string } | undefined> {
+    return this.maybeOne(
+      tx,
+      `select id, body, author_name, source, created_at from ${kind === 'comment' ? 'acct.comments' : 'acct.work_notes'} where id = $1`,
+      [id],
+    );
+  }
+
+  /** Whether this message already reached the instance (a redelivered row must not write a second journal entry). */
+  journalLinkExistsForXms(tx: Tx, instanceId: string, kind: 'comment' | 'work_note', xmsId: string): Promise<boolean> {
+    return this.maybeOne(
+      tx,
+      'select 1 from acct.sync_journal_links where instance_id = $1 and xms_kind = $2 and xms_id = $3',
+      [instanceId, kind, xmsId],
+    ).then((row) => row !== undefined);
+  }
+
   journalLinkExists(tx: Tx, instanceId: string, externalJournalSysId: string): Promise<boolean> {
     return this.maybeOne(
       tx,

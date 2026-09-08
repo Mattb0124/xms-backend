@@ -446,6 +446,8 @@ export class ConnectorsService {
         if (action === 'replay') {
           if (letter.queue === 'inbox' && letter.payload.inbox_id)
             await this.repo.reopenInbox(tx, String(letter.payload.inbox_id));
+          else if (letter.queue === 'outbound' && letter.payload.outbound_id)
+            await this.repo.reopenOutbound(tx, String(letter.payload.outbound_id));
           else if (letter.queue === 'outbox' && letter.payload.outbox_id)
             await tx.query(
               'update sys.outbox set dispatched_at = null, attempts = 0, last_error = null where id = $1',

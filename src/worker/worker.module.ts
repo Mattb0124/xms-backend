@@ -128,6 +128,7 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.digests.verifyJob());
     this.runner.schedule(this.sync.pollJob());
     this.runner.schedule(this.sync.applyJob());
+    this.runner.schedule(this.sync.outboundJob());
     this.runner.schedule(this.sync.healthJob());
     this.runner.schedule(this.periods.autoLock());
     this.runner.schedule(this.renewals.renewalAlerts());
