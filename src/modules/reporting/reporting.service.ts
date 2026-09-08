@@ -375,11 +375,34 @@ export class ReportingService {
     };
   }
 
+  /**
+   * The Security dashboard (Audit & Analytics 7.1, XA-03). Every figure is
+   * counted from a table that exists, named beside it:
+   *
+   * - `by_type`, `signin_failures`, `isolation_probes`, `abuse_by_kind` and
+   *   `rate_limited_clients` from `sys.security_events`, the stream the
+   *   guard, the rate limiter and the worker write to. Failed sign-ins are
+   *   `auth.signin.failed`; denied requests are the `authz.*` group, which
+   *   `by_type` carries with its outcome.
+   * - `paused_integrations` from `acct.webhook_subscriptions.status` and
+   *   `acct.connector_instances.kill_switch`, both account scoped, so the
+   *   binding decides which accounts are counted.
+   * - `quarantined_attachments` from `acct.attachments.scan_state`.
+   * - `open_dead_letters` from `sys.dead_letters`.
+   *
+   * Nothing here is derived from a table the platform does not have; a
+   * signal with no source is left out rather than guessed at.
+   */
   securityDashboard(principal: Principal, days = 7) {
     return this.uow.run(principal, async (tx) => ({
       by_type: await this.reporting.securityTiles(tx, days),
       signin_failures: await this.reporting.signinFailures(tx, days),
       isolation_probes: await this.reporting.isolationProbes(tx, days),
+      abuse_by_kind: await this.reporting.abuseByKind(tx, days),
+      rate_limited_clients: await this.reporting.rateLimitedClients(tx, days),
+      paused_integrations: await this.reporting.pausedIntegrations(tx),
+      quarantined_attachments: await this.reporting.quarantinedAttachments(tx, days),
+      open_dead_letters: await this.reporting.openDeadLetters(tx),
     }));
   }
 

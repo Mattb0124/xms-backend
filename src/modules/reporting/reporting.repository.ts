@@ -254,6 +254,75 @@ export class ReportingRepository extends RepositoryBase {
     );
   }
 
+  /**
+   * The abuse half of the security stream by kind (`sys.security_events`,
+   * the `abuse.*` group of the catalog): rate limits, bad webhook
+   * signatures, suspected mail loops, rejected uploads and CSP reports.
+   */
+  abuseByKind(tx: Tx, days: number): Promise<{ event_type: string; n: number }[]> {
+    return this.many(
+      tx,
+      `select event_type, count(*)::int as n from sys.security_events
+        where event_type like 'abuse.%' and occurred_at >= now() - ($1::int * interval '1 day')
+        group by 1 order by 2 desc`,
+      [days],
+    );
+  }
+
+  /** Who the rate limiter turned away (`sys.security_events`, `abuse.rate_limited`). */
+  rateLimitedClients(tx: Tx, days: number): Promise<{ actor_id: string; principal_kind: string | null; n: number }[]> {
+    return this.many(
+      tx,
+      `select actor_id, principal_kind, count(*)::int as n from sys.security_events
+        where event_type = 'abuse.rate_limited' and occurred_at >= now() - ($1::int * interval '1 day')
+        group by 1, 2 order by 3 desc limit 20`,
+      [days],
+    );
+  }
+
+  /**
+   * What is paused right now rather than what paused during the window:
+   * neither `acct.webhook_subscriptions` nor `acct.connector_instances`
+   * timestamps the pause, and a subscription that has been off for a month
+   * is the more urgent of the two anyway. Both tables are account scoped,
+   * so the binding decides which accounts are counted.
+   */
+  pausedIntegrations(tx: Tx): Promise<{ kind: string; reason: string; n: number }[]> {
+    return this.many(
+      tx,
+      `select 'webhook' as kind, coalesce(paused_reason, 'unstated') as reason, count(*)::int as n
+         from acct.webhook_subscriptions where status = 'paused' group by 1, 2
+       union all
+       select 'connector', coalesce(trip_reason, 'unstated'), count(*)::int
+         from acct.connector_instances where kill_switch = 'tripped' group by 1, 2
+       order by 3 desc`,
+    );
+  }
+
+  /** Files the scanner held back in the window (`acct.attachments.scan_state`). */
+  quarantinedAttachments(tx: Tx, days: number): Promise<{ origin: string; n: number }[]> {
+    return this.many(
+      tx,
+      `select origin, count(*)::int as n from acct.attachments
+        where scan_state = 'quarantined' and created_at >= now() - ($1::int * interval '1 day')
+        group by 1 order by 2 desc`,
+      [days],
+    );
+  }
+
+  /**
+   * The queues with work nobody has claimed back (`sys.dead_letters`,
+   * `resolution = 'open'`). Operator wide, like the rest of the sys stream:
+   * a dead letter is an operations signal before it is an account one.
+   */
+  openDeadLetters(tx: Tx): Promise<{ queue: string; n: number; oldest: string }[]> {
+    return this.many(
+      tx,
+      `select queue, count(*)::int as n, min(first_failed_at) as oldest from sys.dead_letters
+        where resolution = 'open' group by 1 order by 2 desc`,
+    );
+  }
+
   usageTiles(tx: Tx, accountIds: string[], days: number): Promise<{ metric: string; key: string; n: number }[]> {
     return this.many(
       tx,

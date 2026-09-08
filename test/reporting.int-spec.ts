@@ -227,6 +227,84 @@ describe('dashboards', () => {
     const usage = await api().get('/v1/dashboards/usage').set(bearer(adminToken)).expect(200);
     expect(usage.body).toHaveProperty('api_errors');
   });
+
+  it('the security dashboard counts every signal from the table that records it', async () => {
+    const ticketId = await withSuperuser((client) =>
+      client
+        .query<{ id: string }>('select id from acct.tickets where account_id = $1 limit 1', [accountId])
+        .then((result) => result.rows[0].id),
+    );
+    const apiClient = await api()
+      .post('/v1/admin/api-clients')
+      .set(bearer(adminToken))
+      .send({ name: 'Finance', scopes: ['exports:read'], account_ids: [accountId] })
+      .expect(201);
+    await withSuperuser(async (client) => {
+      for (const actor of ['client-a', 'client-a', 'client-b']) {
+        await client.query(
+          `insert into sys.security_events (event_type, outcome, account_id, actor_kind, actor_id, principal_kind)
+           values ('abuse.rate_limited', 'denied', $1, 'api_client', $2, 'api_client')`,
+          [accountId, actor],
+        );
+      }
+      await client.query(
+        `insert into sys.security_events (event_type, outcome, actor_kind, actor_id)
+         values ('abuse.webhook.bad_signature', 'denied', 'anonymous', 'anonymous')`,
+      );
+      await client.query(
+        `insert into acct.webhook_subscriptions
+           (account_id, api_client_id, endpoint_url, event_types, secret_ciphertext, secret_kid, status, paused_reason)
+         values ($1, $2, 'https://client.test/hook', array['ticket.created'], 'ciphertext', 'k1', 'paused', 'continuous_failure')`,
+        [accountId, apiClient.body.id],
+      );
+      await client.query(
+        `insert into acct.connector_instances
+           (account_id, type, name, base_url, auth_kind, credential_secret_name, kill_switch, trip_reason)
+         values ($1, 'servicenow', 'Paused CSM', 'https://snow.test', 'basic', 'xms/secret', 'tripped', 'error ratio')`,
+        [accountId],
+      );
+      await client.query(
+        `insert into acct.attachments
+           (account_id, ticket_id, file_name, content_type, size_bytes, s3_key, scan_state, origin, visibility, uploaded_by)
+         values ($1, $2, 'payload.exe', 'application/octet-stream', 10, 'quarantine/1', 'quarantined', 'email', 'internal', 'system')`,
+        [accountId, ticketId],
+      );
+      await client.query(
+        `insert into sys.dead_letters (queue, account_id, payload, error, attempts)
+         values ('outbox', $1, '{}'::jsonb, 'the endpoint refused the payload', 3)`,
+        [accountId],
+      );
+    });
+
+    const dashboard = await api().get('/v1/dashboards/security?days=7').set(bearer(adminToken)).expect(200);
+    expect(dashboard.body.abuse_by_kind).toEqual(
+      expect.arrayContaining([
+        { event_type: 'abuse.rate_limited', n: 3 },
+        { event_type: 'abuse.webhook.bad_signature', n: 1 },
+      ]),
+    );
+    expect(dashboard.body.rate_limited_clients[0]).toMatchObject({
+      actor_id: 'client-a',
+      principal_kind: 'api_client',
+      n: 2,
+    });
+    expect(dashboard.body.paused_integrations).toEqual(
+      expect.arrayContaining([
+        { kind: 'webhook', reason: 'continuous_failure', n: 1 },
+        { kind: 'connector', reason: 'error ratio', n: 1 },
+      ]),
+    );
+    expect(dashboard.body.quarantined_attachments).toEqual([{ origin: 'email', n: 1 }]);
+    expect(dashboard.body.open_dead_letters[0]).toMatchObject({ queue: 'outbox', n: 1 });
+    expect(new Date(dashboard.body.open_dead_letters[0].oldest).getTime()).toBeLessThanOrEqual(Date.now());
+    // Denied requests come from the same stream and keep their outcome.
+    expect(
+      dashboard.body.by_type.some(
+        (row: { event_type: string; outcome: string }) =>
+          row.event_type.startsWith('authz.') && row.outcome === 'denied',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('exports', () => {
