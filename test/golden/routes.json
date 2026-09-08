@@ -2821,6 +2821,16 @@
   },
   {
     "method": "POST",
+    "path": "/v1/tickets/bulk",
+    "controller": "BulkTicketsController",
+    "handler": "apply",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/time/adjustments",
     "controller": "TimeController",
     "handler": "adjust",

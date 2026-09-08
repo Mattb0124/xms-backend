@@ -5,6 +5,7 @@ import { ContractsCoreModule } from '../contracts/contracts.module.js';
 import { CalendarsCoreModule } from '../calendars/calendars.module.js';
 import { NotificationsController, NotificationsService } from '../notifications/notifications.controller.js';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
+import { BulkTicketsController, BulkTicketsService } from './bulk.js';
 import { CatalogsController } from './catalogs.controller.js';
 import { TicketsController } from './tickets.controller.js';
 import { TicketsRepository } from './tickets.repository.js';
@@ -21,6 +22,7 @@ import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
   providers: [
     TicketsRepository,
     TicketsService,
+    BulkTicketsService,
     NotificationsRepository,
     NotificationsService,
     OutboxService,
@@ -32,6 +34,7 @@ import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
   exports: [
     TicketsService,
     TicketsRepository,
+    BulkTicketsService,
     NotificationsRepository,
     NotificationsService,
     OutboxService,
@@ -49,7 +52,7 @@ export class TicketsCoreModule {}
 /** Ticket Management (02-modules/ticket-management) with its notification feed and saved views. */
 @Module({
   imports: [TicketsCoreModule],
-  controllers: [TicketsController, NotificationsController, ViewsController, CatalogsController],
+  controllers: [TicketsController, BulkTicketsController, NotificationsController, ViewsController, CatalogsController],
   exports: [TicketsCoreModule],
 })
 export class TicketsModule {}
