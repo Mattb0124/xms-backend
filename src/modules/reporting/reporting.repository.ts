@@ -344,4 +344,55 @@ export class ReportingRepository extends RepositoryBase {
       [accountIds, days],
     );
   }
+
+  /**
+   * The per-account strip of the Usage dashboard. One correlated count per
+   * figure, each from the table that records it:
+   * `acct.tickets.created_at` and `.closed_at`, `acct.time_entries.minutes`
+   * over `performed_on`, the portal sign-ins from `sys.security_events`
+   * (`auth.signin.success` with a portal principal), the API client calls
+   * and the active users from `rpt.usage_events` (`api.request` with an
+   * api_client principal, and every non-request event respectively).
+   */
+  usagePerAccount(
+    tx: Tx,
+    accountIds: string[],
+    days: number,
+  ): Promise<
+    {
+      account_id: string;
+      key: string;
+      name: string;
+      tickets_created: number;
+      tickets_closed: number;
+      minutes_logged: number;
+      portal_signins: number;
+      api_calls: number;
+      active_users: number;
+    }[]
+  > {
+    return this.many(
+      tx,
+      `select a.id as account_id, a.key, a.name,
+              (select count(*)::int from acct.tickets t
+                where t.account_id = a.id and t.created_at >= now() - ($2::int * interval '1 day')) as tickets_created,
+              (select count(*)::int from acct.tickets t
+                where t.account_id = a.id and t.closed_at >= now() - ($2::int * interval '1 day')) as tickets_closed,
+              (select coalesce(sum(e.minutes), 0)::int from acct.time_entries e
+                where e.account_id = a.id and e.performed_on >= (current_date - $2::int)) as minutes_logged,
+              (select count(*)::int from sys.security_events s
+                where s.account_id = a.id and s.event_type = 'auth.signin.success' and s.principal_kind = 'portal'
+                  and s.occurred_at >= now() - ($2::int * interval '1 day')) as portal_signins,
+              (select count(*)::int from rpt.usage_events u
+                where u.account_id = a.id and u.event_type = 'api.request' and u.principal_kind = 'api_client'
+                  and u.occurred_at >= now() - ($2::int * interval '1 day')) as api_calls,
+              (select count(distinct u.actor_id)::int from rpt.usage_events u
+                where u.account_id = a.id and u.event_type <> 'api.request'
+                  and u.occurred_at >= now() - ($2::int * interval '1 day')) as active_users
+         from op.accounts a
+        where a.id = any ($1::uuid[])
+        order by a.key`,
+      [accountIds, days],
+    );
+  }
 }

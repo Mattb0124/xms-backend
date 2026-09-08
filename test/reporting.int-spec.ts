@@ -305,6 +305,57 @@ describe('dashboards', () => {
       ),
     ).toBe(true);
   });
+
+  it('the usage dashboard reads the window one account at a time', async () => {
+    await withSuperuser(async (client) => {
+      for (const actor of ['finance-client', 'finance-client', 'billing-client']) {
+        await client.query(
+          `insert into rpt.usage_events (event_type, account_id, actor_kind, actor_id, principal_kind, attrs)
+           values ('api.request', $1, 'api_client', $2, 'api_client', '{"route": "GET /v1/tickets", "status": 200}'::jsonb)`,
+          [accountId, actor],
+        );
+      }
+      for (const actor of ['user-a', 'user-b', 'user-b']) {
+        await client.query(
+          `insert into rpt.usage_events (event_type, account_id, actor_kind, actor_id, principal_kind, attrs)
+           values ('screen.view', $1, 'user', $2, 'internal', '{"screen": "queue"}'::jsonb)`,
+          [accountId, actor],
+        );
+      }
+    });
+    const { UsageEventsService } = await import('../src/modules/telemetry/telemetry.module.js');
+    await app.get(UsageEventsService).flush();
+
+    const usage = await api().get('/v1/dashboards/usage?days=7').set(bearer(adminToken)).expect(200);
+    const perAccount: Record<string, Record<string, number>> = Object.fromEntries(
+      usage.body.per_account.map((row: { key: string }) => [row.key, row]),
+    );
+    expect(Object.keys(perAccount).sort()).toEqual(['BRK', 'OTH']);
+    // Three tickets were opened on Brookfield and one resolved, none closed;
+    // the ninety minutes are the only time logged anywhere.
+    expect(perAccount.BRK).toMatchObject({
+      name: 'Brookfield',
+      tickets_created: 3,
+      tickets_closed: 0,
+      minutes_logged: 90,
+      api_calls: 3,
+      active_users: 2,
+    });
+    // The portal user signed in once to read its dashboard, and that
+    // sign-in belongs to its account.
+    expect(perAccount.BRK.portal_signins).toBeGreaterThanOrEqual(1);
+    expect(perAccount.OTH).toMatchObject({
+      name: 'Other',
+      tickets_created: 1,
+      tickets_closed: 0,
+      minutes_logged: 0,
+      portal_signins: 0,
+      api_calls: 0,
+      active_users: 0,
+    });
+    // A consultant reads usage on nothing: the route stands on analytics:read.
+    await api().get('/v1/dashboards/usage').set(bearer(consultantToken)).expect(403);
+  });
 });
 
 describe('exports', () => {

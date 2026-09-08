@@ -406,15 +406,31 @@ export class ReportingService {
     }));
   }
 
+  /**
+   * The Usage dashboard (Audit & Analytics 7.1, XA-03). The tiles are the
+   * portfolio roll-up over `rpt.usage_events` (active users, actions,
+   * screens, fruitless searches, API errors); `per_account` is the same
+   * window seen one account at a time, and each of its figures is counted
+   * from the table that records it: `acct.tickets` for what was opened and
+   * closed, `acct.time_entries` for the minutes logged,
+   * `sys.security_events` for the portal sign-ins, `rpt.usage_events` for
+   * the API client calls and the active users. Nothing here is estimated
+   * from a table the platform does not have.
+   *
+   * Named-user drill-down is not offered: that needs
+   * `analytics:read-individual`, and this route stands on `analytics:read`.
+   */
   usageDashboard(principal: Principal, days = 7) {
     return this.uow.run(principal, async (tx) => {
-      const tiles = await this.reporting.usageTiles(
-        tx,
-        principal.accountIds.filter((id) => id !== GLOBAL_ACCOUNT_ID),
-        days,
-      );
-      const grouped: Record<string, { key: string; n: number }[]> = {};
-      for (const tile of tiles) (grouped[tile.metric] ??= []).push({ key: tile.key ?? 'unknown', n: tile.n });
+      const accountIds = principal.accountIds.filter((id) => id !== GLOBAL_ACCOUNT_ID);
+      const tiles = await this.reporting.usageTiles(tx, accountIds, days);
+      const grouped: Record<string, unknown> = {};
+      for (const tile of tiles)
+        ((grouped[tile.metric] ??= []) as { key: string; n: number }[]).push({
+          key: tile.key ?? 'unknown',
+          n: tile.n,
+        });
+      grouped.per_account = await this.reporting.usagePerAccount(tx, accountIds, days);
       return grouped;
     });
   }

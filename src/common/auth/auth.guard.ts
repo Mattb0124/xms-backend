@@ -305,6 +305,11 @@ export class AuthGuard implements CanActivate {
       ...actor(principal),
       type: 'auth.signin.success',
       outcome: 'success',
+      // A portal user belongs to exactly one account, so its sign-in is
+      // that account's event and the Usage dashboard counts it there. An
+      // internal principal spans its grants, so its sign-in stays
+      // portfolio-wide with no account, as before.
+      accountId: principal.kind === 'portal' ? (principal.accountIds[0] ?? null) : null,
       attrs: { ...base.attrs, tokenType: principal.tokenType },
     });
   }
