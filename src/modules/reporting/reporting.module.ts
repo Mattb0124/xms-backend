@@ -32,7 +32,7 @@ import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import type { Job } from '../../worker/jobs.js';
 import type { EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
-import { ReportingService } from './reporting.service.js';
+import { packFormat, ReportingService } from './reporting.service.js';
 
 function decodeJson<T>(encoded: string | undefined, code: string): T | undefined {
   if (!encoded) return undefined;
@@ -134,14 +134,16 @@ export class ReportingController {
     return this.reporting.generateWsr(principal, ctx, id);
   }
 
+  /** `?format=pdf` mints the document rendition; anything else mints the deck. */
   @Get('reports/packs/:id')
   @RequirePermission('tickets:view')
   pack(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,
     @Param('id', ParseUUIDPipe) id: string,
+    @Query('format') format?: string,
   ) {
-    return this.reporting.pack(principal, ctx, id);
+    return this.reporting.pack(principal, ctx, id, packFormat(format));
   }
 }
 

@@ -185,7 +185,7 @@ export class SchedulesRepository extends RepositoryBase {
   ): Promise<Record<string, unknown>[]> {
     return this.many(
       tx,
-      `select r.*, p.pptx_key from acct.report_runs r left join acct.report_packs p on p.run_id = r.id
+      `select r.*, p.pptx_key, p.pdf_key from acct.report_runs r left join acct.report_packs p on p.run_id = r.id
         where ($1::uuid is null or r.account_id = $1) and ($2::text is null or r.status = $2) and ($3::uuid is null or r.schedule_id = $3)
         order by r.created_at desc limit 100`,
       [filter.accountId ?? null, filter.status ?? null, filter.scheduleId ?? null],

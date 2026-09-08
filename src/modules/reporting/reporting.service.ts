@@ -26,6 +26,7 @@ import { TimeRepository } from '../time/time.repository.js';
 import { translateEvents, type EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
 import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
+import { renderPackPdf, wsrDocument } from '../../domain/reporting/pdf.js';
 
 /**
  * Dashboards, exports, audit search and the basic WSR pack (Dashboards &
@@ -34,6 +35,16 @@ import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
  * caller's binding; the client view is the whitelist; exports and pack
  * downloads write data.export.produced.
  */
+export const PDF_CONTENT_TYPE = 'application/pdf';
+export const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+/** The two renditions a run produces; anything else on the query falls back to the deck. */
+export type PackFormat = 'pptx' | 'pdf';
+
+export function packFormat(value: string | undefined): PackFormat {
+  return value === 'pdf' ? 'pdf' : 'pptx';
+}
+
 const PORTAL_MEASURES = [
   'open_tickets',
   'volume_created',
@@ -437,6 +448,32 @@ export class ReportingService {
 
   // Report packs ------------------------------------------------------------
 
+  /**
+   * Both renditions of one pack from one set of numbers (functional 5.6:
+   * "the PDF is the exact rendering of the PPTX"). The deck and the document
+   * are rendered from the same frozen measures, notable rows and narrative
+   * and stored side by side under the run's prefix, so a run always answers
+   * either format and the two can never disagree.
+   */
+  private async renderAndStore(
+    accountId: string,
+    runId: string,
+    accountName: string,
+    period: Period,
+    measures: Measures,
+    notable: ReturnType<typeof notableTickets>,
+    narrative: string,
+  ): Promise<{ pptxKey: string; pdfKey: string }> {
+    const prefix = `accounts/${accountId}/reports/${runId}/wsr-${iso(period.start)}`;
+    const pptxKey = `${prefix}.pptx`;
+    const pdfKey = `${prefix}.pdf`;
+    const pptx = await renderWsr(accountName, period, measures, notable, narrative);
+    await this.store.putObject(pptxKey, pptx, PPTX_CONTENT_TYPE);
+    const pdf = await renderPackPdf(wsrDocument(accountName, period, measures, notable, narrative));
+    await this.store.putObject(pdfKey, pdf, PDF_CONTENT_TYPE);
+    return { pptxKey, pdfKey };
+  }
+
   async generateWsr(
     principal: Principal,
     ctx: RequestContext,
@@ -467,13 +504,7 @@ export class ReportingService {
         const measures = computeMeasures(facts, time, period, reference);
         const notable = notableTickets(facts, reference, 5);
         const narrative = templatedNarrative(account.name, period, measures);
-        const pptx = await renderWsr(account.name, period, measures, notable, narrative);
-        const key = `accounts/${accountId}/reports/${run.id}/wsr-${iso(period.start)}.pptx`;
-        await this.store.putObject(
-          key,
-          pptx,
-          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        );
+        const keys = await this.renderAndStore(accountId, run.id, account.name, period, measures, notable, narrative);
         const pack = await this.reporting.insertPack(tx, {
           accountId,
           runId: run.id,
@@ -482,7 +513,8 @@ export class ReportingService {
           measures,
           notable,
           narrative,
-          pptxKey: key,
+          pptxKey: keys.pptxKey,
+          pdfKey: keys.pdfKey,
         });
         await this.reporting.finishRun(tx, run.id, pack.id, null);
         await this.audit.account(tx, accountId, actorOf(principal), ctx, [
@@ -493,9 +525,9 @@ export class ReportingService {
             newValue: { run_id: run.id, period: [iso(period.start), iso(period.end)] },
           },
         ]);
-        const download = await this.store.presignDownload(key, {
+        const download = await this.store.presignDownload(keys.pptxKey, {
           fileName: `${account.key}-WSR-${iso(period.start)}.pptx`,
-          contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+          contentType: PPTX_CONTENT_TYPE,
         });
         await this.security.write(
           {
@@ -538,7 +570,14 @@ export class ReportingService {
       actor: Parameters<AuditService['account']>[2];
       ctx: Parameters<AuditService['account']>[3];
     },
-  ): Promise<{ run_id: string; pack_id: string; pptx_key: string; file_name: string }> {
+  ): Promise<{
+    run_id: string;
+    pack_id: string;
+    pptx_key: string;
+    pdf_key: string;
+    file_name: string;
+    pdf_file_name: string;
+  }> {
     const account = await this.accounts.byId(tx, input.accountId);
     const period = input.period;
     const reference = new Date();
@@ -563,12 +602,14 @@ export class ReportingService {
       const measures = computeMeasures(facts, time, period, reference);
       const notable = notableTickets(facts, reference, 5);
       const narrative = templatedNarrative(account.name, period, measures);
-      const pptx = await renderWsr(account.name, period, measures, notable, narrative);
-      const key = `accounts/${input.accountId}/reports/${run.id}/wsr-${iso(period.start)}.pptx`;
-      await this.store.putObject(
-        key,
-        pptx,
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      const keys = await this.renderAndStore(
+        input.accountId,
+        run.id,
+        account.name,
+        period,
+        measures,
+        notable,
+        narrative,
       );
       const pack = await this.reporting.insertPack(tx, {
         accountId: input.accountId,
@@ -578,7 +619,8 @@ export class ReportingService {
         measures,
         notable,
         narrative,
-        pptxKey: key,
+        pptxKey: keys.pptxKey,
+        pdfKey: keys.pdfKey,
       });
       await this.reporting.finishRun(tx, run.id, pack.id, null);
       await this.audit.account(tx, input.accountId, input.actor, input.ctx, [
@@ -596,8 +638,10 @@ export class ReportingService {
       return {
         run_id: run.id,
         pack_id: pack.id,
-        pptx_key: key,
+        pptx_key: keys.pptxKey,
+        pdf_key: keys.pdfKey,
         file_name: `${account.key}-WSR-${iso(period.start)}.pptx`,
+        pdf_file_name: `${account.key}-WSR-${iso(period.start)}.pdf`,
       };
     } catch (error) {
       await this.reporting.finishRun(tx, run.id, null, (error as Error).message.slice(0, 500));
@@ -611,15 +655,15 @@ export class ReportingService {
     return this.uow.run(principal, (tx) => this.reporting.runs(tx, accountId));
   }
 
-  pack(principal: Principal, ctx: RequestContext, packId: string) {
+  /**
+   * A pack with a download for the format asked for (`?format=pdf`, PPTX by
+   * default). Both keys are on the row, so the caller can link either
+   * rendition without a second route.
+   */
+  pack(principal: Principal, ctx: RequestContext, packId: string, format: PackFormat = 'pptx') {
     return this.uow.run(principal, async (tx) => {
       const pack = await this.reporting.pack(tx, packId);
-      const download = pack.pptx_key
-        ? await this.store.presignDownload(pack.pptx_key, {
-            fileName: `wsr-${pack.period_start}.pptx`,
-            contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          })
-        : null;
+      const download = await this.packDownload(pack, format);
       if (download)
         await this.security.write({
           type: 'data.export.produced',
@@ -632,9 +676,24 @@ export class ReportingService {
           requestId: ctx.requestId,
           entityKind: 'report_pack',
           entityId: pack.id,
-          attrs: { kind: 'wsr', format: 'pptx', download: true },
+          attrs: { kind: 'wsr', format, download: true },
         });
-      return { ...pack, download };
+      return { ...pack, format, download };
+    });
+  }
+
+  /** A presigned link to one rendition of a pack, or null when it was never stored. */
+  async packDownload(
+    pack: { period_start: string; pptx_key: string | null; pdf_key: string | null },
+    format: PackFormat,
+    expiresSeconds?: number,
+  ): Promise<string | null> {
+    const key = format === 'pdf' ? pack.pdf_key : pack.pptx_key;
+    if (!key) return null;
+    return this.store.presignDownload(key, {
+      fileName: `wsr-${pack.period_start}.${format}`,
+      contentType: format === 'pdf' ? PDF_CONTENT_TYPE : PPTX_CONTENT_TYPE,
+      expiresSeconds,
     });
   }
 

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
+import { extractPdfText, pdfPageCount } from '../src/domain/reporting/pdf.js';
 import { SnapshotJob } from '../src/modules/reporting/reporting.module.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
@@ -157,6 +158,20 @@ afterAll(async () => {
 
 const api = () => request(app.getHttpServer());
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+/** Follows a presigned link back at the API's own signed download route and returns the bytes. */
+async function download(link: string): Promise<Buffer> {
+  const response = await request(app.getHttpServer())
+    .get(link.replace(/^https?:\/\/[^/]+/, ''))
+    .buffer(true)
+    .parse((res, callback) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => callback(null, Buffer.concat(chunks)));
+    })
+    .expect(200);
+  return response.body as Buffer;
+}
 const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 
 describe('dashboards', () => {
@@ -527,7 +542,7 @@ describe('audit search', () => {
 });
 
 describe('report packs and snapshots', () => {
-  it('generates a five-slide WSR on demand, stores it and records the run', async () => {
+  it('generates a five-slide WSR on demand, stores both renditions and records the run', async () => {
     await api().post(`/v1/accounts/${accountId}/reports/wsr`).set(bearer(consultantToken)).expect(403);
     const generated = await api().post(`/v1/accounts/${accountId}/reports/wsr`).set(bearer(adminToken)).expect(201);
     expect(generated.body.download).toContain('/v1/storage/download?');
@@ -550,6 +565,23 @@ describe('report packs and snapshots', () => {
       .expect(200);
     expect(pack.body.narrative_versions[0].text).toContain('Brookfield: week of');
     expect(pack.body.notable.every((row: Record<string, unknown>) => !('notes' in row))).toBe(true);
+    // Both renditions are stored under the run, and the download route answers either.
+    expect(pack.body).toMatchObject({ format: 'pptx' });
+    expect(pack.body.pptx_key).toMatch(/.pptx$/);
+    expect(pack.body.pdf_key).toMatch(/.pdf$/);
+    const asPdf = await api()
+      .get(`/v1/reports/packs/${generated.body.pack_id}?format=pdf`)
+      .set(bearer(consultantToken))
+      .expect(200);
+    expect(asPdf.body.format).toBe('pdf');
+    expect(asPdf.body.download).not.toBe(pack.body.download);
+    const rendered = await download(asPdf.body.download);
+    expect(rendered.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(pdfPageCount(rendered)).toBe(5);
+    const text = extractPdfText(rendered);
+    for (const title of ['Weekly status report', 'Headline', 'Service levels', 'Consumption'])
+      expect(text).toContain(title);
+    expect(text).toContain('Brookfield');
     await api().get(`/v1/reports/packs/${generated.body.pack_id}`).set(bearer(portalToken)).expect(403);
   });
 

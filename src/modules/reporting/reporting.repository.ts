@@ -175,13 +175,14 @@ export class ReportingRepository extends RepositoryBase {
       notable: unknown;
       narrative: string;
       pptxKey: string;
+      pdfKey: string;
     },
   ): Promise<{ id: string }> {
     return this.one(
       tx,
       'report_pack',
-      `insert into acct.report_packs (account_id, run_id, period_start, period_end, measures, notable, narrative_source, narrative_versions, pptx_key)
-       values ($1, $2, $3, $4, $5, $6, 'template', $7, $8) returning id`,
+      `insert into acct.report_packs (account_id, run_id, period_start, period_end, measures, notable, narrative_source, narrative_versions, pptx_key, pdf_key)
+       values ($1, $2, $3, $4, $5, $6, 'template', $7, $8, $9) returning id`,
       [
         input.accountId,
         input.runId,
@@ -199,6 +200,7 @@ export class ReportingRepository extends RepositoryBase {
           },
         ]),
         input.pptxKey,
+        input.pdfKey,
       ],
     );
   }
@@ -206,7 +208,7 @@ export class ReportingRepository extends RepositoryBase {
   runs(tx: Tx, accountId: string): Promise<Record<string, unknown>[]> {
     return this.many(
       tx,
-      `select r.*, p.id as pack_id_resolved, p.pptx_key from acct.report_runs r left join acct.report_packs p on p.run_id = r.id where r.account_id = $1 order by r.created_at desc limit 50`,
+      `select r.*, p.id as pack_id_resolved, p.pptx_key, p.pdf_key from acct.report_runs r left join acct.report_packs p on p.run_id = r.id where r.account_id = $1 order by r.created_at desc limit 50`,
       [accountId],
     );
   }
@@ -224,6 +226,7 @@ export class ReportingRepository extends RepositoryBase {
     notable: unknown;
     narrative_versions: unknown[];
     pptx_key: string | null;
+    pdf_key: string | null;
   }> {
     return this.one(tx, 'report_pack', 'select * from acct.report_packs where id = $1', [id]);
   }
