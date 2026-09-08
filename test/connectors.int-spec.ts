@@ -914,6 +914,47 @@ describe('the outbound queue (SN-03)', () => {
     );
     expect(settled.rows).toEqual([]);
   });
+
+  it('counts the outbound queue on the health list and on the instance itself', async () => {
+    // Every row of this instance is settled by the test above, so the
+    // constructed rows below are the whole queue depth. They carry a
+    // correlation id of their own so the later describes see the queue as
+    // this one left it.
+    const FIXTURE = 'outbound-depth-fixture';
+    const seeded = await withSuperuser(async (client) => {
+      const template = await client.query<{ account_id: string; ticket_id: string; link_id: string }>(
+        `select account_id, ticket_id, link_id from acct.sync_outbound where instance_id = $1 limit 1`,
+        [instanceId],
+      );
+      const row = template.rows[0];
+      for (const status of ['pending', 'pending', 'dead_lettered', 'sent']) {
+        await client.query(
+          `insert into acct.sync_outbound (account_id, instance_id, ticket_id, link_id, event, status, correlation_id)
+           values ($1, $2, $3, $4, 'comment.created', $5, $6)`,
+          [row.account_id, instanceId, row.ticket_id, row.link_id, status, FIXTURE],
+        );
+      }
+      return row;
+    });
+    expect(seeded.account_id).toBe(accountId);
+
+    try {
+      const health = await api().get('/v1/connectors/health').set(bearer(adminToken)).expect(200);
+      expect(health.body).toHaveLength(1);
+      // The sent row is neither waiting nor lost, so it counts in neither.
+      expect(health.body[0]).toMatchObject({ id: instanceId, pending_outbound: 2, dead_lettered_outbound: 1 });
+
+      const one = await api().get(`/v1/connectors/${instanceId}`).set(bearer(adminToken)).expect(200);
+      expect(one.body).toMatchObject({ pending_outbound: 2, dead_lettered_outbound: 1 });
+    } finally {
+      await withSuperuser((client) =>
+        client.query('delete from acct.sync_outbound where correlation_id = $1', [FIXTURE]),
+      );
+    }
+
+    const drained = await api().get(`/v1/connectors/${instanceId}`).set(bearer(adminToken)).expect(200);
+    expect(drained.body).toMatchObject({ pending_outbound: 0, dead_lettered_outbound: 0 });
+  });
 });
 
 describe('the outbound conflict policy (SN-04)', () => {

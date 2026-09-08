@@ -74,6 +74,8 @@ export class ConnectorsService {
         ...publicView(row),
         account_name: await this.repo.accountName(tx, row.account_id),
         pending_inbox: await this.repo.pendingInboxCount(tx, row.id),
+        pending_outbound: await this.repo.pendingOutboundCount(tx, row.id),
+        dead_lettered_outbound: await this.repo.deadLetteredOutboundCount(tx, row.id),
         open_dead_letters: await this.repo.openDeadLetterCount(tx, row.id),
       };
     });
@@ -500,6 +502,11 @@ export class ConnectorsService {
           ...publicView(row),
           account_name: await this.repo.accountName(tx, row.account_id),
           pending_inbox: await this.repo.pendingInboxCount(tx, row.id),
+          // Both halves of the queue: what is still waiting to go out and
+          // what the dispatcher gave up on, which the health list shows
+          // next to the inbound depth so one instance is read in one row.
+          pending_outbound: await this.repo.pendingOutboundCount(tx, row.id),
+          dead_lettered_outbound: await this.repo.deadLetteredOutboundCount(tx, row.id),
           open_dead_letters: await this.repo.openDeadLetterCount(tx, row.id),
           inbound_lag_seconds: Math.max(0, Math.round((Date.now() - new Date(row.inbound_watermark).getTime()) / 1000)),
         });

@@ -612,6 +612,21 @@ export class ConnectorsRepository extends RepositoryBase {
     ).then((row) => row.n);
   }
 
+  /**
+   * The queue rows the dispatcher gave up on. A dead-lettered outbound row
+   * stays in this table (the `sys.dead_letters` row carries the payload for
+   * the replay), so the health list counts it here rather than folding it
+   * into `open_dead_letters`.
+   */
+  deadLetteredOutboundCount(tx: Tx, instanceId: string): Promise<number> {
+    return this.one<{ n: number }>(
+      tx,
+      'sync_outbound',
+      `select count(*)::int as n from acct.sync_outbound where instance_id = $1 and status = 'dead_lettered'`,
+      [instanceId],
+    ).then((row) => row.n);
+  }
+
   // Runs --------------------------------------------------------------------------
 
   async insertRun(tx: Tx, input: RunInput): Promise<void> {
