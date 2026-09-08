@@ -18,6 +18,7 @@ import {
   type Measures,
   type Period,
 } from '../../domain/reporting/measures.js';
+import { computeHealth, type HealthScore } from '../../domain/reporting/health.js';
 import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { ConfigService } from '../admin/config/config.service.js';
 import { translate, type ConditionSet } from '../tickets/conditions.js';
@@ -115,7 +116,15 @@ export interface DashboardView {
       Measures,
       'open_tickets' | 'breached_now' | 'at_risk_now' | 'unassigned_now' | 'volume_created' | 'volume_resolved'
     >;
+    /** The health strip (DR-09): one composed number per account with its reasons. */
+    health: HealthScore;
   }[];
+}
+
+/** The health score of one account over one window, as the account tile reads it. */
+export interface AccountHealth extends HealthScore {
+  account_id: string;
+  window: { start: string; end: string; days: number };
 }
 
 @Injectable()
@@ -164,6 +173,7 @@ export class ReportingService {
         await this.consumingClasses(tx),
       );
       const accounts = await this.accounts.summariesByIds(tx, accountIds);
+      const health = await this.healthOf(tx, accountIds, period, now, facts, time);
       const perAccount = accounts.map((account) => {
         const measures = computeMeasures(
           facts.filter((fact) => fact.accountId === account.id),
@@ -183,6 +193,7 @@ export class ReportingService {
             volume_created: measures.volume_created,
             volume_resolved: measures.volume_resolved,
           },
+          health: health.get(account.id)!,
         };
       });
       return {
@@ -254,6 +265,102 @@ export class ReportingService {
         measures: this.clientMeasures(measures, settings.rows[0]?.consumption_visible ?? false),
       };
     });
+  }
+
+  /**
+   * The account health score (DR-09; functional 5.12). Composed on read
+   * from the measures the dashboards already compute, the satisfaction the
+   * survey module records, the contract position the budget tab computes
+   * and the portal's own sign-ins. Nothing is stored: the spec asks for no
+   * history of the score, and a stored one is stale the moment a ticket
+   * moves.
+   */
+  health(principal: Principal, accountId: string, days = 90): Promise<AccountHealth> {
+    if (!principal.accountIds.includes(accountId))
+      throw new NotFoundException({ code: 'not_found', entity: 'account' });
+    return this.uow.run(principal, async (tx) => {
+      const now = new Date();
+      const period: Period = { start: new Date(now.getTime() - days * 86_400_000), end: now };
+      const facts = await this.reporting.ticketFacts(tx, [accountId], period.start);
+      const time = await this.reporting.timeFacts(
+        tx,
+        [accountId],
+        iso(period.start),
+        iso(now),
+        await this.consumingClasses(tx, accountId),
+      );
+      const scores = await this.healthOf(tx, [accountId], period, now, facts, time);
+      return {
+        account_id: accountId,
+        window: { start: period.start.toISOString(), end: period.end.toISOString(), days },
+        ...scores.get(accountId)!,
+      };
+    });
+  }
+
+  /**
+   * The score of every named account over one window, in one pass: the
+   * portfolio strip asks for all of them at once, and the account tile asks
+   * for one, so both walk the same code and the same queries. The ticket
+   * and time facts are handed in because the caller has already read them.
+   */
+  private async healthOf(
+    tx: Tx,
+    accountIds: readonly string[],
+    period: Period,
+    now: Date,
+    facts: readonly (Parameters<typeof computeMeasures>[0][number] & { accountId: string })[],
+    time: readonly (Parameters<typeof computeMeasures>[1][number] & { accountId: string })[],
+  ): Promise<Map<string, HealthScore>> {
+    const scores = new Map<string, HealthScore>();
+    if (accountIds.length === 0) return scores;
+    const consuming = await this.consumingClasses(tx);
+    const from = iso(period.start);
+    const to = iso(new Date(period.end.getTime() + 86_400_000));
+    const csat = await this.reporting.csatScores(tx, accountIds, from, to);
+    const signins = await this.reporting.portalSignins(tx, accountIds, from, to);
+    const positions = await this.reporting.contractPositions(tx, accountIds, iso(now), [...consuming]);
+    const settings = await this.reporting.portalEnabled(tx, accountIds);
+    const windowDays = Math.max(1, Math.round((period.end.getTime() - period.start.getTime()) / 86_400_000));
+    for (const accountId of accountIds) {
+      const measures = computeMeasures(
+        facts.filter((fact) => fact.accountId === accountId),
+        time.filter((entry) => entry.accountId === accountId),
+        period,
+        now,
+      );
+      const survey = csat.find((row) => row.account_id === accountId);
+      // An account can hold more than one live contract. The budget factor
+      // is about the account's position, so the periods are added up and
+      // the elapsed share is averaged across them.
+      const open = positions.filter((row) => row.account_id === accountId);
+      const budget =
+        open.length === 0
+          ? null
+          : {
+              availableMinutes: open.reduce((sum, row) => sum + row.available_minutes, 0),
+              consumedMinutes: open.reduce((sum, row) => sum + row.consumed_minutes, 0),
+              percentElapsed:
+                open.reduce((sum, row) => sum + percentElapsed(row.starts_on, row.ends_on, now), 0) / open.length,
+            };
+      scores.set(
+        accountId,
+        computeHealth({
+          slaResolution: measures.sla_resolution_attainment,
+          reopenRate: measures.reopen_rate,
+          csat: { responses: survey?.responses ?? 0, mean: survey?.mean ?? null },
+          budget,
+          engagement: {
+            portalEnabled: settings.find((row) => row.account_id === accountId)?.portal_enabled ?? false,
+            portalSignins: signins.find((row) => row.account_id === accountId)?.signins ?? 0,
+            surveysSent: survey?.sent ?? 0,
+            surveysAnswered: survey?.answered ?? 0,
+            windowDays,
+          },
+        }),
+      );
+    }
+    return scores;
   }
 
   private clientMeasures(measures: Measures, consumptionVisible: boolean): Partial<Measures> {
@@ -1118,6 +1225,19 @@ export class ReportingService {
 
 function iso(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * How far a contract period has run, as a percentage, counting whole days
+ * inclusively the way the burn-down does, so the health score and the
+ * budget tab never disagree about where a period stands.
+ */
+function percentElapsed(startsOn: string, endsOn: string, now: Date): number {
+  const start = new Date(`${startsOn}T00:00:00Z`).getTime();
+  const end = new Date(`${endsOn}T00:00:00Z`).getTime();
+  const total = Math.max(1, Math.round((end - start) / 86_400_000) + 1);
+  const elapsed = Math.min(total, Math.max(0, Math.floor((now.getTime() - start) / 86_400_000) + 1));
+  return (elapsed / total) * 100;
 }
 
 /** The last day a period covers, as a date: the period end is exclusive. */

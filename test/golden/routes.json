@@ -611,6 +611,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:id/health",
+    "controller": "ReportingController",
+    "handler": "health",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:id/reports",
     "controller": "ReportingController",
     "handler": "runs",

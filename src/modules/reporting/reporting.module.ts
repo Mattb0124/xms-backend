@@ -75,6 +75,20 @@ export class ReportingController {
     return this.reporting.account(principal, id, clampDays(days, 7), asClient === 'true');
   }
 
+  /**
+   * The account health score (DR-09), recomputed on read over the window
+   * asked for, ninety days by default.
+   */
+  @Get('accounts/:id/health')
+  @RequirePermission('tickets:view')
+  health(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('days') days?: string,
+  ) {
+    return this.reporting.health(principal, id, clampDays(days, 90));
+  }
+
   @Get('dashboards/security')
   @RequirePermission('audit:read')
   security(@CurrentPrincipal() principal: Principal, @Query('days') days?: string) {
