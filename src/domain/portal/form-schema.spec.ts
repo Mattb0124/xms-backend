@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   defaultFormDefinition,
   definitionProblems,
+  MAX_PROBLEMS,
   validateSubmission,
   type FormDefinition,
   type FormField,
@@ -200,5 +201,33 @@ describe('form submission', () => {
     );
     expect(validateSubmission(multi, { systems: ['erp', 'crm'] }).problems).toEqual([]);
     expect(codes(validateSubmission(multi, { systems: ['erp', 'erp'] }).problems)).toEqual(['bad_value']);
+  });
+});
+
+/**
+ * The refusal is bounded (review 2026-09-09 finding 10). A portal contact is
+ * the one principal that composes the object shape, and a body of many
+ * thousands of short keys sits comfortably inside the global 1 MB limit, so
+ * one problem per unknown key turned a small request into a large answer.
+ */
+describe('how much a refusal says', () => {
+  const simple = form(field({ key: 'summary', kind: 'short_text', maps_to: 'short_description', required: true }));
+
+  it('names the first fifty unknown keys and then counts the rest', () => {
+    const answers: Record<string, unknown> = { summary: 'Need a hand' };
+    for (let index = 0; index < 5000; index += 1) answers[`k${index}`] = 'x';
+    const { problems } = validateSubmission(simple, answers);
+
+    const unknown = problems.filter((problem) => problem.code === 'unknown_field');
+    expect(unknown).toHaveLength(MAX_PROBLEMS);
+    const overflow = problems.find((problem) => problem.code === 'too_many_unknown_fields');
+    expect(overflow?.message).toContain('5000 keys');
+    expect(problems).toHaveLength(MAX_PROBLEMS + 1);
+    expect(JSON.stringify(problems).length).toBeLessThan(10_000);
+  });
+
+  it('still names every unknown key while there are few of them', () => {
+    const { problems } = validateSubmission(simple, { summary: 'Need a hand', colour: 'red', size: 'large' });
+    expect(codes(problems)).toEqual(['unknown_field', 'unknown_field']);
   });
 });

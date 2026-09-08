@@ -32,6 +32,7 @@ import { TicketsService, type PortalTicketView } from '../tickets/tickets.servic
 import { MessageDto } from '../tickets/tickets.dto.js';
 import { FormsCoreModule, FormsRepository, FORM_TICKET_TYPES, type FormTicketType } from './forms.module.js';
 import { defaultFormDefinition, validateSubmission, type FormDefinition } from '../../domain/portal/form-schema.js';
+import { DEFAULT_JSON_LIMIT, MaxJsonSize } from '../../common/validation/max-json-size.js';
 
 /**
  * The client portal (02-modules/client-portal, P2.16 cut). Every route sits
@@ -78,10 +79,22 @@ class PortalCreateTicketDto {
    * The answers to the form's fields, keyed by field key (CP-03). Required
    * once the account publishes a form for this type, so a required field
    * cannot be skipped by posting the old flat shape instead.
+   *
+   * Bounded like every other open `jsonb` field on the platform: this is
+   * the one route where a client contact composes the object shape, and
+   * `whitelist` cannot help a field typed `Record<string, unknown>`.
    */
   @IsOptional()
   @IsObject()
+  @MaxJsonSize(DEFAULT_JSON_LIMIT)
   answers?: Record<string, unknown>;
+}
+
+/** The same 64 kB ceiling `CreateTicketDto.form_data` carries, applied to what a form maps. */
+function assertFormDataSize(custom: Record<string, unknown>): Record<string, unknown> {
+  if (Buffer.byteLength(JSON.stringify(custom) ?? '', 'utf8') > DEFAULT_JSON_LIMIT)
+    throw new BadRequestException({ code: 'form_data_too_large', max_bytes: DEFAULT_JSON_LIMIT });
+  return custom;
 }
 
 /** A request-type card and the form behind it, as the portal renders them. */
@@ -359,7 +372,10 @@ export class PortalService {
       // is not of this account before the row is written (TM-19).
       configuration_item_id: mapped.columns.configuration_item_id as string | undefined,
       form_version_id: published?.version_id ?? null,
-      form_data: mapped.custom,
+      // The internal DTO caps `form_data` at the same size; the portal
+      // builds the field in code and never passes through that pipe, so the
+      // bound is applied here rather than left to the body limit.
+      form_data: assertFormDataSize(mapped.custom),
     };
   }
 

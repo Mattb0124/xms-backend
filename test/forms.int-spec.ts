@@ -261,6 +261,35 @@ describe('submitting against a published form', () => {
     ]);
   });
 
+  it('bounds the answers a client may post and the refusal it gets back', async () => {
+    // 64 kB, the ceiling every other open jsonb field on the platform
+    // carries. Without it a portal contact stored more per ticket than the
+    // internal API permits and got a multi-megabyte 400 for the trouble.
+    const huge: Record<string, unknown> = { summary: 'A laptop', access_kind: 'new_user' };
+    huge.notes = 'x'.repeat(70_000);
+    const refused = await api()
+      .post('/v1/portal/tickets')
+      .set(bearer(patToken))
+      .send({ type: 'service_request', answers: huge })
+      .expect(400);
+    expect(refused.body).toMatchObject({ code: 'validation_failed' });
+    expect(JSON.stringify(refused.body)).toContain('at most 65536 bytes');
+
+    // Inside the size cap but with thousands of unknown keys: the refusal
+    // names the first fifty and counts the rest, so the answer stays small.
+    const many: Record<string, unknown> = { summary: 'A laptop', access_kind: 'new_user' };
+    for (let index = 0; index < 3000; index += 1) many[`k${index}`] = 1;
+    const capped = await api()
+      .post('/v1/portal/tickets')
+      .set(bearer(patToken))
+      .send({ type: 'service_request', answers: many })
+      .expect(400);
+    const problems = capped.body.problems as { code: string }[];
+    expect(problems.filter((problem) => problem.code === 'unknown_field')).toHaveLength(50);
+    expect(problems.some((problem) => problem.code === 'too_many_unknown_fields')).toBe(true);
+    expect(JSON.stringify(capped.body).length).toBeLessThan(10_000);
+  });
+
   it('leaves a type the account offers no form for on the fixed default', async () => {
     const created = await api()
       .post('/v1/portal/tickets')

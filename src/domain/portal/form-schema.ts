@@ -106,6 +106,9 @@ export interface MappedSubmission {
   readonly hidden: readonly string[];
 }
 
+/** How many problems a refusal words before it says how many more there are. */
+export const MAX_PROBLEMS = 50;
+
 const KEY = /^[a-z][a-z0-9_]{0,60}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -296,10 +299,24 @@ export function validateSubmission(
     else columns[field.maps_to] = answer;
   }
 
+  // One problem per unrecognised key, capped. A body of many thousands of
+  // short keys sits inside the global 1 MB limit and used to come back as a
+  // multi-megabyte 400, which is CPU and egress amplification against the
+  // one principal that composes the object shape.
   const known = new Set(definition.fields.map((field) => field.key));
-  for (const key of Object.keys(answers))
-    if (!known.has(key))
-      problems.push({ field: key, code: 'unknown_field', message: `"${key}" is not a field on this form` });
+  let unknown = 0;
+  for (const key of Object.keys(answers)) {
+    if (known.has(key)) continue;
+    unknown += 1;
+    if (unknown > MAX_PROBLEMS) continue;
+    problems.push({ field: key, code: 'unknown_field', message: `"${key}" is not a field on this form` });
+  }
+  if (unknown > MAX_PROBLEMS)
+    problems.push({
+      field: 'answers',
+      code: 'too_many_unknown_fields',
+      message: `${unknown} keys are not fields on this form; the first ${MAX_PROBLEMS} are listed`,
+    });
 
   return { problems, mapped: { columns, custom, hidden } };
 }
