@@ -56,7 +56,8 @@ describe('thread matcher', () => {
     expect(plusTokenOf(['Brk+ABCDEFGHIJK2@mail.xms.test'])).toBe('abcdefghijk2');
     expect(plusTokenOf(['brk+short@mail.xms.test'])).toBeUndefined();
     expect(subjectKeyOf('Fwd: Re: [cs0001234] boom')).toBe('CS0001234');
-    expect(newEmailToken(() => 0)).toBe('aaaaaaaaaaaa');
+    expect(newEmailToken(() => new Uint8Array(12))).toBe('aaaaaaaaaaaa');
+    expect(newEmailToken((size) => new Uint8Array(size).fill(31))).toBe('777777777777');
     expect(newEmailToken()).toMatch(/^[a-z2-7]{12}$/);
   });
 });

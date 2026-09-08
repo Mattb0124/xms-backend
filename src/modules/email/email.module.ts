@@ -183,6 +183,19 @@ export class SesWebhookService {
       });
       throw new UnauthorizedException({ code: 'bad_signature' });
     }
+    // The signature proves AWS sent it, not that we asked for it: anyone
+    // can create a topic in their own account and subscribe this endpoint.
+    const allowed = loadEnv().SES_SNS_TOPIC_ARNS;
+    if (!message.TopicArn || !allowed.includes(message.TopicArn)) {
+      await this.security.write({
+        type: 'abuse.webhook.bad_signature',
+        outcome: 'denied',
+        actorKind: 'anonymous',
+        requestId,
+        attrs: { webhook: 'ses', reason: allowed.length === 0 ? 'no_topic_allowlist' : 'unknown_topic' },
+      });
+      throw new UnauthorizedException({ code: 'unknown_topic' });
+    }
     if (message.Type === 'SubscriptionConfirmation') {
       // Confirmation is a deliberate administrator action (visit SubscribeURL); never auto-confirm.
       await this.security.write({

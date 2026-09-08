@@ -60,6 +60,9 @@ beforeAll(async () => {
     STORAGE_LOCAL_ROOT: mkdtempSync(join(tmpdir(), 'xms-store-')),
     MAIL_TRANSPORT: 'file',
     MAIL_DOMAIN: 'mail.xms.local',
+    // Anyone can create an SNS topic and subscribe this endpoint; AWS signs
+    // it with its own key, so the topic is the second half of the credential.
+    SES_SNS_TOPIC_ARNS: 'arn:aws:sns:us-east-1:1:ses',
   });
   resetEnvForTests();
   const { AppModule } = await import('../src/app.module.js');
@@ -503,5 +506,16 @@ describe('SES webhook', () => {
       .post('/v1/webhooks/ses')
       .send({ ...message, Message: message.Message.replace('Permanent', 'Transient') })
       .expect(401);
+
+    // A correctly signed message from someone else's topic is refused: the
+    // signature only proves AWS sent it, never that XMS asked for it.
+    const foreign: SnsMessage = { ...message, MessageId: 'm-2', TopicArn: 'arn:aws:sns:us-east-1:999:attacker' };
+    foreign.Signature = cryptoSign('RSA-SHA1', Buffer.from(stringToSign(foreign)), privateKey).toString('base64');
+    const refused = await api().post('/v1/webhooks/ses').send(foreign).expect(401);
+    expect(refused.body.code).toBe('unknown_topic');
+    const unknownTopic = await withSuperuser((client) =>
+      client.query(`select count(*)::int as n from sys.security_events where attrs->>'reason' = 'unknown_topic'`),
+    );
+    expect(unknownTopic.rows[0].n).toBe(1);
   });
 });

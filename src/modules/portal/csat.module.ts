@@ -37,7 +37,7 @@ import { DbPools } from '../../db/pool.js';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import {
-  hashToken,
+  tokenMatches,
   isLowScore,
   newToken,
   summarise,
@@ -334,8 +334,12 @@ export class CsatService {
       return false;
     }
     const env = loadEnv();
+    // The token is the sole credential for the public answer route, so it
+    // travels in the fragment: a fragment is never sent to a server and so
+    // never lands in a proxy, load balancer or browser history entry that
+    // someone else can read (security review finding 9).
     const link = token
-      ? `${env.WEB_BASE_URL}/portal/surveys/${survey.id}?token=${token}`
+      ? `${env.WEB_BASE_URL}/portal/surveys/${survey.id}#token=${token}`
       : `${env.WEB_BASE_URL}/portal/surveys/${survey.id}`;
     const subject = `${reminder ? 'Reminder: ' : ''}How satisfied are you with the handling of ${key}?`;
     const text = `${reminder ? 'A short reminder: ' : ''}We would value one answer about ${key} (${shortDescription}).\n\nRate the handling from 1 (very dissatisfied) to 5 (very satisfied): ${link}\n\nThe link works until ${survey.expires_at ? String(survey.expires_at).slice(0, 10) : 'the survey expires'}.\n`;
@@ -393,7 +397,7 @@ export class CsatService {
     if (!accountId) throw new NotFoundException({ code: 'not_found', entity: 'survey' });
     return this.uow.system([accountId], async (tx) => {
       const survey = await this.repo.survey(tx, surveyId).catch(() => undefined);
-      if (!survey || survey.token_hash !== hashToken(dto.token))
+      if (!survey || !tokenMatches(survey.token_hash, dto.token))
         throw new NotFoundException({ code: 'not_found', entity: 'survey' });
       return this.record(tx, survey, dto, SYSTEM_ACTOR, { correlationId: `csat-link:${surveyId}` });
     });

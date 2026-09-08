@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SecurityEventsService } from '../src/common/events/security-events.service.js';
-import { RATE_POLICIES, RateLimitModule } from '../src/common/rate-limit/rate-limit.middleware.js';
+import { policiesFromEnv, RATE_POLICIES, RateLimitModule } from '../src/common/rate-limit/rate-limit.middleware.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { RecordingSink } from './kit/auth.js';
 
@@ -70,6 +70,20 @@ afterAll(async () => {
 function api() {
   return request(app.getHttpServer());
 }
+
+describe('the configured policies', () => {
+  it('covers every outward-facing route, the public csat answer included', () => {
+    const policyFor = (path: string) => policiesFromEnv().find((policy) => policy.matches(path))?.name;
+    // POST /v1/csat/:id/answer is the one unauthenticated write in the
+    // product and matched no policy at all (finding 19).
+    expect(policyFor('/v1/csat/6f1b0d7c-0000-4000-8000-000000000001/answer')).toBe('public');
+    expect(policyFor('/v1/portal/tickets')).toBe('portal');
+    expect(policyFor('/v1/webhooks/ses')).toBe('webhook');
+    expect(policyFor('/v1/telemetry')).toBe('public');
+    expect(policyFor('/v1/bootstrap')).toBe('public');
+    expect(policyFor('/v1/tickets')).toBeUndefined();
+  });
+});
 
 describe('rate limiting', () => {
   it('counts portal calls per caller, refuses past the limit with Retry-After and one event per burst', async () => {

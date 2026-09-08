@@ -1,11 +1,13 @@
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
 import { requestContextMiddleware } from './common/request-context.middleware.js';
 import { createLogger, httpLogger, PinoLoggerService } from './common/logging/pino-logger.js';
+import { trustProxyValue } from './common/trust-proxy.js';
 import { loadEnv } from './config/env.js';
 
 /**
@@ -19,7 +21,18 @@ import { loadEnv } from './config/env.js';
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
   const logger = createLogger(env, 'xms-api');
-  const app = await NestFactory.create(AppModule, { bufferLogs: true, logger: new PinoLoggerService(logger) });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    logger: new PinoLoggerService(logger),
+  });
+
+  // Behind an ALB every request otherwise reports the balancer's address,
+  // so one caller's burst rate-limits everyone and ip_hash is a constant on
+  // every security event. Configured, never assumed: trusting an unset hop
+  // count in front of nothing would let a caller spoof X-Forwarded-For.
+  if (env.TRUST_PROXY) {
+    app.set('trust proxy', trustProxyValue(env.TRUST_PROXY));
+  }
 
   app.use(helmet());
   app.use(requestContextMiddleware);

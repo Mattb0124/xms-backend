@@ -18,7 +18,7 @@ import { resolve } from 'node:path';
 import { Public } from '../auth/public.decorator.js';
 import { loadEnv } from '../../config/env.js';
 import { FileTransport, SesTransport, type MailTransport } from '../mail/mail-transport.js';
-import { LocalObjectStore, type ObjectStore } from './object-store.js';
+import { downloadExtra, LocalObjectStore, type ObjectStore } from './object-store.js';
 import { S3ObjectStore } from './s3-object-store.js';
 
 /**
@@ -80,7 +80,7 @@ export class LocalStorageController {
   ): Promise<void> {
     const local = this.guard.local;
     if (!local) throw new NotFoundException({ code: 'not_found' });
-    if (!local.verify('download', key, Number(expires), signature))
+    if (!local.verify('download', key, Number(expires), signature, downloadExtra(fileName ?? '', contentType ?? '')))
       throw new UnauthorizedException({ code: 'bad_signature' });
     const body = await local.getObject(key).catch(() => undefined);
     if (!body) throw new NotFoundException({ code: 'not_found' });

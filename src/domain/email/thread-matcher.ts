@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 /**
  * Thread matching (Email Intake & Outbound technical 2.6). Pure over the
  * parsed headers and a lookup interface the service implements inside the
@@ -72,10 +74,18 @@ export async function matchThread(headers: ThreadHeaders, lookup: ThreadLookup):
   return undefined;
 }
 
-/** Twelve characters of base32 (RFC 4648 lower-case alphabet), the token stored on the ticket. */
-export function newEmailToken(random: () => number = Math.random): string {
+/**
+ * Twelve characters of base32 (RFC 4648 lower-case alphabet), the token
+ * stored on the ticket. It is the strongest control against inbound thread
+ * hijacking and every outbound mail publishes one, so it comes from the
+ * CSPRNG: V8's Math.random is xorshift128+ and its state is recoverable
+ * from a modest number of observed outputs. The alphabet has 32 symbols
+ * and 32 divides 256, so masking the low five bits of a random byte is
+ * uniform with no rejection needed.
+ */
+export function newEmailToken(bytes: (size: number) => Uint8Array = randomBytes): string {
   const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
   let token = '';
-  for (let index = 0; index < 12; index += 1) token += alphabet[Math.floor(random() * alphabet.length)];
+  for (const byte of bytes(12)) token += alphabet[byte & 31];
   return token;
 }

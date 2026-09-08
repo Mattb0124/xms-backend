@@ -155,6 +155,15 @@ describe('attachments', () => {
     await request(app.getHttpServer())
       .get(localPath(download.body.url).replace(/signature=[^&]+/, 'signature=forged'))
       .expect(401);
+    // The signature covers the file name and the content type as well, both
+    // of which are written straight into the response headers, so a holder
+    // of a valid link cannot flip the type to text/html (finding 34).
+    await request(app.getHttpServer())
+      .get(localPath(download.body.url).replace(/contentType=[^&]*/, 'contentType=text%2Fhtml'))
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(localPath(download.body.url).replace(/fileName=[^&]*/, 'fileName=other.txt'))
+      .expect(401);
   });
 
   it('quarantines EICAR on confirm and refuses its download', async () => {

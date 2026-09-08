@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
+import { RecordingTransport } from '../src/common/mail/mail-transport.js';
+import { MAIL_TRANSPORT } from '../src/common/storage/storage.module.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
 import { hashToken } from '../src/domain/portal/csat.js';
@@ -26,6 +28,7 @@ const ADMIN_EMAIL = 'admin@example.test';
 
 let app: INestApplication;
 let worker: INestApplication;
+let mail: RecordingTransport;
 let adminToken: string;
 let portalToken: string;
 let otherPortalToken: string;
@@ -86,7 +89,11 @@ beforeAll(async () => {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   await app.init();
-  const workerRef = await Test.createTestingModule({ imports: [WorkerModule] }).compile();
+  mail = new RecordingTransport();
+  const workerRef = await Test.createTestingModule({ imports: [WorkerModule] })
+    .overrideProvider(MAIL_TRANSPORT)
+    .useValue(mail)
+    .compile();
   worker = workerRef.createNestApplication({ bufferLogs: true });
   await worker.init();
   csat = worker.get(CsatService);
@@ -217,6 +224,18 @@ describe('CSAT on ticket close (CP-07)', () => {
       ]),
     );
     expect(outbox.rows[0].payload).toMatchObject({ score: 2, has_comment: true });
+  });
+
+  it('mails the link with the token in the fragment, where no server and no log sees it', async () => {
+    // The token is the sole credential for the public answer route. In the
+    // query string it lands in browser history, proxy and load balancer
+    // logs, and is forwarded verbatim with the mail (finding 9).
+    const prompt = mail.sent.at(-1);
+    expect(prompt).toBeDefined();
+    const body = prompt!.raw.toString('utf8').replace(/=\r?\n/g, '');
+    const link = /https?:\/\/\S*\/portal\/surveys\/[0-9a-f-]+#token=[A-Za-z0-9_-]+/.exec(body);
+    expect(link).not.toBeNull();
+    expect(body).not.toMatch(/\/portal\/surveys\/[0-9a-f-]+\?token=/);
   });
 
   it('the email link answers with the one-time token only, and the operator reads the scores', async () => {

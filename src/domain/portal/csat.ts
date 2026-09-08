@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
  * CSAT on ticket close (Client Portal functional 5.7; CP-07): whether a
@@ -50,6 +50,13 @@ export function newToken(): { token: string; hash: string } {
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+/** Compares a presented token against the stored hash in constant time. */
+export function tokenMatches(storedHash: string, token: string): boolean {
+  const expected = Buffer.from(storedHash, 'utf8');
+  const given = Buffer.from(hashToken(token), 'utf8');
+  return expected.length === given.length && timingSafeEqual(expected, given);
 }
 
 export function isLowScore(score: number): boolean {

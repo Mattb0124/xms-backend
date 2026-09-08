@@ -61,6 +61,14 @@ const envSchema = z
     // First administrator(s) accepted by POST /v1/bootstrap while the admin set is empty.
     BOOTSTRAP_ADMIN_EMAILS: list,
     IP_HASH_SALT: z.string().default('local'),
+    /**
+     * What Express should believe about X-Forwarded-For: the number of
+     * proxies in front of the API ("1" behind one ALB), "true", or an
+     * address or subnet list. Unset means trust nothing, which is right
+     * only when nothing sits in front. Without it every caller behind a
+     * load balancer shares one rate-limit bucket and one ip_hash.
+     */
+    TRUST_PROXY: z.string().optional(),
     // Object store (Security section 6): S3 in AWS, a signed local store in development and tests.
     STORAGE_KIND: z.enum(['s3', 'local']).default('local'),
     S3_BUCKET: z.string().optional(),
@@ -73,6 +81,12 @@ const envSchema = z
     MAIL_DOMAIN: z.string().default('mail.xms.local'),
     SES_CONFIGURATION_SET: z.string().optional(),
     SNS_WEBHOOK_SECRET: z.string().min(16).optional(),
+    /**
+     * The SNS topics whose notifications the SES receiver accepts. AWS signs
+     * anyone's topic with its own key, so the signature alone proves only
+     * that AWS sent it; without this list the receiver refuses everything.
+     */
+    SES_SNS_TOPIC_ARNS: list,
     // Axel harness (AI Integration sections 2 and 3). Without a base URL every AI call is `unavailable`.
     HARNESS_BASE_URL: z.string().url().optional(),
     HARNESS_ORIGIN: z.string().url().default('http://localhost:3000'),
@@ -135,6 +149,13 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['IP_HASH_SALT'],
           message: 'required in production',
+        });
+      }
+      if (env.SES_SNS_TOPIC_ARNS.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SES_SNS_TOPIC_ARNS'],
+          message: 'required in production: the SES receiver has no topic allowlist without it',
         });
       }
     }

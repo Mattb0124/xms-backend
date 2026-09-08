@@ -46,6 +46,11 @@ export function assertObjectKey(key: string): string {
   return key;
 }
 
+/** The signed part of a download URL beyond the key and the expiry. */
+export function downloadExtra(fileName: string, contentType: string): string {
+  return `${fileName}\n${contentType}`;
+}
+
 /** Local filesystem store; URLs are signed with an HMAC so the API routes can verify them. */
 export class LocalObjectStore implements ObjectStore {
   readonly kind = 'local' as const;
@@ -96,7 +101,10 @@ export class LocalObjectStore implements ObjectStore {
   ): Promise<string> {
     assertObjectKey(key);
     const expires = Math.floor(Date.now() / 1000) + (options.expiresSeconds ?? 300);
-    const signature = this.sign('download', key, expires);
+    // The URL also carries the file name and the content type, and both go
+    // straight into the response headers, so both are signed: a link holder
+    // must not be able to flip the type to text/html.
+    const signature = this.sign('download', key, expires, downloadExtra(options.fileName, options.contentType));
     const params = new URLSearchParams({
       key,
       expires: String(expires),
