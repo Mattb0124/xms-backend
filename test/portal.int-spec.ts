@@ -7,6 +7,7 @@ import { requestContextMiddleware } from '../src/common/request-context.middlewa
 import { resetEnvForTests } from '../src/config/env.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
+import { TicketsService } from '../src/modules/tickets/tickets.service.js';
 
 /**
  * The client portal over the real database (P2.16 cut, Security section 5
@@ -225,6 +226,71 @@ describe('portal requests', () => {
       ),
     );
     expect(audit.rows[0]).toEqual({ actor_kind: 'portal_user', new_value: 'closed' });
+  });
+
+  it('lists requests of every type, and one unreadable row never empties the list', async () => {
+    // Every portal view is built through the account's state machine, which
+    // resolves through op.config_defaults and acct.config_overrides. The
+    // portal database role had no grant on either, so the list answered 404
+    // and detail answered 404 for whichever type an internal request had not
+    // already warmed in the per-process configuration cache
+    // (REVIEW-frontend 2026-09-08 finding 2).
+    const service = await api()
+      .post('/v1/portal/tickets')
+      .set(bearer(portalToken))
+      .send({ type: 'service_request', short_description: 'Please add me to the month-end distribution' })
+      .expect(201);
+    const listed = await api().get('/v1/portal/tickets?scope=all').set(bearer(portalToken)).expect(200);
+    expect(listed.body.items.map((item: { type: string }) => item.type).sort()).toEqual([
+      'incident',
+      'service_request',
+    ]);
+    for (const item of listed.body.items as { key: string }[]) {
+      await api().get(`/v1/portal/tickets/${item.key}`).set(bearer(portalToken)).expect(200);
+    }
+
+    // One row whose view cannot be built is left out; the rest of the page
+    // still answers, rather than the client losing every request they have.
+    const tickets = app.get(TicketsService);
+    const real = tickets.get.bind(tickets);
+    const poison = service.body.id as string;
+    (tickets as unknown as { get: TicketsService['get'] }).get = ((principal, idOrKey, tx) =>
+      idOrKey === poison
+        ? Promise.reject(new Error('config_missing'))
+        : real(principal, idOrKey, tx)) as TicketsService['get'];
+    try {
+      const partial = await api().get('/v1/portal/tickets?scope=all').set(bearer(portalToken)).expect(200);
+      expect(partial.body.items.map((item: { type: string }) => item.type)).toEqual(['incident']);
+    } finally {
+      (tickets as unknown as { get: TicketsService['get'] }).get = real;
+    }
+  });
+
+  it('the portal database role reads the configuration it renders, and only its own account overrides', async () => {
+    const db = urls();
+    const pg = await import('pg');
+    const client = new pg.default.Client({ connectionString: db.portal });
+    await client.connect();
+    try {
+      await client.query("select set_config('xms.account_id', $1, false)", [accountId]);
+      const defaults = await client.query(
+        `select count(*)::int as n from op.config_defaults where kind = 'state_machine' and status = 'active'`,
+      );
+      expect(defaults.rows[0].n).toBeGreaterThan(0);
+      // The overrides are account scoped, so the portal policy applies.
+      const others = await client.query('select count(*)::int as n from acct.config_overrides where account_id <> $1', [
+        accountId,
+      ]);
+      expect(others.rows[0].n).toBe(0);
+      // Read only, as everywhere else in the portal role.
+      await expect(
+        client.query(
+          `insert into op.config_defaults (kind, scope_key, version, body, status) values ('state_machine', 'x', 1, '{}', 'draft')`,
+        ),
+      ).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await client.end();
+    }
   });
 
   it('the portal database role cannot read work notes at all', async () => {

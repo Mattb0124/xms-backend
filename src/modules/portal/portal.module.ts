@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Injectable, Module, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Injectable,
+  Logger,
+  Module,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
 import {
@@ -81,6 +92,8 @@ class PortalListQueryDto {
 
 @Injectable()
 export class PortalService {
+  private readonly logger = new Logger(PortalService.name);
+
   constructor(
     private readonly uow: UnitOfWork,
     private readonly tickets: TicketsService,
@@ -124,8 +137,21 @@ export class PortalService {
         },
         { limit: 50, sort: 'updated_desc' },
       );
+      // One row the view cannot be built for must never empty a client's
+      // whole list: the row is left out and named in the log, and the rest
+      // of the page answers (REVIEW-frontend 2026-09-08 finding 2).
       const items: PortalTicketView[] = [];
-      for (const row of page.rows) items.push((await this.tickets.get(principal, row.id, tx)) as PortalTicketView);
+      const failed: string[] = [];
+      for (const row of page.rows) {
+        try {
+          items.push((await this.tickets.get(principal, row.id, tx)) as PortalTicketView);
+        } catch (error) {
+          failed.push(row.id);
+          this.logger.warn(`portal list: ticket ${row.id} left out: ${(error as Error).message}`);
+        }
+      }
+      if (failed.length > 0)
+        this.logger.warn(`portal list for account ${accountId}: ${failed.length} of ${page.rows.length} left out`);
       return { items, next_cursor: null };
     });
   }

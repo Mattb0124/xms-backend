@@ -79,14 +79,26 @@ describe('isolation suite', () => {
     expect(tablesForEach().sort()).toEqual(tables.map((table) => table.qualified).sort());
   });
 
-  it('gives the portal role no privilege on any operator or system table', async () => {
+  it('gives the portal role nothing in the operator or system schemas beyond the declared reads', async () => {
+    // The one exception is op.config_defaults, and it is select only: every
+    // portal view is rendered through the account's state machine, whose
+    // global catalog bodies live there (migration 0027). It carries no
+    // account column and no client content.
+    const allowed = new Map([['op.config_defaults', ['SELECT']]]);
     const grants = await withSuperuser((client) =>
-      client.query<{ table_schema: string; table_name: string }>(
-        `select table_schema, table_name from information_schema.role_table_grants
-          where grantee = 'xms_portal' and table_schema in ('op', 'sys')`,
+      client.query<{ table_schema: string; table_name: string; privilege_type: string }>(
+        `select table_schema, table_name, privilege_type from information_schema.role_table_grants
+          where grantee = 'xms_portal' and table_schema in ('op', 'sys')
+          order by table_schema, table_name, privilege_type`,
       ),
     );
-    expect(grants.rows).toEqual([]);
+    const byTable = new Map<string, string[]>();
+    for (const row of grants.rows) {
+      const key = `${row.table_schema}.${row.table_name}`;
+      byTable.set(key, [...(byTable.get(key) ?? []), row.privilege_type]);
+    }
+    expect([...byTable.keys()].sort()).toEqual([...allowed.keys()].sort());
+    for (const [table, privileges] of byTable) expect(privileges.sort()).toEqual(allowed.get(table));
   });
 });
 
