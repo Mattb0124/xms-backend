@@ -174,6 +174,8 @@ export class ReportingRepository extends RepositoryBase {
       measures: unknown;
       notable: unknown;
       narrative: string;
+      /** The templated narrative section by section; one headline section when the caller has none. */
+      sections?: readonly { key: string; text: string }[];
       pptxKey: string;
       pdfKey: string;
     },
@@ -197,7 +199,7 @@ export class ReportingRepository extends RepositoryBase {
           {
             version: 1,
             text: input.narrative,
-            sections: [{ key: 'headline', text: input.narrative }],
+            sections: input.sections ?? [{ key: 'headline', text: input.narrative }],
             author_kind: 'template',
             author_id: 'template',
             at: new Date().toISOString(),
@@ -234,6 +236,200 @@ export class ReportingRepository extends RepositoryBase {
     pdf_key: string | null;
   }> {
     return this.one(tx, 'report_pack', 'select * from acct.report_packs where id = $1', [id]);
+  }
+
+  // Quarterly pack facts (DR-08) --------------------------------------------
+
+  /**
+   * Articles written, versions published and articles put on a request in
+   * a window (functional 5.12: articles created, deflections). A linked
+   * article marked `resolved_by` is the nearest thing the data model holds
+   * to a deflection, so it is reported as what it is.
+   */
+  knowledgeContribution(
+    tx: Tx,
+    accountId: string,
+    from: Date,
+    to: Date,
+  ): Promise<{
+    articles_created: number;
+    versions_published: number;
+    solutions_linked: number;
+    resolved_by_article: number;
+  }> {
+    return this.one(
+      tx,
+      'knowledge_contribution',
+      `select
+         (select count(*)::int from acct.solution_articles a
+           where a.account_id = $1 and a.created_at >= $2 and a.created_at < $3) as articles_created,
+         (select count(*)::int from acct.article_versions v
+           where v.account_id = $1 and v.published_at >= $2 and v.published_at < $3) as versions_published,
+         (select count(*)::int from acct.ticket_solutions s
+           where s.account_id = $1 and s.created_at >= $2 and s.created_at < $3) as solutions_linked,
+         (select count(*)::int from acct.ticket_solutions s
+           where s.account_id = $1 and s.created_at >= $2 and s.created_at < $3 and s.outcome = 'resolved_by') as resolved_by_article`,
+      [accountId, from, to],
+    );
+  }
+
+  /** Who logged time against the account in a window, and how much. */
+  timeByPerson(
+    tx: Tx,
+    accountId: string,
+    from: string,
+    to: string,
+  ): Promise<{ person_id: string; person_name: string; minutes: number }[]> {
+    return this.many(
+      tx,
+      `select person_id, max(person_name) as person_name, sum(minutes)::int as minutes
+         from acct.time_entries
+        where account_id = $1 and performed_on between $2::date and $3::date
+        group by person_id order by 3 desc`,
+      [accountId, from, to],
+    );
+  }
+
+  /**
+   * The active contracts of an account with the period covering the window
+   * end and what was consumed against them inside the window. The renewal
+   * section names the period end; the consumption column is the same
+   * consuming-class filter every other consumption figure uses.
+   */
+  renewalFacts(
+    tx: Tx,
+    accountId: string,
+    from: string,
+    to: string,
+    consumingClasses: readonly string[],
+  ): Promise<
+    {
+      name: string;
+      model: string;
+      period_ends_on: string | null;
+      available_minutes: number;
+      consumed_minutes: number;
+    }[]
+  > {
+    return this.many(
+      tx,
+      `select c.name, c.model, p.ends_on::text as period_ends_on,
+              (coalesce(p.contracted_minutes, 0) + coalesce(p.carried_over_minutes, 0))::int as available_minutes,
+              coalesce((select sum(t.minutes) from acct.time_entries t
+                         where t.contract_id = c.id and t.performed_on between $2::date and $3::date
+                           and t.billable_class = any ($4::text[])), 0)::int as consumed_minutes
+         from acct.contracts c
+         left join acct.contract_periods p on p.contract_id = c.id and $3::date between p.starts_on and p.ends_on
+        where c.account_id = $1 and c.status = 'active'
+        order by c.name`,
+      [accountId, from, to, [...consumingClasses]],
+    );
+  }
+
+  /** Ticket-close satisfaction in a window, per account. */
+  csatScores(
+    tx: Tx,
+    accountIds: readonly string[],
+    from: string,
+    to: string,
+  ): Promise<{ account_id: string; responses: number; answered: number; sent: number; mean: number | null }[]> {
+    return this.many(
+      tx,
+      `select a.id as account_id,
+              coalesce(r.responses, 0)::int as responses,
+              coalesce(s.answered, 0)::int as answered,
+              coalesce(s.sent, 0)::int as sent,
+              r.mean::float8 as mean
+         from unnest($1::uuid[]) as a(id)
+         left join lateral (
+           select count(*)::int as responses, avg((res.answers->>'score')::numeric) as mean
+             from acct.csat_responses res join acct.csat_surveys sur on sur.id = res.survey_id
+            where res.account_id = a.id and sur.kind = 'ticket_close'
+              and res.created_at >= $2::date and res.created_at < $3::date
+         ) r on true
+         left join lateral (
+           select count(*) filter (where sur.status <> 'suppressed')::int as sent,
+                  count(*) filter (where sur.status = 'answered')::int as answered
+             from acct.csat_surveys sur
+            where sur.account_id = a.id and sur.sent_at >= $2::date and sur.sent_at < $3::date
+         ) s on true`,
+      [[...accountIds], from, to],
+    );
+  }
+
+  /** The newest quarterly relationship survey answered inside the window. */
+  async quarterlyCsat(
+    tx: Tx,
+    accountId: string,
+    from: string,
+    to: string,
+  ): Promise<{ period: string; responses: number; average: number | null } | null> {
+    const row = await this.maybeOne<{ period: string; responses: number; average: number | null }>(
+      tx,
+      `select s.period, count(distinct r.id)::int as responses, avg(answer.value::numeric)::float8 as average
+         from acct.csat_responses r
+         join acct.csat_surveys s on s.id = r.survey_id
+         cross join lateral jsonb_each_text(r.answers) as answer(name, value)
+        where r.account_id = $1 and s.kind = 'quarterly' and s.period is not null
+          and r.created_at >= $2::date and r.created_at < $3::date
+          and answer.value ~ '^[0-9]+(\\.[0-9]+)?$'
+        group by s.period order by s.period desc limit 1`,
+      [accountId, from, to],
+    );
+    return row ?? null;
+  }
+
+  /** Portal sign-ins of an account in a window: the engagement half of the health score. */
+  portalSignins(
+    tx: Tx,
+    accountIds: readonly string[],
+    from: string,
+    to: string,
+  ): Promise<{ account_id: string; signins: number }[]> {
+    return this.many(
+      tx,
+      `select account_id, count(*)::int as signins from sys.security_events
+        where event_type = 'auth.signin.success' and principal_kind = 'portal'
+          and account_id = any ($1::uuid[]) and occurred_at >= $2::date and occurred_at < $3::date
+        group by 1`,
+      [[...accountIds], from, to],
+    );
+  }
+
+  /**
+   * The current contract period of each account with what has been
+   * consumed against it: the budget factor of the health score, read in
+   * one query for the portfolio strip rather than one per account.
+   */
+  contractPositions(
+    tx: Tx,
+    accountIds: readonly string[],
+    on: string,
+    consumingClasses: readonly string[],
+  ): Promise<
+    { account_id: string; starts_on: string; ends_on: string; available_minutes: number; consumed_minutes: number }[]
+  > {
+    return this.many(
+      tx,
+      `select p.account_id, p.starts_on::text as starts_on, p.ends_on::text as ends_on,
+              (p.contracted_minutes + p.carried_over_minutes)::int as available_minutes,
+              coalesce((select sum(t.minutes) from acct.time_entries t
+                         where t.contract_id = p.contract_id and t.performed_on between p.starts_on and p.ends_on
+                           and t.billable_class = any ($3::text[])), 0)::int as consumed_minutes
+         from acct.contract_periods p
+         join acct.contracts c on c.id = p.contract_id and c.status = 'active'
+        where p.account_id = any ($1::uuid[]) and $2::date between p.starts_on and p.ends_on`,
+      [[...accountIds], on, [...consumingClasses]],
+    );
+  }
+
+  /** Whether the portal is switched on per account, which decides whether silence means anything. */
+  portalEnabled(tx: Tx, accountIds: readonly string[]): Promise<{ account_id: string; portal_enabled: boolean }[]> {
+    return this.many(
+      tx,
+      'select account_id, portal_enabled from acct.account_settings where account_id = any ($1::uuid[])',
+      [[...accountIds]],
+    );
   }
 
   // Security and usage tiles ----------------------------------------------

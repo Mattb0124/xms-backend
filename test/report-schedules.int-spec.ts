@@ -710,3 +710,125 @@ describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
     expect(noRebuild.body).toMatchObject({ code: 'not_under_review', status: 'sent' });
   });
 });
+
+/**
+ * The quarterly business review pack (DR-08): a schedule chooses the
+ * quarterly template, an off-cycle run over a quarter builds it, both
+ * renditions are stored under the run, and the review flow the weekly pack
+ * goes through applies to it unchanged, including a narrative section only
+ * the quarterly template has.
+ */
+describe('the quarterly pack (DR-08)', () => {
+  let qbrScheduleId: string;
+  let quarterly: { run_id: string; pack_id: string };
+
+  const detailOfRun = (runId: string) => api().get(`/v1/reporting/runs/${runId}`).set(bearer(adminToken)).expect(200);
+
+  /** The words in a stored rendition, read back the way a client would open it. */
+  const pdfWords = async (link: string): Promise<string> => {
+    const file = await request(app.getHttpServer())
+      .get(link.replace(/^https?:\/\/[^/]+/, ''))
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    return extractPdfText(file.body as Buffer);
+  };
+
+  it('takes the quarterly template on a schedule, with the quarter as its period', async () => {
+    const created = await api()
+      .post('/v1/reporting/schedules')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        name: 'Quarterly review',
+        pack_type: 'qbr',
+        cadence: 'quarterly',
+        run_day: 5,
+        review_required: true,
+      })
+      .expect(201);
+    expect(created.body).toMatchObject({
+      pack_type: 'qbr',
+      cadence: 'quarterly',
+      period_kind: 'previous_quarter',
+      review_required: true,
+    });
+    qbrScheduleId = created.body.id;
+    // A schedule that names no template still builds the weekly one.
+    const listed = await api().get(`/v1/reporting/schedules?account=${accountId}`).set(bearer(adminToken)).expect(200);
+    expect(listed.body.find((row: { id: string }) => row.id === scheduleId).pack_type).toBe('wsr');
+  });
+
+  it('builds a quarter, stores both renditions and holds it for review', async () => {
+    const run = await api()
+      .post(`/v1/reporting/schedules/${qbrScheduleId}/run-now`)
+      .set(bearer(adminToken))
+      .send({ period_start: '2026-04-01', period_end: '2026-06-30' })
+      .expect(201);
+    expect(run.body).toMatchObject({ status: 'ready_for_review', delivery: [] });
+    quarterly = run.body;
+
+    const stored = await withSuperuser((client) =>
+      client.query<{ pptx_key: string; pdf_key: string; measures: { kind: string } }>(
+        'select pptx_key, pdf_key, measures from acct.report_packs where id = $1',
+        [quarterly.pack_id],
+      ),
+    );
+    // Both renditions of the quarterly template, side by side under the run.
+    expect(stored.rows[0].pptx_key).toContain('/qbr-2026-04-01.pptx');
+    expect(stored.rows[0].pdf_key).toContain('/qbr-2026-04-01.pdf');
+    // The quarterly facts are frozen on the pack, so a regenerate rebuilds
+    // the document without recomputing a figure.
+    expect(stored.rows[0].measures.kind).toBe('qbr');
+
+    const detail = await detailOfRun(quarterly.run_id);
+    expect(detail.body.pack_type).toBe('qbr');
+    expect(detail.body.files.pptx).toContain('/v1/storage/download?');
+    expect(detail.body.files.pdf).toContain('/v1/storage/download?');
+    const words = await pdfWords(detail.body.files.pdf);
+    expect(words).toContain('Quarterly business review');
+    for (const heading of [
+      'Quarter summary',
+      'Service levels',
+      'Quarter over quarter',
+      'Backlog and notable requests',
+      'Consumption and burn',
+      'Satisfaction',
+      'Knowledge base contribution',
+      'Capacity and roster',
+      'Renewal and outlook',
+    ])
+      expect(words).toContain(heading);
+    // The account has no quarter before this one on record.
+    expect(words).toContain('This is the first quarter on record');
+  });
+
+  it('applies the review flow, including a section only the quarterly template has', async () => {
+    const outlook = 'The renewal conversation opens in October.';
+    const edited = await api()
+      .patch(`/v1/reporting/runs/${quarterly.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send({ sections: [{ key: 'outlook', text: outlook }] })
+      .expect(200);
+    expect(edited.body).toMatchObject({ narrative_source: 'edited', narrative_rendered: false });
+
+    const regenerated = await api()
+      .post(`/v1/reporting/runs/${quarterly.run_id}/regenerate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(await pdfWords(regenerated.body.files.pdf)).toContain(outlook);
+
+    const approved = await api()
+      .post(`/v1/reporting/runs/${quarterly.run_id}/approve`)
+      .set(bearer(ownerToken))
+      .expect(201);
+    expect(approved.body.status).toBe('sent');
+    const detail = await detailOfRun(quarterly.run_id);
+    expect(detail.body).toMatchObject({ narrative_source: 'edited', narrative_rendered: true, pack_type: 'qbr' });
+    expect(await pdfWords(detail.body.files.pdf)).toContain(outlook);
+  });
+});

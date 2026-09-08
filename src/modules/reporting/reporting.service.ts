@@ -28,12 +28,27 @@ import { translateEvents, type EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
 import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
 import {
+  EMPTY_SECTION_LINE,
   narrativeFor,
+  narrativeText,
   packNarrative,
   renderPackPdf,
   wsrDocument,
+  type PackDocument,
   type PackNarrative,
 } from '../../domain/reporting/pdf.js';
+import {
+  qbrDocument,
+  quarterBefore,
+  reviveQbr,
+  storedQbr,
+  templatedQbrNarrative,
+  type QbrComparison,
+  type QbrFacts,
+  type QbrRenewal,
+  type QbrRoster,
+  type QbrSatisfaction,
+} from '../../domain/reporting/qbr.js';
 
 /**
  * Dashboards, exports, audit search and the basic WSR pack (Dashboards &
@@ -47,6 +62,9 @@ export const PPTX_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.
 
 /** The two renditions a run produces; anything else on the query falls back to the deck. */
 export type PackFormat = 'pptx' | 'pdf';
+
+/** The templates a run can build (DR-04, DR-08). `custom` is vocabulary the column carries and nothing builds. */
+export type PackKind = 'wsr' | 'qbr';
 
 export function packFormat(value: string | undefined): PackFormat {
   return value === 'pdf' ? 'pdf' : 'pptx';
@@ -635,6 +653,28 @@ export class ReportingService {
   }
 
   /**
+   * Both renditions of a described pack, stored side by side under the
+   * run's prefix. The weekly report keeps its own hand-laid deck; every
+   * other template is drawn from its `PackDocument`, so a new pack is a
+   * new description and not a new renderer, and its two renditions cannot
+   * disagree with each other.
+   */
+  private async renderDocument(
+    accountId: string,
+    runId: string,
+    kind: PackKind,
+    periodStart: string,
+    document: PackDocument,
+  ): Promise<{ pptxKey: string; pdfKey: string }> {
+    const prefix = `accounts/${accountId}/reports/${runId}/${kind}-${periodStart}`;
+    const pptxKey = `${prefix}.pptx`;
+    const pdfKey = `${prefix}.pdf`;
+    await this.store.putObject(pptxKey, await renderPackDeck(document), PPTX_CONTENT_TYPE);
+    await this.store.putObject(pdfKey, await renderPackPdf(document), PDF_CONTENT_TYPE);
+    return { pptxKey, pdfKey };
+  }
+
+  /**
    * Both renditions of a held run again, from the numbers already frozen
    * on its pack and the narrative it now carries (functional 5.8:
    * "Regenerate with my edits"). Nothing is recomputed: a re-render after
@@ -650,6 +690,8 @@ export class ReportingService {
     input: {
       accountId: string;
       runId: string;
+      /** Which template this run was built from; a quarterly pack rebuilds from its own frozen facts. */
+      packType?: string;
       periodStart: string;
       periodEnd: string;
       measures: unknown;
@@ -662,6 +704,15 @@ export class ReportingService {
       start: new Date(`${input.periodStart}T00:00:00Z`),
       end: new Date(new Date(`${input.periodEnd}T00:00:00Z`).getTime() + 86_400_000),
     };
+    const quarterly = input.packType === 'qbr' ? reviveQbr(input.measures) : null;
+    if (quarterly)
+      return this.renderDocument(
+        input.accountId,
+        input.runId,
+        'qbr',
+        iso(quarterly.facts.period.start),
+        qbrDocument(account.name, quarterly.facts, quarterly.previous, input.narrative),
+      );
     return this.renderAndStore(
       input.accountId,
       input.runId,
@@ -848,6 +899,169 @@ export class ReportingService {
     }
   }
 
+  /**
+   * Builds a quarterly business review pack for a quarter inside an open
+   * transaction (DR-08), the way `buildWsr` builds a weekly one: the run
+   * row, the frozen facts, the templated narrative, both renditions in the
+   * object store, the pack row and the audit event. The quarterly template
+   * carries sections the weekly one never gathers, and every one of them is
+   * frozen on the pack beside the measures, so "Regenerate with my edits"
+   * rebuilds the document and recomputes nothing.
+   *
+   * The previous quarter is measured from the same fact set and reported
+   * only where something happened in it, so a first quarter says it has
+   * nothing to compare against rather than comparing itself with zero.
+   */
+  async buildQbr(
+    tx: Tx,
+    input: {
+      accountId: string;
+      period: Period;
+      requestedBy: string;
+      scheduleId?: string | null;
+      actor: Parameters<AuditService['account']>[2];
+      ctx: Parameters<AuditService['account']>[3];
+    },
+  ): Promise<{
+    run_id: string;
+    pack_id: string;
+    pptx_key: string;
+    pdf_key: string;
+    file_name: string;
+    pdf_file_name: string;
+  }> {
+    const account = await this.accounts.byId(tx, input.accountId);
+    const period = input.period;
+    const before = quarterBefore(period);
+    const reference = new Date();
+    const run = await this.reporting.insertRun(tx, {
+      accountId: input.accountId,
+      packType: 'qbr',
+      periodStart: iso(period.start),
+      periodEnd: iso(new Date(period.end.getTime() - 1)),
+      requestedBy: input.requestedBy,
+    });
+    if (input.scheduleId)
+      await tx.query('update acct.report_runs set schedule_id = $2 where id = $1', [run.id, input.scheduleId]);
+    try {
+      const consuming = await this.consumingClasses(tx, input.accountId);
+      const tickets = await this.reporting.ticketFacts(tx, [input.accountId], before.start);
+      const time = await this.reporting.timeFacts(tx, [input.accountId], iso(before.start), iso(period.end), consuming);
+      const within = (window: Period) => (entry: { performedOn: string }) =>
+        entry.performedOn >= iso(window.start) && entry.performedOn < iso(window.end);
+      const facts: QbrFacts = {
+        period,
+        measures: computeMeasures(tickets, time.filter(within(period)), period, reference),
+        satisfaction: await this.satisfactionOf(tx, input.accountId, period),
+        knowledge: await this.reporting.knowledgeContribution(tx, input.accountId, period.start, period.end),
+        roster: await this.rosterOf(tx, input.accountId, period),
+        renewals: await this.renewalsOf(tx, input.accountId, period, consuming),
+        notable: notableTickets(tickets, reference, 5),
+      };
+      const beforeMeasures = computeMeasures(tickets, time.filter(within(before)), before, reference);
+      const previous: QbrComparison | null =
+        beforeMeasures.volume_created > 0 ||
+        beforeMeasures.volume_resolved > 0 ||
+        beforeMeasures.time_logged_minutes > 0
+          ? {
+              period: before,
+              measures: beforeMeasures,
+              satisfaction: await this.satisfactionOf(tx, input.accountId, before),
+            }
+          : null;
+      const narrative = templatedQbrNarrative(account.name, facts, previous);
+      const keys = await this.renderDocument(
+        input.accountId,
+        run.id,
+        'qbr',
+        iso(period.start),
+        qbrDocument(account.name, facts, previous, narrative, reference),
+      );
+      const pack = await this.reporting.insertPack(tx, {
+        accountId: input.accountId,
+        runId: run.id,
+        periodStart: iso(period.start),
+        periodEnd: iso(new Date(period.end.getTime() - 1)),
+        measures: storedQbr(facts, previous),
+        notable: facts.notable,
+        narrative: narrativeText(narrative),
+        sections: narrative.sections,
+        pptxKey: keys.pptxKey,
+        pdfKey: keys.pdfKey,
+      });
+      await this.reporting.finishRun(tx, run.id, pack.id, null);
+      await this.audit.account(tx, input.accountId, input.actor, input.ctx, [
+        {
+          entityKind: 'report_pack',
+          entityId: pack.id,
+          eventType: 'created',
+          newValue: {
+            run_id: run.id,
+            pack_type: 'qbr',
+            schedule_id: input.scheduleId ?? null,
+            period: [iso(period.start), iso(period.end)],
+          },
+        },
+      ]);
+      return {
+        run_id: run.id,
+        pack_id: pack.id,
+        pptx_key: keys.pptxKey,
+        pdf_key: keys.pdfKey,
+        file_name: `${account.key}-QBR-${iso(period.start)}.pptx`,
+        pdf_file_name: `${account.key}-QBR-${iso(period.start)}.pdf`,
+      };
+    } catch (error) {
+      await this.reporting.finishRun(tx, run.id, null, this.runFailure(run.id, error));
+      throw error;
+    }
+  }
+
+  /** Closed-request scores in the window, with the relationship survey beside them. */
+  private async satisfactionOf(tx: Tx, accountId: string, period: Period): Promise<QbrSatisfaction> {
+    const [scores] = await this.reporting.csatScores(tx, [accountId], iso(period.start), iso(period.end));
+    return {
+      responses: scores?.responses ?? 0,
+      mean: scores?.mean ?? null,
+      quarterly: await this.reporting.quarterlyCsat(tx, accountId, iso(period.start), iso(period.end)),
+    };
+  }
+
+  /** Who worked the account in the window; the ten busiest are named. */
+  private async rosterOf(tx: Tx, accountId: string, period: Period): Promise<QbrRoster> {
+    const rows = await this.reporting.timeByPerson(tx, accountId, iso(period.start), lastDay(period));
+    return {
+      people: rows.length,
+      minutes: rows.reduce((sum, row) => sum + row.minutes, 0),
+      by_person: rows.slice(0, 10).map((row) => ({ name: row.person_name || row.person_id, minutes: row.minutes })),
+    };
+  }
+
+  /** The active contracts and how far each is from its own period end. */
+  private async renewalsOf(
+    tx: Tx,
+    accountId: string,
+    period: Period,
+    consuming: ReadonlySet<string>,
+  ): Promise<QbrRenewal[]> {
+    const end = lastDay(period);
+    const rows = await this.reporting.renewalFacts(tx, accountId, iso(period.start), end, [...consuming]);
+    return rows.map((row) => ({
+      name: row.name,
+      model: row.model,
+      period_ends_on: row.period_ends_on,
+      days_to_renewal:
+        row.period_ends_on === null
+          ? null
+          : Math.round(
+              (new Date(`${row.period_ends_on}T00:00:00Z`).getTime() - new Date(`${end}T00:00:00Z`).getTime()) /
+                86_400_000,
+            ),
+      available_minutes: row.available_minutes,
+      consumed_minutes: row.consumed_minutes,
+    }));
+  }
+
   runs(principal: Principal, accountId: string) {
     if (!principal.accountIds.includes(accountId))
       throw new NotFoundException({ code: 'not_found', entity: 'account' });
@@ -904,6 +1118,97 @@ export class ReportingService {
 
 function iso(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+/** The last day a period covers, as a date: the period end is exclusive. */
+function lastDay(period: Period): string {
+  return iso(new Date(period.end.getTime() - 86_400_000));
+}
+
+/**
+ * A described pack as a deck: one slide per section carrying the
+ * paragraphs, the tiles and the tables the section declares, and the same
+ * "no activity" line the document prints where a section is empty. The
+ * weekly report keeps its own hand-laid slides; everything else is drawn
+ * from here.
+ */
+async function renderPackDeck(document: PackDocument): Promise<Buffer> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- pptxgenjs ships CommonJS with a fluent, untyped face.
+  const Pptx = ((PptxGenJS as unknown as { default?: unknown }).default ?? PptxGenJS) as unknown as new () => any;
+  const deck = new Pptx();
+  deck.layout = 'LAYOUT_WIDE';
+  const navy = '10193A';
+  const cover = deck.addSlide();
+  cover.background = { color: navy };
+  cover.addText(document.title, {
+    x: 0.6,
+    y: 1.8,
+    w: 12,
+    h: 1,
+    fontSize: 36,
+    bold: true,
+    color: 'FFFFFF',
+    fontFace: 'Calibri',
+  });
+  cover.addText(`${document.accountName}   ${document.periodStart} to ${document.periodEnd}`, {
+    x: 0.6,
+    y: 2.9,
+    w: 12,
+    h: 0.6,
+    fontSize: 18,
+    color: 'DCE3F0',
+    fontFace: 'Calibri',
+  });
+  for (const section of document.sections) {
+    const slide = deck.addSlide();
+    slide.addText(section.title, { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 22, bold: true, color: navy });
+    let y = 1.2;
+    let wrote = false;
+    for (const paragraph of section.paragraphs ?? []) {
+      if (!paragraph.trim()) continue;
+      slide.addText(paragraph, { x: 0.6, y, w: 12, h: 0.5, fontSize: 13, color: '0F172A', valign: 'top' });
+      y += 0.55;
+      wrote = true;
+    }
+    const tiles = section.tiles ?? [];
+    tiles.forEach((tile, index) => {
+      const x = 0.6 + (index % 3) * 4.1;
+      const top = y + Math.floor(index / 3) * 1.6;
+      slide.addShape(deck.ShapeType.rect, {
+        x,
+        y: top,
+        w: 3.8,
+        h: 1.4,
+        fill: { color: 'F4F5F7' },
+        line: { color: 'E2E8F0' },
+      });
+      slide.addText(tile.value, { x: x + 0.2, y: top + 0.15, w: 3.4, h: 0.7, fontSize: 26, bold: true, color: navy });
+      slide.addText(tile.label, { x: x + 0.2, y: top + 0.9, w: 3.4, h: 0.4, fontSize: 12, color: '475569' });
+    });
+    if (tiles.length > 0) {
+      y += Math.ceil(tiles.length / 3) * 1.6 + 0.2;
+      wrote = true;
+    }
+    for (const table of section.tables ?? []) {
+      if (table.rows.length === 0) continue;
+      if (table.caption) {
+        slide.addText(table.caption, { x: 0.6, y, w: 12, h: 0.4, fontSize: 12, bold: true, color: '0F172A' });
+        y += 0.4;
+      }
+      slide.addTable(
+        [
+          table.columns.map((cell) => ({ text: cell, options: { bold: true } })),
+          ...table.rows.map((row) => row.map((cell) => ({ text: cell }))),
+        ],
+        { x: 0.6, y, w: 12.2, fontSize: 11 },
+      );
+      y += 0.35 + table.rows.length * 0.28;
+      wrote = true;
+    }
+    if (!wrote) slide.addText(EMPTY_SECTION_LINE, { x: 0.6, y: 1.2, w: 12, h: 0.5, fontSize: 13, color: '475569' });
+  }
+  const output = await deck.write({ outputType: 'nodebuffer' });
+  return Buffer.from(output as Buffer);
 }
 
 function encodeCursor(occurredAt: string, id: string): string {

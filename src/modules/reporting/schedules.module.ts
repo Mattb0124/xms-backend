@@ -47,13 +47,8 @@ import { MAIL_TRANSPORT, OBJECT_STORE, StorageCoreModule } from '../../common/st
 import { DbPools } from '../../db/pool.js';
 import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
-import {
-  narrativeText,
-  packNarrative,
-  WSR_NARRATIVE_KEYS,
-  type NarrativeSection,
-  type WsrNarrativeKey,
-} from '../../domain/reporting/pdf.js';
+import { narrativeText, packNarrative, WSR_NARRATIVE_KEYS, type NarrativeSection } from '../../domain/reporting/pdf.js';
+import { QBR_NARRATIVE_KEYS } from '../../domain/reporting/qbr.js';
 import { nextRunAt, periodBefore, type Cadence, type PeriodKind } from '../../domain/reporting/schedule.js';
 import type { Job } from '../../worker/jobs.js';
 import { CalendarsCoreModule, CalendarService } from '../calendars/calendars.module.js';
@@ -253,6 +248,21 @@ export interface DeliveryOutcome {
   name?: string;
   outcome: 'notified' | 'emailed' | 'skipped';
   reason?: string;
+}
+
+/**
+ * Every section key a narrative may speak to, across both templates. The
+ * weekly keys are a subset of the quarterly ones, and the review screen
+ * edits whichever the pack in front of it carries, so one list validates
+ * both and a section the pack does not have is simply never rendered.
+ */
+export const PACK_NARRATIVE_KEYS: readonly string[] = [
+  ...new Set<string>([...WSR_NARRATIVE_KEYS, ...QBR_NARRATIVE_KEYS]),
+];
+
+/** The file name stem of a pack: the account key, the template and the period. */
+export function packStem(accountKey: string, packType: string, periodStart: string): string {
+  return `${accountKey}-${packType === 'qbr' ? 'QBR' : 'WSR'}-${periodStart}`;
 }
 
 /** `run_time` is a time column; every route speaks HH:MM, which is what the PATCH accepts. */
@@ -474,6 +484,8 @@ export class RecipientDto {
 
 export class ScheduleFieldsDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
+  /** Which template the schedule builds (DR-04 weekly, DR-08 quarterly). */
+  @IsOptional() @IsIn(['wsr', 'qbr']) pack_type?: 'wsr' | 'qbr';
   @IsOptional() @IsIn(['weekly', 'monthly', 'quarterly']) cadence?: Cadence;
   @IsOptional() @IsInt() @Min(1) @Max(31) run_day?: number;
   @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) run_time?: string;
@@ -520,7 +532,7 @@ export class RunNowDto {
 
 /** One section of the narrative panel on the review screen (functional 5.8). */
 export class NarrativeSectionDto {
-  @IsIn([...WSR_NARRATIVE_KEYS]) key!: WsrNarrativeKey;
+  @IsIn([...PACK_NARRATIVE_KEYS]) key!: string;
   @IsString() @MaxLength(6000) text!: string;
 }
 
@@ -533,7 +545,7 @@ export class NarrativeSectionDto {
  */
 export class PatchNarrativeDto {
   @IsArray()
-  @ArrayMaxSize(WSR_NARRATIVE_KEYS.length)
+  @ArrayMaxSize(PACK_NARRATIVE_KEYS.length)
   @ValidateNested({ each: true })
   @Type(() => NarrativeSectionDto)
   sections!: NarrativeSectionDto[];
@@ -586,6 +598,7 @@ export class SchedulesService {
       const row = await this.repo.insert(tx, {
         account_id: dto.account_id,
         name: dto.name,
+        pack_type: dto.pack_type ?? 'wsr',
         cadence: spec.cadence,
         run_day: spec.runDay,
         run_time: spec.runTime,
@@ -603,6 +616,7 @@ export class SchedulesService {
           eventType: 'created',
           newValue: {
             name: row.name,
+            pack_type: row.pack_type,
             cadence: row.cadence,
             run_day: row.run_day,
             review_required: row.review_required,
@@ -619,6 +633,7 @@ export class SchedulesService {
       const before = await this.repo.byId(tx, id);
       const next = {
         name: dto.name ?? before.name,
+        pack_type: dto.pack_type ?? before.pack_type,
         cadence: dto.cadence ?? before.cadence,
         run_day: dto.run_day ?? before.run_day,
         run_time: dto.run_time ?? before.run_time.slice(0, 5),
@@ -690,7 +705,9 @@ export class SchedulesService {
     requestedBy: string,
     ctx: Parameters<AuditService['account']>[3],
   ) {
-    const built = await this.reporting.buildWsr(tx, {
+    // The schedule says which template it builds; both return the same
+    // shape, so everything after this point is one path (DR-08).
+    const request = {
       accountId: schedule.account_id,
       period: {
         start: new Date(`${period.start}T00:00:00Z`),
@@ -700,7 +717,11 @@ export class SchedulesService {
       scheduleId: schedule.id,
       actor,
       ctx,
-    });
+    };
+    const built =
+      schedule.pack_type === 'qbr'
+        ? await this.reporting.buildQbr(tx, request)
+        : await this.reporting.buildWsr(tx, request);
     const links = await this.links(built);
     const advance = () =>
       this.repo.advance(
@@ -951,6 +972,7 @@ export class SchedulesService {
     const keys = await this.reporting.rerenderPack(tx, {
       accountId: run.account_id,
       runId: run.id,
+      packType: run.pack_type,
       periodStart: pack.period_start,
       periodEnd: pack.period_end,
       measures: pack.measures,
@@ -996,7 +1018,7 @@ export class SchedulesService {
       const delivery = await this.deliver(
         tx,
         schedule,
-        { run_id: run.id, pack_id: pack.id, file_name: `${account.key}-WSR-${period.start}.pptx` },
+        { run_id: run.id, pack_id: pack.id, file_name: `${packStem(account.key, run.pack_type, period.start)}.pptx` },
         links,
         period,
       );
@@ -1064,7 +1086,7 @@ export class SchedulesService {
   private async packLinks(tx: Tx, run: RunRow, pack: PackRow | undefined): Promise<PackLinks> {
     if (!pack) return { pptx: null, pdf: null };
     const account = await this.repo.accountKey(tx, run.account_id);
-    const stem = `${account.key}-WSR-${pack.period_start}`;
+    const stem = packStem(account.key, run.pack_type, pack.period_start);
     return {
       pptx: pack.pptx_key
         ? await this.store.presignDownload(pack.pptx_key, {
