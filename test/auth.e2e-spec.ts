@@ -109,6 +109,10 @@ const OTHER = '22222222-2222-4222-8222-222222222222';
 beforeAll(async () => {
   keys = await clerkKeys();
   principals = new InMemoryPrincipals();
+  // A portal organisation slug is `acct-<account key>`; the guard resolves
+  // the key from the user's own account and compares the two.
+  principals.accountKeys.set(ACCOUNT, 'BRK');
+  principals.accountKeys.set(OTHER, 'OTH');
   sink = new RecordingSink();
   const verifiers = new TokenVerifiers({
     clerk: {
@@ -283,6 +287,32 @@ describe('accepted tokens', () => {
     await get('/v1/probe/internal', await clerkToken(keys, { sub: user.clerk_user_id! })).expect(200);
   });
 
+  it('refuses to bind a pre-invited portal user through another account organisation', async () => {
+    // Each account asserts its own emails through its own enterprise
+    // connection. Account OTH must not be able to claim a contact of BRK
+    // by asserting their email and taking over the account binding.
+    const victim = principals.add(
+      aUser({
+        email: 'victim@brookfield.test',
+        kind: 'portal',
+        account_id: ACCOUNT,
+        accountIds: [ACCOUNT],
+        status: 'invited',
+        permissions: ['portal:submit'],
+      }),
+    );
+    const attacker = await clerkToken(keys, { sub: 'user_attacker', email: victim.email, org: 'acct-oth' });
+    await get('/v1/portal/probe/mine', attacker).expect(401);
+    expect(sink.ofType('auth.signin.failed')[0].attrs).toMatchObject({ reason: 'wrong_organisation' });
+    // And the refusal left no binding behind for the attacker to reuse.
+    expect(principals.users.get(victim.id)).toMatchObject({ clerk_user_id: null, status: 'invited' });
+    // The account's own organisation still signs the contact in.
+    const own = await clerkToken(keys, { sub: 'user_victim', email: victim.email, org: 'acct-brk' });
+    const response = await get('/v1/portal/probe/mine', own).expect(200);
+    expect(response.body).toEqual({ kind: 'portal', accounts: [ACCOUNT] });
+    expect(principals.users.get(victim.id)).toMatchObject({ clerk_user_id: 'user_victim', status: 'active' });
+  });
+
   it('binds a pre-invited user to the Clerk subject on first sign-in by email', async () => {
     const user = principals.add(aUser({ email: 'invited@example.test', status: 'invited' }));
     await get(
@@ -302,6 +332,29 @@ describe('accepted tokens', () => {
     const user = principals.add(aUser({ email: 'consultant@example.test' }));
     const response = await get('/v1/probe/me', await harnessToken({ sub: 'harness-1', email: user.email })).expect(200);
     expect(response.body.kind).toBe('harness');
+  });
+
+  it('a harness token bearing a portal user email stays in the portal realm', async () => {
+    // The harness secret is symmetric and XMS mints with it as well, so a
+    // token naming any email can be produced. The realm must follow the
+    // user record, not the transport: otherwise a portal contact's email
+    // yields an internal principal on the app role, and the portal role's
+    // REVOKE on work notes, time entries and rate cards stops applying.
+    const portal = principals.add(
+      aUser({
+        email: 'client@brookfield.test',
+        kind: 'portal',
+        account_id: ACCOUNT,
+        accountIds: [ACCOUNT],
+        permissions: ['portal:submit'],
+      }),
+    );
+    const token = await harnessToken({ sub: 'harness-portal', email: portal.email });
+    const refused = await get('/v1/probe/internal', token).expect(403);
+    expect(refused.body.code).toBe('wrong_realm');
+    expect(sink.ofType('authz.realm.denied')).toHaveLength(1);
+    const allowed = await get('/v1/portal/probe/mine', token).expect(200);
+    expect(allowed.body).toEqual({ kind: 'portal', accounts: [ACCOUNT] });
   });
 
   it('a harness token whose type is not session is rejected', async () => {

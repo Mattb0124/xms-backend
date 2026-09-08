@@ -78,6 +78,14 @@ export class PrincipalRepository {
     return result.rows[0];
   }
 
+  /** The account key an organisation slug is built from: a portal organisation is `acct-<key>`. */
+  async accountKey(accountId: string): Promise<string | undefined> {
+    const result = await this.pools
+      .get('app')
+      .query<{ key: string }>('select key from op.accounts where id = $1', [accountId]);
+    return result.rows[0]?.key;
+  }
+
   /** Binds a Clerk subject to a pre-invited user on first sign-in (matched by email). */
   async attachClerkId(userId: string, clerkUserId: string): Promise<void> {
     await this.pools.get('app').query(

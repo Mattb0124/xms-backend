@@ -49,6 +49,7 @@ export class InMemoryPrincipals implements Pick<
   | 'findUserByClerkId'
   | 'findUserByEmail'
   | 'findUserById'
+  | 'accountKey'
   | 'attachClerkId'
   | 'touchSignIn'
   | 'resolveAccess'
@@ -85,6 +86,13 @@ export class InMemoryPrincipals implements Pick<
 
   async findUserById(id: string): Promise<UserRow | undefined> {
     return this.users.get(id);
+  }
+
+  /** Account id to account key, the shape a portal organisation slug is built from. */
+  readonly accountKeys = new Map<string, string>();
+
+  async accountKey(accountId: string): Promise<string | undefined> {
+    return this.accountKeys.get(accountId);
   }
 
   async attachClerkId(userId: string, clerkUserId: string): Promise<void> {

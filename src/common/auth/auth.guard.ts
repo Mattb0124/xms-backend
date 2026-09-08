@@ -147,8 +147,8 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException({ code: 'invalid_token' });
     }
 
-    const user = await this.findUser(verified);
-    if (!user) {
+    const found = await this.findUser(verified);
+    if (!found) {
       await this.deny({
         ...base,
         type: 'auth.signin.failed',
@@ -162,6 +162,7 @@ export class AuthGuard implements CanActivate {
       });
       throw new UnauthorizedException({ code: 'unknown_user' });
     }
+    const user = found.user;
     if (user.status === 'deactivated' || user.kind === 'service') {
       await this.deny({
         ...base,
@@ -176,14 +177,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException({ code: 'user_inactive' });
     }
     if (verified.type === 'clerk' || verified.type === 'clerk_agents') {
-      const expectedOrg = user.kind === 'portal' ? undefined : this.options.internalOrgSlug;
-      // Portal organisations are `acct-<key>`; the account check happens
-      // through the user's own account_id, the org slug must at least be a
-      // portal organisation and not the internal one.
-      const orgOk =
-        user.kind === 'portal'
-          ? Boolean(verified.orgSlug && verified.orgSlug.startsWith('acct-'))
-          : verified.orgSlug === expectedOrg;
+      const orgOk = await this.organisationMatches(user, verified.orgSlug);
       if (!orgOk) {
         await this.deny({
           ...base,
@@ -195,10 +189,16 @@ export class AuthGuard implements CanActivate {
         throw new UnauthorizedException({ code: 'wrong_organisation' });
       }
     }
+    // Only now, once the organisation is known to be this user's own, is a
+    // pre-invited row bound to the subject that presented the email.
+    if (found.bindClerkId) await this.principals.attachClerkId(user.id, verified.subject);
 
     const access = await this.principals.resolveAccess(user);
     const principal: Principal = {
-      kind: verified.type === 'harness' ? 'harness' : user.kind === 'portal' ? 'portal' : 'internal',
+      // The realm follows the user record, never the transport. A harness
+      // token bearing a portal user's email produces a portal principal on
+      // the portal database role; the transport stays in tokenType.
+      kind: user.kind === 'portal' ? 'portal' : verified.type === 'harness' ? 'harness' : 'internal',
       userId: user.id,
       email: user.email,
       displayName: `${user.first_name} ${user.last_name}`.trim() || user.email,
@@ -211,20 +211,41 @@ export class AuthGuard implements CanActivate {
     return principal;
   }
 
-  private async findUser(verified: VerifiedToken): Promise<UserRow | undefined> {
+  /**
+   * Portal identities come from per-account enterprise connections in one
+   * Clerk application, so an email claim is only as trustworthy as the
+   * organisation that asserted it. The organisation must therefore be the
+   * one belonging to this user's own account (`acct-<key>`), not merely
+   * some portal organisation; internal users stay pinned to the internal
+   * organisation. Checked on every request, not only the first.
+   */
+  private async organisationMatches(user: UserRow, orgSlug: string | undefined): Promise<boolean> {
+    if (!orgSlug) return false;
+    if (user.kind !== 'portal') return orgSlug === this.options.internalOrgSlug;
+    if (!user.account_id) return false;
+    const key = await this.principals.accountKey(user.account_id);
+    return key !== undefined && orgSlug.toLowerCase() === `acct-${key.toLowerCase()}`;
+  }
+
+  /**
+   * Resolves the user a token names. A subject the operator tables do not
+   * know yet may be a pre-invited user matched by email; that binding is
+   * deferred to the caller so it happens after the organisation check and
+   * never before it.
+   */
+  private async findUser(verified: VerifiedToken): Promise<{ user: UserRow; bindClerkId: boolean } | undefined> {
     if (verified.type === 'harness') {
-      return verified.email ? this.principals.findUserByEmail(verified.email) : undefined;
+      const user = verified.email ? await this.principals.findUserByEmail(verified.email) : undefined;
+      return user ? { user, bindClerkId: false } : undefined;
     }
     const byClerk = await this.principals.findUserByClerkId(verified.subject);
-    if (byClerk) return byClerk;
+    if (byClerk) return { user: byClerk, bindClerkId: false };
     if (!verified.email) return undefined;
-    // First sign-in of a pre-invited user: bind the Clerk subject by email.
     const byEmail = await this.principals.findUserByEmail(verified.email);
     if (!byEmail) return undefined;
-    await this.principals.attachClerkId(byEmail.id, verified.subject);
     return {
-      ...byEmail,
-      status: byEmail.status === 'invited' ? 'active' : byEmail.status,
+      user: { ...byEmail, status: byEmail.status === 'invited' ? 'active' : byEmail.status },
+      bindClerkId: true,
     };
   }
 

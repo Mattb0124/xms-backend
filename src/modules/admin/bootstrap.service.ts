@@ -65,6 +65,23 @@ export class BootstrapService {
       });
       throw new UnauthorizedException({ code: 'invalid_token' });
     }
+    // The allowlisted email is not enough on its own: a token from any
+    // organisation in the Clerk instance, a portal `acct-*` one included,
+    // must not become the first administrator.
+    if (
+      (verified.type === 'clerk' || verified.type === 'clerk_agents') &&
+      verified.orgSlug !== loadEnv().CLERK_INTERNAL_ORG_SLUG
+    ) {
+      await this.security.write({
+        type: 'auth.signin.failed',
+        outcome: 'denied',
+        actorKind: 'anonymous',
+        actorId: verified.subject,
+        requestId: ctx.requestId,
+        attrs: { route: 'POST /v1/bootstrap', reason: 'wrong_organisation' },
+      });
+      throw new UnauthorizedException({ code: 'wrong_organisation' });
+    }
     const email = verified.email?.toLowerCase();
     const allowed = loadEnv().BOOTSTRAP_ADMIN_EMAILS.map((item) => item.toLowerCase());
     if (!email || !allowed.includes(email)) {
