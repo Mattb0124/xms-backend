@@ -37,6 +37,7 @@ let scheduleId: string;
 let scheduleVersion: number;
 let ownerId: string;
 let consultantToken: string;
+let ownerToken: string;
 let schedules: SchedulesService;
 
 beforeAll(async () => {
@@ -110,7 +111,7 @@ beforeAll(async () => {
   ownerId = owner.body.id;
   // A reviewer is an active user: the owner signs in once, which binds the
   // invited row to the subject and activates it.
-  const ownerToken = await devToken({ sub: 'dev_owen', email: 'owen@example.test', sid: 'sess_owen' });
+  ownerToken = await devToken({ sub: 'dev_owen', email: 'owen@example.test', sid: 'sess_owen' });
   await api().get('/v1/reporting/schedules').set(bearer(ownerToken)).expect(200);
   await api()
     .post('/v1/admin/users')
@@ -346,7 +347,7 @@ describe('review before send (DR-05, functional 5.8)', () => {
     expect(asked.rows[0].link).toBe(`/reports/runs/${held.run_id}`);
     expect(await auditOf(held.run_id)).toEqual(['report.run.held_for_review']);
 
-    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
     expect(approved.body.status).toBe('sent');
     expect(approved.body.delivery.map((row: { outcome: string }) => row.outcome)).toEqual([
       'notified',
@@ -358,12 +359,12 @@ describe('review before send (DR-05, functional 5.8)', () => {
         held.run_id,
       ]),
     );
-    expect(after.rows[0]).toMatchObject({ status: 'sent', reviewer_id: adminId, review_due_at: null });
+    expect(after.rows[0]).toMatchObject({ status: 'sent', reviewer_id: ownerId, review_due_at: null });
     expect(after.rows[0].reviewed_at).not.toBeNull();
     expect(await auditOf(held.run_id)).toEqual(['report.run.held_for_review', 'report.run.approved']);
     expect(await outboxOf(held.run_id)).toEqual(['report.run.held_for_review', 'report.run.approved']);
     // A sent run is no longer under review.
-    const again = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(409);
+    const again = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(409);
     expect(again.body).toMatchObject({ code: 'not_under_review', status: 'sent' });
   });
 
@@ -439,8 +440,33 @@ describe('review before send (DR-05, functional 5.8)', () => {
     expect(reminded.rows.map((row) => row.recipient_id).sort()).toEqual([adminId, ownerId].sort());
     expect(await auditOf(held.run_id)).toEqual(['report.run.held_for_review', 'report.run.review_expired']);
     // Expired is not dead: the pack is still approvable, which is the only way it ever ships.
-    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
     expect(approved.body.status).toBe('sent');
+  });
+
+  it('refuses the requester their own approval and takes a second reader’s', async () => {
+    // Review before send is the whole point of the hold (DR-05). One
+    // `reports:manage` holder generating a pack, editing its narrative and
+    // approving it satisfies nothing, so the requester is refused by name
+    // and the account owner, who holds the same permission, approves it.
+    const held = await hold({ period_start: '2026-10-06', period_end: '2026-10-12' });
+    const own = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(409);
+    expect(own.body).toMatchObject({ code: 'requester_cannot_approve', requested_by: adminId });
+
+    const still = await withSuperuser((client) =>
+      client.query('select status, reviewer_id from acct.report_runs where id = $1', [held.run_id]),
+    );
+    expect(still.rows[0]).toMatchObject({ status: 'ready_for_review', reviewer_id: null });
+
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
+    expect(approved.body.status).toBe('sent');
+    const audited = await withSuperuser((client) =>
+      client.query<{ new_value: { requested_by: string; reviewed_by: string } }>(
+        `select new_value from acct.audit_events where entity_id = $1 and event_type = 'report.run.approved'`,
+        [held.run_id],
+      ),
+    );
+    expect(audited.rows[0].new_value).toMatchObject({ requested_by: adminId, reviewed_by: ownerId });
   });
 
   it('a user without reports:manage cannot read, approve or cancel a held run', async () => {
@@ -586,7 +612,7 @@ describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
       'report.run.regenerated',
     ]);
 
-    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
     expect(approved.body.status).toBe('sent');
     expect(await storedPdfText((await detailOf(held.run_id)).body.files.pdf)).toContain(headline);
   });
@@ -599,7 +625,7 @@ describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
       .set(bearer(adminToken))
       .send({ sections: [{ key: 'headline', text: headline }] })
       .expect(200);
-    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
     expect(approved.body.status).toBe('sent');
     const detail = await detailOf(held.run_id);
     expect(detail.body).toMatchObject({ narrative_source: 'edited', narrative_rendered: true });
@@ -636,7 +662,7 @@ describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
     expect(duplicated.body.code).toBe('duplicate_section');
 
     // Once it is sent, the words are the client's copy and neither route touches them.
-    await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(ownerToken)).expect(201);
     const refused = await api()
       .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
       .set(bearer(adminToken))

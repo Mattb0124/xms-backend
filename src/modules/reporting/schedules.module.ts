@@ -952,6 +952,13 @@ export class SchedulesService {
   approve(principal: Principal, ctx: RequestContext, id: string) {
     return this.uow.run(principal, async (tx) => {
       const { run, schedule, pack, period } = await this.heldRun(tx, id);
+      // Review before send is a second reader, not a pause (functional 5.8,
+      // DR-05). The person who asked for the run is the person whose
+      // narrative is under review, so a second `reports:manage` holder
+      // approves it, exactly as the out-of-scope flagger cannot decide
+      // their own flag.
+      if (run.requested_by === principal.userId)
+        throw new ConflictException({ code: 'requester_cannot_approve', requested_by: run.requested_by });
       await this.repo.markApproved(tx, run.id, principal.userId);
       const stale = currentNarrative(pack)?.rendered === false;
       const links = stale ? (await this.rerender(tx, run, pack)).links : await this.packLinks(tx, run, pack);
@@ -973,6 +980,10 @@ export class SchedulesService {
         delivered: delivery.filter((row) => row.outcome !== 'skipped').length,
         narrative_source: narrativeSourceView(pack.narrative_source),
         rerendered: stale,
+        // Requester and reviewer are recorded apart, so the audit stream
+        // shows two people rather than one completed review.
+        requested_by: run.requested_by,
+        reviewed_by: principal.userId,
       });
       return {
         run_id: run.id,
