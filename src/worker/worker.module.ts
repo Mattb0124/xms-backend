@@ -110,6 +110,11 @@ export class WorkerModule implements OnModuleInit {
       (row) => this.finance.onOutbox(row),
     );
     this.dispatcher.subscribe(
+      'connector.servicenow',
+      (type) => this.sync.handles(type),
+      (row) => this.sync.onOutbox(row),
+    );
+    this.dispatcher.subscribe(
       'axel.intake',
       (type) => type === 'ticket.created',
       (row) => this.suggestions.intake(row.account_id, row.aggregate_id).then(() => undefined),

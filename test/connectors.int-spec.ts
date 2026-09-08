@@ -149,6 +149,28 @@ async function forcePoll(): Promise<string> {
   return sync.pollDue();
 }
 
+/** Hands every outbox row to the connector handler, the way the dispatcher does in the worker. */
+async function drainOutbox(): Promise<void> {
+  const rows = await withSuperuser((client) =>
+    client.query(
+      `select id, account_id, aggregate, aggregate_id, event_type, payload, correlation_id, origin, created_at from sys.outbox order by id`,
+    ),
+  );
+  for (const row of rows.rows)
+    await sync.onOutbox({
+      id: String(row.id),
+      account_id: row.account_id,
+      aggregate: row.aggregate,
+      aggregate_id: row.aggregate_id,
+      event_type: row.event_type,
+      payload: row.payload,
+      correlation_id: row.correlation_id,
+      origin: row.origin,
+      created_at: row.created_at,
+      attempts: 0,
+    });
+}
+
 function seedCase(body: Record<string, unknown>, at?: Date) {
   return standIn.seed(
     TABLE,
@@ -647,4 +669,112 @@ describe('dead letters, the kill switch and health (SN-07, SN-09)', () => {
     );
     expect(security.rows[0].attrs).toMatchObject({ action: 'trip', automatic: true });
   }, 60_000);
+});
+
+describe('the outbound queue (SN-03)', () => {
+  let caseB: Record<string, unknown>;
+  let ticketBId = '';
+
+  it('arms the switch, promotes the instance to bidirectional and links a fresh case', async () => {
+    await api()
+      .post(`/v1/connectors/${instanceId}/kill-switch`)
+      .set(bearer(adminToken))
+      .send({ action: 'arm' })
+      .expect(201);
+    // The administrator route refuses bidirectional until the mode gate
+    // lands with the outbound screens; the queue is testable before it, so
+    // the promotion here stands in for that call and declares the audit the
+    // guard trigger asks for.
+    await withSuperuser(async (client) => {
+      await client.query('begin');
+      await client.query(`set local xms.audited = 'true'`);
+      await client.query(`update acct.connector_instances set mode = 'bidirectional' where id = $1`, [instanceId]);
+      await client.query('commit');
+    });
+    caseB = seedCase({ short_description: 'Outbound subject', sys_updated_on: '2027-02-01 00:00:00' });
+    expect(await forcePoll()).toContain('1 new');
+    expect(await sync.applyPending()).toBe('applied 1, failed 0');
+    const link = await withSuperuser((client) =>
+      client.query(`select ticket_id from acct.sync_links where external_sys_id = $1`, [caseB.sys_id]),
+    );
+    ticketBId = link.rows[0].ticket_id;
+    expect(ticketBId).toBeTruthy();
+  });
+
+  it('never queues the instance its own echo and queues a consultant comment exactly once', async () => {
+    // Everything the apply handler wrote for this case carries origin
+    // sync:<instance>: the loop guard drops it and records why.
+    await drainOutbox();
+    const echoed = await withSuperuser((client) =>
+      client.query(`select id from acct.sync_outbound where instance_id = $1`, [instanceId]),
+    );
+    expect(echoed.rows).toHaveLength(0);
+    const skipped = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=skipped_reflection`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(skipped.body.length).toBeGreaterThanOrEqual(1);
+    expect(skipped.body[0].detail).toMatchObject({ reason: 'own_origin' });
+
+    await api()
+      .post(`/v1/tickets/${ticketBId}/comments`)
+      .set(bearer(adminToken))
+      .send({ body: 'We are on it' })
+      .expect(201);
+    await drainOutbox();
+    // At-least-once dispatch: a redelivered outbox row must not queue twice.
+    await drainOutbox();
+    const queued = await withSuperuser((client) =>
+      client.query(`select event, status, attempts, origin from acct.sync_outbound where instance_id = $1`, [
+        instanceId,
+      ]),
+    );
+    expect(queued.rows).toEqual([{ event: 'comment.created', status: 'pending', attempts: 0, origin: 'user' }]);
+  });
+
+  it('keeps a work note internal while the instance is not configured to receive one', async () => {
+    await api()
+      .post(`/v1/tickets/${ticketBId}/work-notes`)
+      .set(bearer(adminToken))
+      .send({ body: 'Internal: waiting on the platform team' })
+      .expect(201);
+    await drainOutbox();
+    const queued = await withSuperuser((client) =>
+      client.query(`select event from acct.sync_outbound where instance_id = $1 order by created_at`, [instanceId]),
+    );
+    expect(queued.rows.map((row) => row.event)).toEqual(['comment.created']);
+    const refused = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=skipped_policy`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(refused.body[0].detail).toMatchObject({ event: 'work_note.created', reason: 'work_notes_off' });
+  });
+
+  it('queues a transition, and queues nothing for a ticket with no link on the instance', async () => {
+    const unlinked = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'Raised in XMS, not linked to the instance',
+        requester_email: 'pat.client@brookfield.test',
+      })
+      .expect(201);
+    const current = await api().get(`/v1/tickets/${ticketBId}`).set(bearer(adminToken)).expect(200);
+    await api()
+      .post(`/v1/tickets/${ticketBId}/transitions`)
+      .set(bearer(adminToken))
+      .send({ version: current.body.version, to: 'in_progress' })
+      .expect(201);
+    await drainOutbox();
+    const queued = await withSuperuser((client) =>
+      client.query(`select event, ticket_id from acct.sync_outbound where instance_id = $1 order by created_at`, [
+        instanceId,
+      ]),
+    );
+    expect(queued.rows.map((row) => row.event)).toContain('ticket.transitioned');
+    expect(queued.rows.every((row) => row.ticket_id === ticketBId)).toBe(true);
+    expect(unlinked.body.id).toBeTruthy();
+  });
 });

@@ -2,19 +2,30 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTransform,
   resolveInboundState,
+  resolveOutboundState,
+  reverseTransform,
   translateInbound,
+  translateOutbound,
   validateFieldMap,
   validateStateMap,
   type FieldMap,
   type StateMap,
+  type StateMapForType,
 } from './maps.js';
 import {
   classifyHttpStatus,
+  decideEnqueue,
   decideInbound,
+  decideOutbound,
+  externalChangedSince,
   hasJournalMarker,
   isReflection,
   journalMarker,
+  MAX_OUTBOUND_ATTEMPTS,
+  OUTBOUND_EVENTS,
   outboundHash,
+  outboundNextAttempt,
+  syncOrigin,
   stripJournalMarker,
 } from './rules.js';
 
@@ -288,5 +299,128 @@ describe('reflection and conflict rules', () => {
       'terminal',
       'terminal',
     ]);
+  });
+});
+
+describe('outbound translation and the outbound state', () => {
+  it('reverses lookups deterministically, truncates, and reports a template as unmapped', () => {
+    expect(reverseTransform('medium', { kind: 'lookup', values: { '1': 'high', '2': 'medium' } })).toBe('2');
+    // Two external values produce one XMS value: the lowest key always leaves.
+    expect(reverseTransform('high', { kind: 'lookup', values: { '4': 'high', '1': 'high' } })).toBe('1');
+    expect(reverseTransform('unknown', { kind: 'lookup', values: { '1': 'high' } })).toBeUndefined();
+    expect(reverseTransform('a long value', { kind: 'truncate', length: 6 })).toBe('a long');
+    expect(reverseTransform('x', { kind: 'template', template: '{{a}}' })).toBeUndefined();
+  });
+
+  it('writes only outbound entries, narrows to the changed fields, and names what it could not represent', () => {
+    const all = translateOutbound(CSM_MAP, {
+      short_description: 'VPN drops',
+      description: 'A long description that goes on and on',
+      requester_email: 'pat@client.test',
+      category: 'network',
+    });
+    expect(all.body).toEqual({ short_description: 'VPN drops', description: 'A long description t' });
+    expect(all.sent).toEqual({ short_description: 'VPN drops', description: 'A long description that goes on and on' });
+    // `contact.email` is inbound only and the templated category cannot be reversed.
+    expect(all.unmapped).toEqual(['category']);
+    const narrowed = translateOutbound(CSM_MAP, { short_description: 'VPN drops', description: 'x' }, [
+      'short_description',
+    ]);
+    expect(narrowed.body).toEqual({ short_description: 'VPN drops' });
+  });
+
+  it('resolves the outbound state and names the states that share one external value', () => {
+    const entry: StateMapForType = {
+      inbound: { '1': 'new', '10': 'in_progress' },
+      outbound: { new: '1', assigned: '1', in_progress: '10' },
+      fallback: { '1': 'new' },
+    };
+    expect(resolveOutboundState(entry, 'in_progress')).toEqual({ value: '10' });
+    expect(resolveOutboundState(entry, 'assigned')).toEqual({ value: '1', shared: ['new'], canonical: 'new' });
+    expect(resolveOutboundState(entry, 'resolved')).toEqual({ reason: 'no_outbound' });
+  });
+});
+
+describe('the outbound loop guard and conflict policy', () => {
+  const base = {
+    event: 'ticket.updated',
+    origin: 'user',
+    instanceId: 'i1',
+    mode: 'bidirectional' as const,
+    subscribedEvents: [...OUTBOUND_EVENTS],
+    hasLink: true,
+    syncWorkNotes: false,
+  };
+
+  it('never sends a change back to the instance that made it, whatever else holds', () => {
+    expect(decideEnqueue({ ...base, origin: syncOrigin('i1') })).toEqual({ enqueue: false, reason: 'own_origin' });
+    // Another instance's write is not an echo of ours.
+    expect(decideEnqueue({ ...base, origin: syncOrigin('i2') })).toEqual({ enqueue: true });
+    expect(decideEnqueue({ ...base, origin: 'portal' })).toEqual({ enqueue: true });
+  });
+
+  it('queues only a subscribed event on a bidirectional instance with a link', () => {
+    expect(decideEnqueue(base)).toEqual({ enqueue: true });
+    expect(decideEnqueue({ ...base, mode: 'ingest_only' })).toEqual({ enqueue: false, reason: 'mode' });
+    expect(decideEnqueue({ ...base, mode: 'off' })).toEqual({ enqueue: false, reason: 'mode' });
+    expect(decideEnqueue({ ...base, event: 'ticket.created' })).toEqual({ enqueue: false, reason: 'unsubscribed' });
+    expect(decideEnqueue({ ...base, hasLink: false })).toEqual({ enqueue: false, reason: 'no_link' });
+  });
+
+  it('keeps a work note internal unless the instance is configured to receive one', () => {
+    expect(decideEnqueue({ ...base, event: 'work_note.created' })).toEqual({
+      enqueue: false,
+      reason: 'work_notes_off',
+    });
+    expect(decideEnqueue({ ...base, event: 'work_note.created', syncWorkNotes: true })).toEqual({ enqueue: true });
+  });
+
+  it('reads a stamp inside the clock tolerance as our own write rather than a change', () => {
+    const known = new Date('2026-09-08T10:00:00Z');
+    expect(externalChangedSince(known, new Date('2026-09-08T10:00:03Z'), 5)).toBe(false);
+    expect(externalChangedSince(known, new Date('2026-09-08T10:00:30Z'), 5)).toBe(true);
+    expect(externalChangedSince(null, new Date('2026-09-08T10:00:30Z'), 5)).toBe(false);
+  });
+
+  it('decides per field: XMS keeps what it owns, the instance keeps what it owns, newest needs both timestamps', () => {
+    const contested = { externalChanged: true, xmsValue: 'a', externalValue: 'b' };
+    expect(decideOutbound({ ...contested, policy: 'xms' })).toEqual({ send: true, reason: 'xms_owned' });
+    expect(decideOutbound({ ...contested, policy: 'external_at_create_then_xms' })).toEqual({
+      send: true,
+      reason: 'xms_owned',
+    });
+    expect(decideOutbound({ ...contested, policy: 'external' })).toEqual({ send: false, reason: 'external_owned' });
+    expect(decideOutbound({ ...contested, policy: 'merge' })).toEqual({ send: true, reason: 'merge' });
+    expect(decideOutbound({ ...contested, policy: 'none' })).toEqual({ send: false, reason: 'none' });
+    expect(decideOutbound({ ...contested, policy: 'xms', xmsValue: 'a', externalValue: 'a ' })).toEqual({
+      send: false,
+      reason: 'same',
+    });
+    expect(decideOutbound({ ...contested, policy: 'xms', externalChanged: false })).toEqual({
+      send: true,
+      reason: 'uncontested',
+    });
+    const older = new Date('2026-09-01T00:00:00Z');
+    const newer = new Date('2026-09-02T00:00:00Z');
+    expect(decideOutbound({ ...contested, policy: 'newest', xmsUpdatedAt: newer, externalUpdatedAt: older })).toEqual({
+      send: true,
+      reason: 'newest',
+    });
+    expect(decideOutbound({ ...contested, policy: 'newest', xmsUpdatedAt: older, externalUpdatedAt: newer })).toEqual({
+      send: false,
+      reason: 'older',
+    });
+    expect(decideOutbound({ ...contested, policy: 'newest', externalChanged: false })).toEqual({
+      send: true,
+      reason: 'newest',
+    });
+  });
+
+  it('backs off between attempts and stops at the last one', () => {
+    const from = new Date('2026-09-08T10:00:00Z');
+    expect(outboundNextAttempt(1, from)?.toISOString()).toBe('2026-09-08T10:00:05.000Z');
+    expect(outboundNextAttempt(2, from)?.toISOString()).toBe('2026-09-08T10:00:30.000Z');
+    expect(outboundNextAttempt(4, from)?.toISOString()).toBe('2026-09-08T10:10:00.000Z');
+    expect(outboundNextAttempt(MAX_OUTBOUND_ATTEMPTS, from)).toBeNull();
   });
 });

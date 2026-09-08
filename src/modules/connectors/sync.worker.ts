@@ -10,11 +10,19 @@ import {
   type StateMap,
   type XmsField,
 } from '../../domain/sync/maps.js';
-import { decideInbound, hasJournalMarker, isReflection, outboundHash } from '../../domain/sync/rules.js';
+import {
+  decideEnqueue,
+  decideInbound,
+  hasJournalMarker,
+  isOutboundEvent,
+  isReflection,
+  outboundHash,
+} from '../../domain/sync/rules.js';
 import { DbPools } from '../../db/pool.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import type { Job } from '../../worker/jobs.js';
+import type { OutboxRow } from '../../worker/outbox-dispatcher.js';
 import { TicketsService, type TicketView } from '../tickets/tickets.service.js';
 import type { CreateTicketDto, PatchTicketDto, TransitionDto } from '../tickets/tickets.dto.js';
 import { coerceFieldMap, ConnectorsService } from './connectors.service.js';
@@ -491,6 +499,70 @@ export class SyncWorker {
       ],
     );
     return 'applied';
+  }
+
+  // Outbound queue -----------------------------------------------------------
+
+  /** Whether an outbox event type can reach a connector at all (the dispatcher's filter). */
+  handles(eventType: string): boolean {
+    return isOutboundEvent(eventType);
+  }
+
+  /**
+   * The dispatcher handler (ServiceNow Sync technical 3.5; SN-03). One XMS
+   * change becomes one outbound row per instance of the account that
+   * subscribes to the event, is in bidirectional mode and holds a link for
+   * the ticket, unless the change came from that instance, which is the
+   * loop guard. The two refusals an operator would ask about, our own echo
+   * and a work note an instance is not configured to receive, are recorded
+   * as skipped runs; the rest are silent because nothing was ever asked of
+   * the instance.
+   */
+  async onOutbox(row: OutboxRow): Promise<void> {
+    const event = row.event_type;
+    if (!isOutboundEvent(event)) return;
+    await this.uow.worker([row.account_id], async (tx) => {
+      const instances = (await this.repo.allInstances(tx)).filter((one) => one.account_id === row.account_id);
+      if (instances.length === 0) return;
+      const subscriptions = await this.repo.outboundEvents(tx);
+      for (const instance of instances) {
+        const link = await this.repo.linkByTicket(tx, instance.id, row.aggregate_id);
+        const decision = decideEnqueue({
+          event,
+          origin: row.origin,
+          instanceId: instance.id,
+          mode: instance.mode,
+          subscribedEvents: subscriptions[instance.type] ?? [],
+          hasLink: link !== undefined,
+          syncWorkNotes: instance.sync_work_notes,
+        });
+        if (!decision.enqueue) {
+          if (decision.reason === 'own_origin' || decision.reason === 'work_notes_off') {
+            await this.repo.insertRun(tx, {
+              accountId: row.account_id,
+              instanceId: instance.id,
+              direction: 'out',
+              ticketId: row.aggregate_id,
+              outboxId: row.id,
+              outcome: decision.reason === 'own_origin' ? 'skipped_reflection' : 'skipped_policy',
+              detail: { event, reason: decision.reason },
+            });
+          }
+          continue;
+        }
+        await this.repo.insertOutbound(tx, {
+          accountId: row.account_id,
+          instanceId: instance.id,
+          ticketId: row.aggregate_id,
+          linkId: link!.id,
+          event,
+          outboxId: row.id,
+          payload: row.payload ?? {},
+          origin: row.origin,
+          correlationId: row.correlation_id,
+        });
+      }
+    });
   }
 
   // Health -------------------------------------------------------------------

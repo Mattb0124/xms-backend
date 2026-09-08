@@ -121,6 +121,73 @@ function pick(record: Record<string, unknown>, field: string): unknown {
   return raw;
 }
 
+/**
+ * The reverse of `applyTransform`, for the outbound face. A lookup is
+ * inverted (the external value whose entry produces this XMS value); when
+ * several external values share one XMS value the lowest sorted key wins,
+ * so one XMS value always leaves as the same external value. A template is
+ * not reversible and the field is reported unmapped rather than guessed.
+ */
+export function reverseTransform(value: unknown, transform: Transform | undefined): unknown {
+  if (!transform || transform.kind === 'none') return value;
+  switch (transform.kind) {
+    case 'lookup': {
+      const target = value === null || value === undefined ? '' : String(value);
+      const keys = Object.keys(transform.values)
+        .filter((key) => transform.values[key] === target)
+        .sort();
+      return keys[0];
+    }
+    case 'truncate': {
+      if (value === null || value === undefined) return value;
+      const text = String(value);
+      return text.length > transform.length ? text.slice(0, transform.length) : text;
+    }
+    case 'template':
+      return undefined;
+    default:
+      return value;
+  }
+}
+
+export interface OutboundTranslation {
+  /** The PATCH body: external field to the value to write. */
+  readonly body: Record<string, string>;
+  /** The XMS values behind that body, for the outbound hash the reflection rule compares. */
+  readonly sent: Partial<Record<XmsField, unknown>>;
+  /** Entries whose XMS value has no external representation (a lookup gap, a template). */
+  readonly unmapped: XmsField[];
+}
+
+/**
+ * Translates ticket values into an external record through the outbound
+ * entries. `only` narrows the body to the fields a change actually touched;
+ * without it every outbound entry with a value is written.
+ */
+export function translateOutbound(
+  map: FieldMap,
+  values: Partial<Record<XmsField, unknown>>,
+  only?: readonly string[],
+): OutboundTranslation {
+  const body: Record<string, string> = {};
+  const sent: Partial<Record<XmsField, unknown>> = {};
+  const unmapped: XmsField[] = [];
+  for (const entry of map.entries) {
+    if (entry.direction === 'in') continue;
+    if (only && !only.includes(entry.xms)) continue;
+    const value = values[entry.xms];
+    if (value === undefined) continue;
+    const reversed = reverseTransform(value, entry.transform);
+    if (reversed === undefined) {
+      unmapped.push(entry.xms);
+      continue;
+    }
+    body[entry.external] = reversed === null ? '' : String(reversed);
+    sent[entry.xms] = value;
+  }
+  return { body, sent, unmapped };
+}
+
 const SYSTEM_FIELDS = new Set([
   'sys_id',
   'sys_updated_on',
@@ -280,6 +347,28 @@ export function resolveInboundState(
   const fallback = entry.fallback?.[mapped];
   if (fallback && allowed.includes(fallback)) return { target: fallback, via: 'fallback' };
   return { reason: 'unreachable' };
+}
+
+/**
+ * The external state an XMS state should produce. The outbound side of the
+ * map is a direct lookup; the tie-break lives where the validator put it,
+ * in `fallback`: when several XMS states share one external value the map
+ * must name the canonical XMS state for that value, and the caller records
+ * the sharing on the run so an operator can see that the client's model
+ * cannot tell the two apart (functional 5.7).
+ */
+export function resolveOutboundState(
+  entry: StateMapForType,
+  xmsState: string,
+): { value?: string; shared?: string[]; canonical?: string; reason?: 'no_outbound' } {
+  const value = entry.outbound[xmsState];
+  if (value === undefined) return { reason: 'no_outbound' };
+  const shared = Object.entries(entry.outbound)
+    .filter(([state, external]) => external === value && state !== xmsState)
+    .map(([state]) => state);
+  return shared.length > 0
+    ? { value, shared, ...(entry.fallback?.[value] ? { canonical: entry.fallback[value] } : {}) }
+    : { value };
 }
 
 function unique(items: string[]): string[] {

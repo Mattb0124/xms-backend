@@ -74,6 +74,27 @@ export interface LinkRow {
   updated_at: string;
 }
 
+export interface OutboundRow {
+  id: string;
+  account_id: string;
+  instance_id: string;
+  ticket_id: string;
+  link_id: string;
+  event: 'ticket.updated' | 'ticket.transitioned' | 'comment.created' | 'work_note.created';
+  outbox_id: string | null;
+  payload: Record<string, unknown>;
+  origin: string;
+  correlation_id: string | null;
+  status: 'pending' | 'sent' | 'failed' | 'dead_lettered' | 'skipped';
+  attempts: number;
+  next_attempt_at: string;
+  last_error: string | null;
+  conflict: Record<string, unknown> | null;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RunInput {
   accountId: string;
   instanceId: string;
@@ -284,6 +305,13 @@ export class ConnectorsRepository extends RepositoryBase {
     ]);
   }
 
+  linkByTicket(tx: Tx, instanceId: string, ticketId: string): Promise<LinkRow | undefined> {
+    return this.maybeOne(tx, 'select * from acct.sync_links where instance_id = $1 and ticket_id = $2', [
+      instanceId,
+      ticketId,
+    ]);
+  }
+
   linksOfTicket(
     tx: Tx,
     ticketId: string,
@@ -362,6 +390,133 @@ export class ConnectorsRepository extends RepositoryBase {
         input.direction,
       ],
     );
+  }
+
+  // Outbound queue ----------------------------------------------------------------
+
+  /** What each connector type subscribes to, from the operator catalog. */
+  async outboundEvents(tx: Tx): Promise<Record<string, string[]>> {
+    const rows = await this.many<{ key: string; outbound_events: string[] }>(
+      tx,
+      'select key, outbound_events from op.connector_types',
+    );
+    return Object.fromEntries(rows.map((row) => [row.key, row.outbound_events]));
+  }
+
+  /**
+   * Queues one XMS change for one instance. The outbox id makes it
+   * idempotent: the dispatcher is at-least-once, and a redelivered row must
+   * not produce a second PATCH.
+   */
+  insertOutbound(
+    tx: Tx,
+    input: {
+      accountId: string;
+      instanceId: string;
+      ticketId: string;
+      linkId: string;
+      event: OutboundRow['event'];
+      outboxId?: string | null;
+      payload: Record<string, unknown>;
+      origin: string;
+      correlationId?: string | null;
+    },
+  ): Promise<OutboundRow | undefined> {
+    return this.maybeOne<OutboundRow>(
+      tx,
+      `insert into acct.sync_outbound (account_id, instance_id, ticket_id, link_id, event, outbox_id, payload, origin, correlation_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (instance_id, outbox_id) where outbox_id is not null do nothing returning *`,
+      [
+        input.accountId,
+        input.instanceId,
+        input.ticketId,
+        input.linkId,
+        input.event,
+        input.outboxId ?? null,
+        JSON.stringify(input.payload),
+        input.origin,
+        input.correlationId ?? null,
+      ],
+    );
+  }
+
+  /**
+   * Rows due for delivery on an armed, bidirectional instance, oldest
+   * first so a ticket's changes leave in the order they were made. The
+   * caller settles each row in its own transaction, so the claim only
+   * decides the order; the mode and the switch are read again there.
+   */
+  claimOutbound(tx: Tx, instanceId: string, now: Date, limit = 50): Promise<OutboundRow[]> {
+    return this.many<OutboundRow>(
+      tx,
+      `select o.* from acct.sync_outbound o
+         join acct.connector_instances i on i.id = o.instance_id
+        where o.instance_id = $1 and o.status = 'pending' and o.next_attempt_at <= $2
+          and i.mode = 'bidirectional' and i.kill_switch = 'armed'
+        order by o.created_at, o.id limit $3 for update of o skip locked`,
+      [instanceId, now, limit],
+    );
+  }
+
+  outbound(tx: Tx, id: string): Promise<OutboundRow> {
+    return this.one<OutboundRow>(tx, 'sync_outbound', 'select * from acct.sync_outbound where id = $1', [id]);
+  }
+
+  outboundList(tx: Tx, instanceId: string, status?: string, limit = 200): Promise<OutboundRow[]> {
+    return this.many<OutboundRow>(
+      tx,
+      `select o.*, case when t.number is null then null else 'CS' || lpad(t.number::text, 7, '0') end as ticket_key
+         from acct.sync_outbound o left join acct.tickets t on t.id = o.ticket_id
+        where o.instance_id = $1 and ($2::text is null or o.status = $2)
+        order by o.created_at desc limit $3`,
+      [instanceId, status ?? null, Math.min(limit, 500)],
+    );
+  }
+
+  async settleOutbound(tx: Tx, id: string, assignments: Record<string, unknown>): Promise<void> {
+    const values: Record<string, unknown> = { ...assignments };
+    if ('conflict' in values && values.conflict !== null) values.conflict = JSON.stringify(values.conflict);
+    const keys = Object.keys(values);
+    if (keys.length === 0) return;
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 2}`).join(', ');
+    await tx.query(`update acct.sync_outbound set ${sets} where id = $1`, [id, ...keys.map((key) => values[key])]);
+  }
+
+  /** Puts a settled row back in the queue (the retry action and the dead-letter replay). */
+  async reopenOutbound(tx: Tx, id: string): Promise<void> {
+    await tx.query(
+      `update acct.sync_outbound set status = 'pending', attempts = 0, next_attempt_at = now(), last_error = null where id = $1`,
+      [id],
+    );
+  }
+
+  /** What the ticket Sync card shows per instance: the last push, the backlog and the last error. */
+  outboundOfTicket(
+    tx: Tx,
+    ticketId: string,
+  ): Promise<
+    { instance_id: string; last_sent_at: string | null; pending: number; failed: number; last_error: string | null }[]
+  > {
+    return this.many(
+      tx,
+      `select instance_id,
+              max(sent_at) as last_sent_at,
+              count(*) filter (where status = 'pending')::int as pending,
+              count(*) filter (where status in ('failed', 'dead_lettered'))::int as failed,
+              (array_agg(last_error order by updated_at desc) filter (where last_error is not null))[1] as last_error
+         from acct.sync_outbound where ticket_id = $1 group by instance_id`,
+      [ticketId],
+    );
+  }
+
+  pendingOutboundCount(tx: Tx, instanceId: string): Promise<number> {
+    return this.one<{ n: number }>(
+      tx,
+      'sync_outbound',
+      `select count(*)::int as n from acct.sync_outbound where instance_id = $1 and status = 'pending'`,
+      [instanceId],
+    ).then((row) => row.n);
   }
 
   // Runs --------------------------------------------------------------------------
