@@ -81,6 +81,17 @@ export class CreateTicketDto {
   @IsOptional()
   @IsIn(['internal', 'api'])
   source?: 'internal' | 'api';
+
+  /** The published request form version the answers were checked against (CP-03). */
+  @IsOptional()
+  @IsUUID('4')
+  form_version_id?: string | null;
+
+  /** The answers that did not map onto a ticket column (CP-03). */
+  @IsOptional()
+  @IsObject()
+  @MaxJsonSize(64 * 1024)
+  form_data?: Record<string, unknown>;
 }
 
 export class PatchTicketDto {

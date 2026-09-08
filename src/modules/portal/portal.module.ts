@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -11,7 +12,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsObject, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
 import {
   Authenticated,
   CurrentPrincipal,
@@ -22,12 +23,15 @@ import {
 } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
+import type { Tx } from '../../db/repository.base.js';
 import { AdminCoreModule } from '../admin/admin.module.js';
 import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import { TicketsRepository } from '../tickets/tickets.repository.js';
 import { TicketsService, type PortalTicketView } from '../tickets/tickets.service.js';
 import { MessageDto } from '../tickets/tickets.dto.js';
+import { FormsCoreModule, FormsRepository, FORM_TICKET_TYPES, type FormTicketType } from './forms.module.js';
+import { defaultFormDefinition, validateSubmission, type FormDefinition } from '../../domain/portal/form-schema.js';
 
 /**
  * The client portal (02-modules/client-portal, P2.16 cut). Every route sits
@@ -38,13 +42,19 @@ import { MessageDto } from '../tickets/tickets.dto.js';
  * with the actor recorded as the portal user.
  */
 class PortalCreateTicketDto {
-  @IsIn(['incident', 'service_request'])
-  type!: 'incident' | 'service_request';
+  @IsIn(FORM_TICKET_TYPES)
+  type!: FormTicketType;
 
+  /**
+   * The fixed shape the web form has always posted. Optional now, because a
+   * request answering a published form carries its summary in `answers`
+   * instead; one of the two must produce a summary.
+   */
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(300)
-  short_description!: string;
+  short_description?: string;
 
   @IsOptional()
   @IsString()
@@ -63,6 +73,53 @@ class PortalCreateTicketDto {
   @IsOptional()
   @IsIn(['high', 'medium', 'low'])
   urgency?: 'high' | 'medium' | 'low';
+
+  /**
+   * The answers to the form's fields, keyed by field key (CP-03). Required
+   * once the account publishes a form for this type, so a required field
+   * cannot be skipped by posting the old flat shape instead.
+   */
+  @IsOptional()
+  @IsObject()
+  answers?: Record<string, unknown>;
+}
+
+/** A request-type card and the form behind it, as the portal renders them. */
+export interface PortalFormView {
+  ticket_type: FormTicketType;
+  name: string;
+  description: string;
+  form_id: string | null;
+  form_version_id: string | null;
+  version_no: number | null;
+  /** `published` is the account's own form; `default` is the fixed fallback. */
+  source: 'published' | 'default';
+  definition: FormDefinition;
+}
+
+/**
+ * The types a client may always raise. Change is offered only where the
+ * account has published a form for it (functional 5.2), and Problem and
+ * Project Task are internal types a client never creates.
+ */
+const DEFAULT_PORTAL_TYPES = ['incident', 'service_request'] as const;
+
+const DEFAULT_FORM_NAMES: Record<(typeof DEFAULT_PORTAL_TYPES)[number], { name: string; description: string }> = {
+  incident: { name: 'Report a problem', description: 'Something is broken or not working as it should.' },
+  service_request: { name: 'Ask for something', description: 'A request for access, a change or a piece of work.' },
+};
+
+function defaultFormView(type: (typeof DEFAULT_PORTAL_TYPES)[number]): PortalFormView {
+  return {
+    ticket_type: type,
+    name: DEFAULT_FORM_NAMES[type].name,
+    description: DEFAULT_FORM_NAMES[type].description,
+    form_id: null,
+    form_version_id: null,
+    version_no: null,
+    source: 'default',
+    definition: defaultFormDefinition(type),
+  };
 }
 
 class PortalTransitionDto {
@@ -99,6 +156,7 @@ export class PortalService {
     private readonly tickets: TicketsService,
     private readonly ticketsRepo: TicketsRepository,
     private readonly accounts: AccountsRepository,
+    private readonly forms: FormsRepository,
   ) {}
 
   async me(principal: Principal) {
@@ -164,10 +222,45 @@ export class PortalService {
     });
   }
 
+  /**
+   * The request types the account offers, each with the form the client is
+   * asked to fill in (CP-03). A type the account has not authored a form for
+   * still answers, with the fixed default definition, so the web form keeps
+   * working exactly as it did before forms existed.
+   */
+  async formList(principal: Principal): Promise<{ items: PortalFormView[] }> {
+    const [accountId] = principal.accountIds;
+    if (!accountId) return { items: [] };
+    const published = await this.uow.run(principal, (tx) => this.forms.publishedForAccount(tx, accountId));
+    const items = published.map((form): PortalFormView => ({
+      ticket_type: form.ticket_type,
+      name: form.name,
+      description: form.description,
+      form_id: form.id,
+      form_version_id: form.version_id,
+      version_no: form.version_no,
+      source: 'published',
+      definition: form.definition,
+    }));
+    for (const type of DEFAULT_PORTAL_TYPES)
+      if (!items.some((item) => item.ticket_type === type)) items.push(defaultFormView(type));
+    return { items: items.sort((left, right) => left.ticket_type.localeCompare(right.ticket_type)) };
+  }
+
+  async form(principal: Principal, type: string): Promise<PortalFormView> {
+    if (!(FORM_TICKET_TYPES as readonly string[]).includes(type))
+      throw new NotFoundException({ code: 'not_found', entity: 'ticket_form' });
+    const { items } = await this.formList(principal);
+    const found = items.find((item) => item.ticket_type === type);
+    if (!found) throw new NotFoundException({ code: 'not_found', entity: 'ticket_form' });
+    return found;
+  }
+
   async create(principal: Principal, ctx: RequestContext, dto: PortalCreateTicketDto): Promise<PortalTicketView> {
     const [accountId] = principal.accountIds;
     if (!accountId) throw new NotFoundException({ code: 'not_found', entity: 'account' });
     return this.uow.portalWrite(principal, async (tx) => {
+      const submission = await this.mapSubmission(tx, accountId, dto);
       const contact =
         (await this.ticketsRepo.contactByEmail(tx, accountId, principal.email.toLowerCase())) ??
         (await this.ticketsRepo.insertContact(
@@ -183,11 +276,13 @@ export class PortalService {
         {
           account_id: accountId,
           type: dto.type,
-          short_description: dto.short_description,
-          description: dto.description,
-          category: dto.category,
-          impact: dto.impact,
-          urgency: dto.urgency,
+          short_description: submission.short_description,
+          description: submission.description,
+          category: submission.category,
+          impact: submission.impact,
+          urgency: submission.urgency,
+          form_version_id: submission.form_version_id,
+          form_data: submission.form_data,
           requester_email: contact.email,
           requester_name: contact.display_name,
           source: 'internal',
@@ -196,6 +291,71 @@ export class PortalService {
       );
       return (await this.tickets.get(principal, created.id, tx)) as PortalTicketView;
     });
+  }
+
+  /**
+   * What the request becomes: the account's published form decides, and the
+   * fixed default stands in when it has published none. The answers are
+   * checked against the same definition the client was served, so a required
+   * field cannot be skipped and a field a condition hid is not stored.
+   */
+  private async mapSubmission(
+    tx: Tx,
+    accountId: string,
+    dto: PortalCreateTicketDto,
+  ): Promise<{
+    short_description: string;
+    description?: string;
+    category?: string;
+    impact?: 'high' | 'medium' | 'low';
+    urgency?: 'high' | 'medium' | 'low';
+    form_version_id: string | null;
+    form_data: Record<string, unknown>;
+  }> {
+    const published = await this.forms.publishedFor(tx, accountId, dto.type);
+    if (!published && !DEFAULT_PORTAL_TYPES.includes(dto.type as (typeof DEFAULT_PORTAL_TYPES)[number]))
+      throw new BadRequestException({ code: 'type_not_offered', ticket_type: dto.type });
+    if (published && dto.answers === undefined)
+      throw new BadRequestException({
+        code: 'form_answers_required',
+        ticket_type: dto.type,
+        form_version_id: published.version_id,
+      });
+    const flat = {
+      short_description: dto.short_description,
+      description: dto.description,
+      category: dto.category,
+      impact: dto.impact,
+      urgency: dto.urgency,
+      form_version_id: published?.version_id ?? null,
+      form_data: {} as Record<string, unknown>,
+    };
+    if (dto.answers === undefined) {
+      if (!flat.short_description)
+        throw new BadRequestException({
+          code: 'invalid_submission',
+          problems: [{ field: 'short_description', code: 'required', message: 'a request needs a summary' }],
+        });
+      return { ...flat, short_description: flat.short_description };
+    }
+    const definition: FormDefinition = published?.definition ?? defaultFormDefinition(dto.type);
+    const { problems, mapped } = validateSubmission(definition, dto.answers);
+    if (problems.length > 0) throw new BadRequestException({ code: 'invalid_submission', problems });
+    const shortDescription = (mapped.columns.short_description as string | undefined) ?? dto.short_description;
+    if (!shortDescription)
+      throw new BadRequestException({
+        code: 'invalid_submission',
+        problems: [{ field: 'short_description', code: 'required', message: 'a request needs a summary' }],
+      });
+    return {
+      short_description: shortDescription,
+      description: (mapped.columns.description as string | undefined) ?? dto.description,
+      category: (mapped.columns.category as string | undefined) ?? dto.category,
+      impact: (mapped.columns.impact as 'high' | 'medium' | 'low' | undefined) ?? dto.impact,
+      urgency: (mapped.columns.urgency as 'high' | 'medium' | 'low' | undefined) ?? dto.urgency,
+      form_version_id: published?.version_id ?? null,
+      form_data: mapped.custom,
+    };
   }
 
   async comment(principal: Principal, ctx: RequestContext, key: string, dto: MessageDto): Promise<unknown> {
@@ -276,6 +436,18 @@ export class PortalController {
     return this.portal.me(principal);
   }
 
+  @Get('forms')
+  @RequirePermission('portal:submit')
+  forms(@CurrentPrincipal() principal: Principal) {
+    return this.portal.formList(principal);
+  }
+
+  @Get('forms/:type')
+  @RequirePermission('portal:submit')
+  form(@CurrentPrincipal() principal: Principal, @Param('type') type: string) {
+    return this.portal.form(principal, type);
+  }
+
   @Get('tickets')
   @RequirePermission('portal:submit')
   list(@CurrentPrincipal() principal: Principal, @Query() query: PortalListQueryDto) {
@@ -334,7 +506,7 @@ export class PortalController {
 }
 
 @Module({
-  imports: [TicketsCoreModule, AdminCoreModule],
+  imports: [TicketsCoreModule, AdminCoreModule, FormsCoreModule],
   controllers: [PortalController],
   providers: [PortalService],
 })

@@ -127,6 +127,10 @@ export interface TicketView {
   /** The out-of-scope flag and its decision (TM-11), for the record bar. */
   scope: ScopeView;
   external_refs: Record<string, unknown>;
+  /** The published request form version this ticket answered, when it came from one (CP-03). */
+  form_version_id: string | null;
+  /** The answers with no ticket column of their own (CP-03). */
+  form_data: Record<string, unknown>;
   reopen_count: number;
   first_response_at: string | null;
   resolved_at: string | null;
@@ -152,6 +156,10 @@ export interface PortalTicketView {
   description: string | null;
   category: string | null;
   priority: string;
+  /** The published request form version this request answered (CP-03). */
+  form_version_id: string | null;
+  /** The answers with no ticket column of their own (CP-03). */
+  form_data: Record<string, unknown>;
   requester: { display_name: string } | null;
   created_at: string;
   updated_at: string;
@@ -416,6 +424,10 @@ export class TicketsService {
         assignee_id: assignee?.id ?? null,
         assignee_name: assignee ? name(assignee) : null,
         contract_id: contract.id,
+        // CP-03: which published form version the request answered, and the
+        // answers that have no ticket column of their own.
+        form_version_id: dto.form_version_id ?? null,
+        form_data: dto.form_data ?? {},
         created_by: principal.userId,
         created_by_name: principal.displayName,
       });
@@ -1838,6 +1850,8 @@ export class TicketsService {
       },
       scope: scopeView(row),
       external_refs: row.external_refs,
+      form_version_id: row.form_version_id,
+      form_data: row.form_data ?? {},
       reopen_count: row.reopen_count,
       first_response_at: row.first_response_at,
       resolved_at: row.resolved_at,
@@ -1863,6 +1877,8 @@ export class TicketsService {
       description: row.description,
       category: row.category,
       priority: row.priority,
+      form_version_id: row.form_version_id,
+      form_data: row.form_data ?? {},
       requester: requester ? { display_name: requester.display_name } : null,
       created_at: row.created_at,
       updated_at: row.updated_at,

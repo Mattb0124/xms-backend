@@ -271,6 +271,76 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/forms",
+    "controller": "FormsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/forms",
+    "controller": "FormsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/accounts/:accountId/forms/:formId",
+    "controller": "FormsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/accounts/:accountId/forms/:formId",
+    "controller": "FormsController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/forms/:formId/versions",
+    "controller": "FormsController",
+    "handler": "addVersion",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/accounts/:accountId/forms/:formId/versions/:versionId",
+    "controller": "FormsController",
+    "handler": "editVersion",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/accounts/:accountId/forms/:formId/versions/:versionId/publish",
+    "controller": "FormsController",
+    "handler": "publish",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/rate-cards",
     "controller": "TimeController",
     "handler": "rateCards",
@@ -1926,6 +1996,26 @@
     "handler": "dashboard",
     "realm": "portal",
     "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/forms",
+    "controller": "PortalController",
+    "handler": "forms",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/portal/forms/:type",
+    "controller": "PortalController",
+    "handler": "form",
+    "realm": "portal",
+    "permission": "portal:submit",
     "public": null,
     "axel": false
   },

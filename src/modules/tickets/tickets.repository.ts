@@ -41,6 +41,10 @@ export interface TicketRow {
   sla_response_breached: boolean;
   sla_resolution_breached: boolean;
   email_token: string | null;
+  /** The published request form version this request was submitted against (CP-03). */
+  form_version_id: string | null;
+  /** The answers that did not map onto a ticket column (CP-03). */
+  form_data: Record<string, unknown>;
   created_by: string;
   created_by_name: string;
   created_at: string;

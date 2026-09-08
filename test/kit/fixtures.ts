@@ -33,6 +33,14 @@ type OverrideValue = unknown | ((client: pg.Client, accountId: string, cache: Ma
 
 let nextFixtureDay = 0;
 let billingCalls = 0;
+const formTypeCalls = new Map<string, number>();
+
+/** One active form per (account, ticket type): each fixture row of an account takes the next type. */
+function fixtureFormType(accountId: string): string {
+  const used = formTypeCalls.get(accountId) ?? 0;
+  formTypeCalls.set(accountId, used + 1);
+  return ['incident', 'service_request', 'change'][used % 3];
+}
 
 /** A fresh calendar month per fixture row: calls come in pairs (start, end) in either order. */
 function fixtureMonth(start: boolean): string {
@@ -98,6 +106,18 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   // collide on the second fixture row, so each takes its own category.
   'acct.group_routing_rules': {
     category: (): Promise<unknown> => Promise.resolve(`fixture ${randomUUID().slice(0, 8)}`),
+  },
+  // One active form per (account, ticket type). The versions table creates a
+  // parent form of its own, so an account holds more than one form row here.
+  'acct.ticket_forms': {
+    ticket_type: (_client: pg.Client, accountId: string): Promise<unknown> =>
+      Promise.resolve(fixtureFormType(accountId)),
+  },
+  // The portal reads published form versions only, and the table refuses a
+  // published_at without the hand that published it.
+  'acct.ticket_form_versions': {
+    published_at: (): Promise<unknown> => Promise.resolve(new Date().toISOString()),
+    published_by: 'fixture',
   },
   // A link needs two distinct tickets; the second is created outside the cache.
   'acct.ticket_links': {
