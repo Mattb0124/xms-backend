@@ -11,6 +11,8 @@ import {
   type StateMap,
   type ValidationReport,
 } from '../../domain/sync/maps.js';
+import { loadEnv } from '../../config/env.js';
+import { endpointProblem } from '../../domain/integrations/webhooks.js';
 import { fromSnowTime } from './snow-client.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
@@ -82,6 +84,11 @@ export class ConnectorsService {
   }
 
   async create(principal: Principal, ctx: RequestContext, accountId: string, input: CreateInstanceInput) {
+    // The connector framework shares the webhook destination guard: an
+    // `admin:connectors` holder must not be able to point a polling worker,
+    // and its Authorization header, at an internal service.
+    const problem = endpointProblem(input.base_url, loadEnv().WEBHOOK_ALLOW_PRIVATE === 'true');
+    if (problem) throw new BadRequestException({ code: 'invalid_endpoint', problem });
     if (input.auth_kind === 'basic' && !(input.credential.username && input.credential.password))
       throw new BadRequestException({ code: 'credential_incomplete', needs: ['username', 'password'] });
     if (

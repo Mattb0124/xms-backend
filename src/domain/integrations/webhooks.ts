@@ -77,7 +77,7 @@ export function verifySignature(
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
 
-export type EndpointProblem = 'not_https' | 'private_host' | 'invalid_url';
+export type EndpointProblem = 'not_https' | 'private_host' | 'invalid_host' | 'invalid_url';
 
 const PRIVATE_V4 = [
   /^10\./,
@@ -98,11 +98,27 @@ export function isPrivateAddress(host: string): boolean {
   if (version === 4) return PRIVATE_V4.some((pattern) => pattern.test(bare));
   if (version === 6) {
     if (bare === '::1' || bare === '::') return true;
-    if (bare.startsWith('fc') || bare.startsWith('fd') || bare.startsWith('fe8') || bare.startsWith('fe9')) return true;
+    // Unique local fc00::/7 and the whole of link local fe80::/10 (fe80 to febf).
+    if (bare.startsWith('fc') || bare.startsWith('fd') || /^fe[89ab]/.test(bare)) return true;
     if (bare.startsWith('::ffff:')) return isPrivateAddress(bare.slice(7));
     return false;
   }
   return false;
+}
+
+/**
+ * A destination is addressed either by a registered domain name or by a
+ * literal address. `2130706433`, `0x7f000001`, `127.1` and `0177.0.0.1` are
+ * none of those: `isIP` returns 0 for every one of them, so the private
+ * ranges are never consulted, while `getaddrinfo` resolves all four to
+ * loopback. Requiring a real name or a real literal closes that door.
+ */
+const DOMAIN_NAME = /^(?=.{1,253}\.?$)(?!-)[a-z0-9-]{1,63}(?<!-)(?:\.(?!-)[a-z0-9-]{1,63}(?<!-))*\.[a-z]{2,63}\.?$/i;
+
+export function isAddressableHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, '');
+  if (isIP(bare) !== 0) return true;
+  return DOMAIN_NAME.test(bare);
 }
 
 /** The registration-time guard: HTTPS only, no private host names or addresses (unless the deployment allows it for tests). */
@@ -115,6 +131,7 @@ export function endpointProblem(url: string, allowPrivate = false): EndpointProb
   }
   if (parsed.protocol !== 'https:' && !(allowPrivate && parsed.protocol === 'http:')) return 'not_https';
   if (!allowPrivate && isPrivateAddress(parsed.hostname)) return 'private_host';
+  if (!allowPrivate && !isAddressableHost(parsed.hostname)) return 'invalid_host';
   if (parsed.username || parsed.password) return 'invalid_url';
   return null;
 }

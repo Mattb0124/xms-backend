@@ -41,6 +41,7 @@ import { loadEnv } from '../../config/env.js';
 import { DbPools } from '../../db/pool.js';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
+import { discardBody, outboundProblem } from '../../common/http/outbound.js';
 import {
   canonicalBody,
   endpointProblem,
@@ -709,9 +710,12 @@ export class WebhookDeliveryService {
     const started = Date.now();
     let responseStatus: number | null = null;
     let error: string | null = null;
+    const allowPrivate = env.WEBHOOK_ALLOW_PRIVATE === 'true';
+    // Resolved at delivery time, not only at registration: a name that
+    // passed registration can answer with a private address later.
+    const problem = secret ? await outboundProblem(subscription.endpoint_url, allowPrivate) : null;
     if (!secret) error = 'signing secret unavailable';
-    else if (endpointProblem(subscription.endpoint_url, env.WEBHOOK_ALLOW_PRIVATE === 'true'))
-      error = 'endpoint refused';
+    else if (problem) error = `endpoint refused (${problem})`;
     else {
       try {
         const response = await this.fetchImpl(subscription.endpoint_url, {
@@ -724,10 +728,15 @@ export class WebhookDeliveryService {
             'x-xms-signature': signatureHeader(subscription.secret_kid, secret, timestamp, body),
           },
           body,
+          // A redirect is never followed: the guard cannot judge a hop it
+          // does not see, and the signed body would be replayed at it.
+          redirect: 'manual',
           signal: AbortSignal.timeout(10_000),
         });
         responseStatus = response.status;
-        if (response.status < 200 || response.status >= 300) error = `http ${response.status}`;
+        await discardBody(response);
+        if (response.status >= 300 && response.status < 400) error = `redirect refused (${response.status})`;
+        else if (response.status < 200 || response.status >= 300) error = `http ${response.status}`;
       } catch (caught) {
         error = (caught as Error).message.slice(0, 300);
       }

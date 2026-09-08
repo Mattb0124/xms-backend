@@ -1,3 +1,4 @@
+import { readCappedJson, readCappedText } from '../../common/http/outbound.js';
 import { classifyHttpStatus, type ErrorClass } from '../../domain/sync/rules.js';
 
 /**
@@ -69,6 +70,19 @@ export function fromSnowTime(value: string | undefined | null): Date {
   return new Date(`${value.replace(' ', 'T')}Z`);
 }
 
+/** How much of an error body is worth keeping for the run record. */
+const ERROR_BODY_BYTES = 8 * 1024;
+
+/**
+ * The table and record segments are encoded, so a stored `table_name` can
+ * never traverse out of /api/now/table/ or graft a query string on. The DTO
+ * allowlist is the first gate; this is the second, at every use.
+ */
+export function tablePath(table: string, sysId?: string): string {
+  const base = `/api/now/table/${encodeURIComponent(table)}`;
+  return sysId ? `${base}/${encodeURIComponent(sysId)}` : base;
+}
+
 export class HttpSnowClient implements SnowClient {
   private token: { value: string; expiresAt: number } | undefined;
 
@@ -89,7 +103,7 @@ export class HttpSnowClient implements SnowClient {
     const query = watermarkSysId
       ? `sys_updated_on>${stamp}^ORsys_updated_on=${stamp}^sys_id>${watermarkSysId}^ORDERBYsys_updated_on^ORDERBYsys_id`
       : `sys_updated_on>${stamp}^ORDERBYsys_updated_on^ORDERBYsys_id`;
-    const result = await this.request<{ result: SnowRecord[] }>('GET', `/api/now/table/${table}`, {
+    const result = await this.request<{ result: SnowRecord[] }>('GET', tablePath(table), {
       sysparm_query: query,
       sysparm_limit: String(limit),
       sysparm_display_value: 'all',
@@ -99,7 +113,7 @@ export class HttpSnowClient implements SnowClient {
 
   async get(table: string, sysId: string): Promise<SnowRecord | undefined> {
     try {
-      const result = await this.request<{ result: SnowRecord }>('GET', `/api/now/table/${table}/${sysId}`, {
+      const result = await this.request<{ result: SnowRecord }>('GET', tablePath(table, sysId), {
         sysparm_display_value: 'all',
       });
       return result.result;
@@ -136,7 +150,7 @@ export class HttpSnowClient implements SnowClient {
   }
 
   async recent(table: string, limit: number): Promise<SnowRecord[]> {
-    const result = await this.request<{ result: SnowRecord[] }>('GET', `/api/now/table/${table}`, {
+    const result = await this.request<{ result: SnowRecord[] }>('GET', tablePath(table), {
       sysparm_query: 'ORDERBYDESCsys_updated_on',
       sysparm_limit: String(limit),
       sysparm_display_value: 'all',
@@ -145,7 +159,7 @@ export class HttpSnowClient implements SnowClient {
   }
 
   async range(table: string, from: Date, to: Date, offset: number, limit: number): Promise<SnowRecord[]> {
-    const result = await this.request<{ result: SnowRecord[] }>('GET', `/api/now/table/${table}`, {
+    const result = await this.request<{ result: SnowRecord[] }>('GET', tablePath(table), {
       sysparm_query: `sys_created_on>=${toSnowTime(from)}^sys_created_on<=${toSnowTime(to)}^ORDERBYsys_id`,
       sysparm_limit: String(limit),
       sysparm_offset: String(offset),
@@ -155,11 +169,11 @@ export class HttpSnowClient implements SnowClient {
   }
 
   async create(table: string, body: Record<string, unknown>): Promise<SnowRecord> {
-    return (await this.request<{ result: SnowRecord }>('POST', `/api/now/table/${table}`, {}, body)).result;
+    return (await this.request<{ result: SnowRecord }>('POST', tablePath(table), {}, body)).result;
   }
 
   async update(table: string, sysId: string, body: Record<string, unknown>): Promise<SnowRecord> {
-    return (await this.request<{ result: SnowRecord }>('PATCH', `/api/now/table/${table}/${sysId}`, {}, body)).result;
+    return (await this.request<{ result: SnowRecord }>('PATCH', tablePath(table, sysId), {}, body)).result;
   }
 
   async addJournal(
@@ -192,6 +206,9 @@ export class HttpSnowClient implements SnowClient {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
+        // A ServiceNow instance that answers 3xx is not answering: never
+        // carry the connector's Authorization header to a new origin.
+        redirect: 'manual',
         signal: controller.signal,
       });
     } catch (error) {
@@ -199,12 +216,15 @@ export class HttpSnowClient implements SnowClient {
     } finally {
       clearTimeout(timer);
     }
+    if (response.status >= 300 && response.status < 400) {
+      throw new SnowError(response.status, 'redirect refused');
+    }
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
+      const detail = await readCappedText(response, ERROR_BODY_BYTES).catch(() => '');
       if (response.status === 401) this.token = undefined;
       throw new SnowError(response.status, detail);
     }
-    return (await response.json()) as T;
+    return readCappedJson<T>(response);
   }
 
   private async authorization(): Promise<string> {
@@ -220,9 +240,16 @@ export class HttpSnowClient implements SnowClient {
         client_id: this.auth.clientId ?? '',
         client_secret: this.auth.clientSecret ?? '',
       }).toString(),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
-    if (!response.ok) throw new SnowError(response.status, await response.text().catch(() => 'token refused'));
-    const token = (await response.json()) as { access_token: string; expires_in?: number };
+    if (response.status >= 300 && response.status < 400) throw new SnowError(response.status, 'redirect refused');
+    if (!response.ok)
+      throw new SnowError(
+        response.status,
+        await readCappedText(response, ERROR_BODY_BYTES).catch(() => 'token refused'),
+      );
+    const token = await readCappedJson<{ access_token: string; expires_in?: number }>(response);
     this.token = { value: token.access_token, expiresAt: Date.now() + (token.expires_in ?? 1800) * 1000 };
     return `Bearer ${this.token.value}`;
   }

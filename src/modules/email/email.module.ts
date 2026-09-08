@@ -19,6 +19,7 @@ import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } 
 import type { Principal } from '../../common/auth/principal.js';
 import { Public } from '../../common/auth/public.decorator.js';
 import { SecurityEventsService } from '../../common/events/security-events.service.js';
+import { readCappedText } from '../../common/http/outbound.js';
 import { loadEnv } from '../../config/env.js';
 import { AttachmentsCoreModule } from '../attachments/attachments.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
@@ -150,10 +151,18 @@ export class SesWebhookService {
     private readonly security: SecurityEventsService,
   ) {}
 
+  private readonly certificates = new Map<string, string>();
+
+  /** The URL is pinned to an AWS SNS host; the fetch is still bounded in time and in size, and cached per URL. */
   fetchCert: (url: string) => Promise<string> = async (url) => {
-    const response = await fetch(url);
+    const cached = this.certificates.get(url);
+    if (cached) return cached;
+    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5_000) });
     if (!response.ok) throw new Error(`certificate fetch failed with ${response.status}`);
-    return response.text();
+    const pem = await readCappedText(response, 64 * 1024);
+    if (this.certificates.size > 20) this.certificates.clear();
+    this.certificates.set(url, pem);
+    return pem;
   };
 
   trustUrl?: (url: string) => boolean;

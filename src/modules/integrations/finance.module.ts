@@ -27,6 +27,7 @@ import { OBJECT_STORE, StorageCoreModule } from '../../common/storage/storage.mo
 import { loadEnv } from '../../config/env.js';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
+import { discardBody, outboundProblem } from '../../common/http/outbound.js';
 import {
   endpointProblem,
   newSecret,
@@ -417,12 +418,16 @@ export class FinanceService {
       } catch {
         secret = null;
       }
+      const problem =
+        secret && destination.endpoint_url
+          ? await outboundProblem(destination.endpoint_url, env.WEBHOOK_ALLOW_PRIVATE === 'true')
+          : null;
       if (!secret || !destination.endpoint_url) {
         status = 'failed';
         error = 'signing secret unavailable';
-      } else if (endpointProblem(destination.endpoint_url, env.WEBHOOK_ALLOW_PRIVATE === 'true')) {
+      } else if (problem) {
         status = 'failed';
-        error = 'endpoint refused';
+        error = `endpoint refused (${problem})`;
       } else {
         const body = JSON.stringify({ manifest, file: produced.body.toString('base64') });
         const timestamp = String(Math.floor(Date.now() / 1000));
@@ -437,10 +442,16 @@ export class FinanceService {
               'x-xms-signature': signatureHeader(destination.secret_kid ?? 'none', secret, timestamp, body),
             },
             body,
+            // Never followed: the guard cannot judge a hop it does not see.
+            redirect: 'manual',
             signal: AbortSignal.timeout(30_000),
           });
           responseStatus = response.status;
-          if (response.status < 200 || response.status >= 300) {
+          await discardBody(response);
+          if (response.status >= 300 && response.status < 400) {
+            status = 'failed';
+            error = `redirect refused (${response.status})`;
+          } else if (response.status < 200 || response.status >= 300) {
             status = 'failed';
             error = `http ${response.status}`;
           }

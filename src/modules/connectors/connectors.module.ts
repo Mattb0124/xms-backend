@@ -24,9 +24,9 @@ import {
   IsOptional,
   IsString,
   IsUUID,
-  IsUrl,
   Max,
   MaxLength,
+  Matches,
   Min,
   MinLength,
   ValidateNested,
@@ -49,12 +49,21 @@ class CredentialDto {
   @IsOptional() @IsString() @MaxLength(500) client_secret?: string;
 }
 
+/**
+ * A ServiceNow table name is an identifier, never a path. Without this a
+ * `table_name` of "incident/../../../api/now/attachment" normalises through
+ * `new URL(path, baseUrl)` into a different REST endpoint, and one carrying
+ * "?sysparm_fields=..." injects query parameters the client only partly
+ * overrides.
+ */
+export const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
+
 class CreateInstanceDto {
   @IsString() @MinLength(1) @MaxLength(80) name!: string;
-  @IsUrl({ require_tld: false, require_protocol: true }) base_url!: string;
+  @IsString() @MaxLength(2000) base_url!: string;
   @IsIn(['basic', 'oauth_client_credentials']) auth_kind!: 'basic' | 'oauth_client_credentials';
   @ValidateNested() @Type(() => CredentialDto) credential!: CredentialDto;
-  @IsOptional() @IsString() @MaxLength(80) table_name?: string;
+  @IsOptional() @Matches(TABLE_NAME) table_name?: string;
   @IsOptional() @IsIn(['csm', 'itsm']) profile?: 'csm' | 'itsm';
   @IsOptional() @IsInt() @Min(10) @Max(86400) poll_interval_seconds?: number;
 }
@@ -75,7 +84,7 @@ class UpdateInstanceDto {
   @IsOptional() @IsInt() @Min(0) attachment_limit_bytes?: number;
   @IsOptional() @IsIn(['link', 'skip']) attachment_over_limit?: 'link' | 'skip';
   @IsOptional() @ValidateNested() @Type(() => ThresholdDto) error_trip_threshold?: ThresholdDto;
-  @IsOptional() @IsString() @MaxLength(80) table_name?: string;
+  @IsOptional() @Matches(TABLE_NAME) table_name?: string;
 }
 
 class MapBodyDto {

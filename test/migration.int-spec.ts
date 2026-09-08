@@ -91,6 +91,8 @@ beforeAll(async () => {
     STORAGE_KIND: 'local',
     STORAGE_LOCAL_ROOT: mkdtempSync(join(tmpdir(), 'xms-store-')),
     MAIL_TRANSPORT: 'file',
+    // The ServiceNow stand-in runs on 127.0.0.1; production never delivers to a private address.
+    WEBHOOK_ALLOW_PRIVATE: 'true',
   });
   resetEnvForTests();
   const { AppModule } = await import('../src/app.module.js');
