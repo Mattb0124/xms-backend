@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { MaxJsonSize } from '../../common/validation/max-json-size.js';
+import { OUT_OF_SCOPE } from './conditions.js';
 
 const TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
 const LEVELS = ['high', 'medium', 'low'] as const;
@@ -253,6 +254,13 @@ export class ListTicketsQueryDto {
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
   breached?: boolean;
+
+  /** The out-of-scope flag (TM-11): the Queue's Flagged chip and the waiting rail's link. */
+  @IsOptional()
+  @Transform(toList)
+  @IsArray()
+  @IsIn(OUT_OF_SCOPE, { each: true })
+  out_of_scope?: string[];
 
   @IsOptional()
   @IsString()

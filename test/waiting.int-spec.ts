@@ -167,7 +167,7 @@ describe('GET /v1/me/waiting', () => {
   it('links only to addresses the web application serves, and leaves the bell without one', async () => {
     const rail = await waiting(strangerToken);
     expect(rail.tickets_assigned.link).toBe('/tickets?view=mine');
-    expect(rail.scope_approvals.link).toBe('/tickets');
+    expect(rail.scope_approvals.link).toBe('/tickets?out_of_scope=flagged');
     expect(rail.articles_in_review.link).toBe('/knowledge?status=in_review');
     expect(rail.pending_time.link).toBe('/time');
     // Nothing is waiting for this person, so the two account-scoped rows

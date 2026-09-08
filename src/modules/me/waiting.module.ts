@@ -211,11 +211,9 @@ export class WaitingService {
           key: 'scope_approvals',
           label: 'Out-of-scope flags to approve',
           count: counts.scope_approvals,
-          // The out-of-scope flag is a ticket field, not a state or a
-          // priority, so the Queue's grammar has no dimension for it yet:
-          // the row opens the Queue and the count says how many are there.
-          // When the Queue gains the chip this link takes its value.
-          link: '/tickets',
+          // The Queue filters on the flag now, so the row opens the
+          // tickets it counts rather than the whole queue.
+          link: '/tickets?out_of_scope=flagged',
         },
         {
           key: 'articles_in_review',

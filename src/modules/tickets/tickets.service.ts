@@ -224,6 +224,7 @@ export class TicketsService {
           unassigned: query.unassigned,
           open: query.open,
           breached: query.breached,
+          outOfScope: query.out_of_scope,
           q: query.q,
         },
         { limit, sort: sort ?? 'updated_desc', cursor: decodeCursor(query.cursor) },

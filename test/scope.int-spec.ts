@@ -199,7 +199,7 @@ describe('POST /v1/tickets/:key/scope', () => {
     const rail = await api().get('/v1/me/waiting').set(bearer(adminToken)).expect(200);
     const approvals = rail.body.items.find((item: { key: string }) => item.key === 'scope_approvals');
     expect(approvals.count).toBe(1);
-    expect(approvals.link).toBe('/tickets');
+    expect(approvals.link).toBe('/tickets?out_of_scope=flagged');
   });
 
   it('lets the flagger withdraw a flag no one has decided', async () => {
@@ -337,5 +337,71 @@ describe('POST /v1/tickets/:key/scope/decision', () => {
       .send({ version: flagged.body.version, decision: 'approve' })
       .expect(201);
     expect(approved.body.scope).toMatchObject({ out_of_scope: 'approved', overage_allowance_minutes: null });
+  });
+});
+
+/**
+ * The Queue's Flagged chip and the waiting rail's link (TM-11): the flag is
+ * a list filter of its own and a field of the condition grammar, so a chip
+ * and a saved view both reach the same rows.
+ */
+describe('filtering the queue on the flag', () => {
+  const descriptionsOf = (body: { items: { short_description: string }[] }) =>
+    body.items.map((item) => item.short_description).sort();
+
+  it('returns only the flagged tickets, and every one of them', async () => {
+    const listed = await api().get('/v1/tickets?out_of_scope=flagged').set(bearer(adminToken)).expect(200);
+    // Two flags are still waiting for a decision: Cara's first one and the
+    // administrator's own, which they may not decide themselves.
+    expect(descriptionsOf(listed.body)).toEqual(['Rebuild the consolidation hierarchy', 'Reconfigure the data source']);
+    for (const item of listed.body.items) expect(item.scope.out_of_scope).toBe('flagged');
+
+    // The parameter takes the whole vocabulary, and a decided flag is not a
+    // pending one.
+    const decided = await api().get('/v1/tickets?out_of_scope=approved,declined').set(bearer(adminToken)).expect(200);
+    expect(descriptionsOf(decided.body)).toEqual([
+      'Migrate the legacy cube',
+      'Rewrite the allocation rules',
+      'Write the quarterly board deck',
+    ]);
+    // Unfiltered, the queue still holds everything.
+    const all = await api().get('/v1/tickets').set(bearer(adminToken)).expect(200);
+    expect(all.body.items.length).toBeGreaterThan(listed.body.items.length);
+  });
+
+  it('carries the same field in a saved view', async () => {
+    const view = await api()
+      .post('/v1/views')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        name: 'Flags to decide',
+        definition: {
+          conditions: { conditions: [{ field: 'out_of_scope', op: 'in', value: ['flagged'] }], match: 'all' },
+          sort: 'created_desc',
+          columns: ['key', 'short_description'],
+        },
+      })
+      .expect(201);
+    const listed = await api().get(`/v1/tickets?view=${view.body.id}`).set(bearer(adminToken)).expect(200);
+    expect(descriptionsOf(listed.body)).toEqual(['Rebuild the consolidation hierarchy', 'Reconfigure the data source']);
+
+    // The condition set is checked against the same closed vocabulary.
+    const refused = await api()
+      .post('/v1/views')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        name: 'Nonsense',
+        definition: { conditions: { conditions: [{ field: 'out_of_scope', op: 'eq', value: 'maybe' }] } },
+      })
+      .expect(400);
+    expect(refused.body.code).toBe('invalid_conditions');
+  });
+
+  it('refuses a value the flag cannot hold', async () => {
+    const refused = await api().get('/v1/tickets?out_of_scope=maybe').set(bearer(adminToken)).expect(400);
+    expect(refused.body.code).toBe('validation_failed');
+    await api().get('/v1/tickets?out_of_scope=flagged,maybe').set(bearer(adminToken)).expect(400);
   });
 });

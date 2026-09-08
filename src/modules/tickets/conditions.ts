@@ -22,6 +22,13 @@ export interface ConditionSet {
   readonly match?: 'all' | 'any';
 }
 
+/**
+ * The out-of-scope flag, exactly as the check constraint of migration 0004
+ * declares it. The Queue filters on it and a saved view carries it, so the
+ * list of values is written once and both read it.
+ */
+export const OUT_OF_SCOPE = ['none', 'flagged', 'approved', 'declined'] as const;
+
 interface FieldSpec {
   readonly column: string;
   readonly kind: 'text' | 'enum' | 'timestamp' | 'boolean' | 'uuid' | 'actor';
@@ -49,6 +56,7 @@ export const FIELDS: Record<string, FieldSpec> = {
   sla_response_breached: { column: 'sla_response_breached', kind: 'boolean' },
   sla_resolution_breached: { column: 'sla_resolution_breached', kind: 'boolean' },
   priority_overridden: { column: 'priority_overridden', kind: 'boolean' },
+  out_of_scope: { column: 'out_of_scope', kind: 'enum', values: OUT_OF_SCOPE },
 };
 
 const OPERATORS_BY_KIND: Record<FieldSpec['kind'], readonly Operator[]> = {

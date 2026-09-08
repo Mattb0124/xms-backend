@@ -95,6 +95,8 @@ export interface ListFilters {
   unassigned?: boolean;
   open?: boolean;
   breached?: boolean;
+  /** The out-of-scope flag, on the closed vocabulary of migration 0004. */
+  outOfScope?: string[];
   q?: string;
   requesterContactId?: string;
   /** Translated condition set; called with the current bind offset. */
@@ -191,6 +193,7 @@ export class TicketsRepository extends RepositoryBase {
     if (filters.assigneeId) add('assignee_id = ?', filters.assigneeId);
     if (filters.groupId) add('group_id = ?', filters.groupId);
     if (filters.requesterContactId) add('requester_contact_id = ?', filters.requesterContactId);
+    if (filters.outOfScope?.length) add('out_of_scope = any (?::text[])', filters.outOfScope);
     if (filters.unassigned) where.push('assignee_id is null');
     if (filters.breached) where.push('(sla_response_breached or sla_resolution_breached)');
     if (filters.open) where.push(`state not in ('closed', 'cancelled')`);
