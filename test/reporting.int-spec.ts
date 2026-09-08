@@ -445,6 +445,109 @@ describe('dashboards', () => {
     await api().get('/v1/dashboards/usage').set(bearer(consultantToken)).expect(403);
   });
 
+  it('the core-loop funnel counts each step from the record that proves it', async () => {
+    // Ticket A was opened, worked, had ninety minutes logged against it and
+    // was resolved; the reply and the linked solution are stamped here so
+    // every step of the loop has a record behind it.
+    await withSuperuser(async (client) => {
+      await client.query('begin');
+      await client.query("select set_config('xms.audited', 'true', true)");
+      await client.query(
+        `update acct.tickets set first_response_at = now(), solution_article_id = gen_random_uuid()
+          where account_id = $1 and resolved_at is not null`,
+        [accountId],
+      );
+      await client.query('commit');
+    });
+
+    const usage = await api().get('/v1/dashboards/usage?days=7').set(bearer(adminToken)).expect(200);
+    const steps: Record<string, { n: number; drop_off: number }> = Object.fromEntries(
+      usage.body.funnel.steps.map((row: { step: string }) => [row.step, row]),
+    );
+    expect(Object.keys(steps)).toEqual([
+      'opened',
+      'first_response',
+      'time_logged',
+      'solution_linked',
+      'resolved',
+      'closed',
+    ]);
+    // Four tickets across both accounts; one of them has the reply, the
+    // logged time, the solution and the resolution, and none is closed.
+    expect(steps.opened.n).toBe(4);
+    expect(steps.first_response.n).toBe(1);
+    expect(steps.time_logged.n).toBe(1);
+    expect(steps.solution_linked.n).toBe(1);
+    expect(steps.resolved.n).toBe(1);
+    expect(steps.closed.n).toBe(0);
+    // Drop-off is the fall from the step before, so the loop's first gap is
+    // the three tickets nobody has replied to yet.
+    expect(steps.opened.drop_off).toBe(0);
+    expect(steps.first_response.drop_off).toBe(3);
+    expect(steps.closed.drop_off).toBe(1);
+
+    const perAccount: Record<string, { steps: { step: string; n: number }[] }> = Object.fromEntries(
+      usage.body.funnel.per_account.map((row: { key: string }) => [row.key, row]),
+    );
+    expect(Object.keys(perAccount).sort()).toEqual(['BRK', 'OTH']);
+    const brk = Object.fromEntries(perAccount.BRK.steps.map((row) => [row.step, row.n]));
+    expect(brk).toMatchObject({ opened: 3, first_response: 1, time_logged: 1, solution_linked: 1, resolved: 1 });
+    // An account whose tickets never left the queue still has a row, at zero.
+    const oth = Object.fromEntries(perAccount.OTH.steps.map((row) => [row.step, row.n]));
+    expect(oth).toMatchObject({ opened: 1, first_response: 0, time_logged: 0, resolved: 0 });
+  });
+
+  it('adoption reports which actions each role uses and when it first used them', async () => {
+    const [caraId, adminId] = await withSuperuser(async (client) => {
+      const rows = await client.query<{ id: string; email: string }>(
+        `select id, email::text as email from op.users where email in ('cara@example.test', $1)`,
+        [ADMIN_EMAIL],
+      );
+      return [
+        rows.rows.find((row) => row.email === 'cara@example.test')!.id,
+        rows.rows.find((row) => row.email === ADMIN_EMAIL)!.id,
+      ];
+    });
+    await withSuperuser(async (client) => {
+      const action = async (actor: string, name: string, daysAgo: number): Promise<void> => {
+        await client.query(
+          `insert into rpt.usage_events (occurred_at, event_type, account_id, actor_kind, actor_id, principal_kind, attrs)
+           values (now() - ($1::int * interval '1 day'), 'action.completed', $2, 'user', $3, 'internal',
+                   jsonb_build_object('action', $4::text, 'via', 'click'))`,
+          [daysAgo, accountId, actor, name],
+        );
+      };
+      await action(caraId, 'ticket.create', 1);
+      await action(caraId, 'ticket.create', 2);
+      // Outside the window: it moves the first-use date without being counted.
+      await action(caraId, 'ticket.create', 60);
+      await action(adminId, 'export.run', 1);
+      // An actor with no role assignment is reported, not dropped.
+      await action('e0000000-0000-4000-8000-00000000000a', 'time.log', 1);
+    });
+
+    const usage = await api().get('/v1/dashboards/usage?days=7').set(bearer(adminToken)).expect(200);
+    const rows = usage.body.adoption.by_role as {
+      catalog: string;
+      role: string;
+      action: string;
+      users: number;
+      n: number;
+      first_used_at: string;
+    }[];
+    const consultant = rows.find((row) => row.role === 'Consultant' && row.action === 'ticket.create')!;
+    expect(consultant).toMatchObject({ catalog: 'operator', users: 1, n: 2 });
+    // The window counts the events; the first-use date reaches past it.
+    expect(Date.now() - new Date(consultant.first_used_at).getTime()).toBeGreaterThan(30 * 86_400_000);
+    expect(rows.some((row) => row.action === 'export.run' && row.users === 1)).toBe(true);
+    expect(rows.find((row) => row.action === 'time.log')).toMatchObject({
+      role: 'unassigned',
+      catalog: 'none',
+      users: 1,
+      n: 1,
+    });
+  });
+
   it('the integrity panel names the chain, the archive, the streams and the retention policy', async () => {
     const { ArchiveService, DigestService, dayOf } = await import('../src/modules/integrity/integrity.module.js');
     const digests = app.get(DigestService);

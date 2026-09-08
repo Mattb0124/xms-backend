@@ -419,6 +419,108 @@ export class ReportingRepository extends RepositoryBase {
     );
   }
 
+  /**
+   * The core-loop funnel (Audit & Analytics 7.1: "ticket opened, first
+   * reply, time logged, solution linked, resolved" with drop-off), counted
+   * over the tickets one account opened in the window. Every step is a
+   * column of `acct.tickets` except the third, which asks
+   * `acct.time_entries` whether any time was logged against the ticket:
+   * `first_response_at` for the first reply, `solution_article_id` for the
+   * linked solution, `resolved_at` for the resolution. Both tables are
+   * account scoped, so the caller's binding decides what is counted, and
+   * the left join keeps an account with no tickets in the answer at zero
+   * rather than dropping it out of the strip.
+   *
+   * A step is counted on its own, not as a subset of the step before it:
+   * a ticket can be resolved with no time logged (a time exemption) or
+   * with no solution article, and reporting those as if they had passed
+   * through would be a fiction. The drop-off the screen shows is therefore
+   * the difference between two step counts and can be negative where a
+   * step was skipped.
+   */
+  coreLoopFunnel(
+    tx: Tx,
+    accountIds: readonly string[],
+    days: number,
+  ): Promise<
+    {
+      account_id: string;
+      key: string;
+      name: string;
+      opened: number;
+      first_response: number;
+      time_logged: number;
+      solution_linked: number;
+      resolved: number;
+      closed: number;
+    }[]
+  > {
+    return this.many(
+      tx,
+      `select a.id as account_id, a.key, a.name,
+              count(t.id)::int as opened,
+              count(t.id) filter (where t.first_response_at is not null)::int as first_response,
+              count(t.id) filter (where exists (select 1 from acct.time_entries e where e.ticket_id = t.id))::int as time_logged,
+              count(t.id) filter (where t.solution_article_id is not null)::int as solution_linked,
+              count(t.id) filter (where t.resolved_at is not null)::int as resolved,
+              count(t.id) filter (where t.closed_at is not null)::int as closed
+         from op.accounts a
+         left join acct.tickets t
+           on t.account_id = a.id and t.created_at >= now() - ($2::int * interval '1 day')
+        where a.id = any ($1::uuid[])
+        group by a.id, a.key, a.name
+        order by a.key`,
+      [[...accountIds], days],
+    );
+  }
+
+  /**
+   * Feature adoption (Audit & Analytics 7.1: "which actions each role uses,
+   * first-use dates"). The actions are the `action.completed` rows of
+   * `rpt.usage_events` with their `action` attribute; the role comes from
+   * `op.role_assignments` joined to `op.roles` on the actor, because the
+   * event carries the actor and the principal kind but never a role.
+   *
+   * `users` and `n` are the window; `first_used_at` is the first time that
+   * role used that action at all, which is what a first-use date means and
+   * what a window would destroy. A row appears only where the action was
+   * used inside the window. A person holding two roles counts under both:
+   * the question is which actions a role uses, not how many people used
+   * one, and an actor with no role assignment is reported as `unassigned`
+   * rather than dropped.
+   */
+  actionAdoption(
+    tx: Tx,
+    accountIds: readonly string[],
+    days: number,
+  ): Promise<
+    { catalog: string; role: string; action: string; users: number; n: number; first_used_at: string | null }[]
+  > {
+    return this.many(
+      tx,
+      `with acted as (
+         select e.actor_id, coalesce(e.attrs->>'action', 'unknown') as action, e.occurred_at
+           from rpt.usage_events e
+          where e.event_type = 'action.completed'
+            and (e.account_id is null or e.account_id = any ($1::uuid[]))
+       ),
+       assigned as (
+         select distinct ra.user_id::text as actor_id, r.catalog, r.name as role
+           from op.role_assignments ra join op.roles r on r.id = ra.role_id
+       )
+       select coalesce(s.catalog, 'none') as catalog, coalesce(s.role, 'unassigned') as role, a.action,
+              count(distinct a.actor_id) filter (where a.occurred_at >= now() - ($2::int * interval '1 day'))::int as users,
+              count(*) filter (where a.occurred_at >= now() - ($2::int * interval '1 day'))::int as n,
+              min(a.occurred_at) as first_used_at
+         from acted a
+         left join assigned s on s.actor_id = a.actor_id
+        group by 1, 2, 3
+       having count(*) filter (where a.occurred_at >= now() - ($2::int * interval '1 day')) > 0
+        order by 2, 3`,
+      [[...accountIds], days],
+    );
+  }
+
   usageTiles(tx: Tx, accountIds: string[], days: number): Promise<{ metric: string; key: string; n: number }[]> {
     return this.many(
       tx,

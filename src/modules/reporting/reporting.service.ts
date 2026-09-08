@@ -53,6 +53,14 @@ export function packFormat(value: string | undefined): PackFormat {
 }
 
 /**
+ * The core loop of Audit & Analytics 7.1 in order, with the closure the
+ * ticket row also records. Declared once so the totals, the per-account
+ * strip and the drop-off all walk the same steps.
+ */
+const FUNNEL_STEPS = ['opened', 'first_response', 'time_logged', 'solution_linked', 'resolved', 'closed'] as const;
+type FunnelStep = (typeof FUNNEL_STEPS)[number];
+
+/**
  * Hot retention in PostgreSQL as Audit & Analytics section 6 states it. No
  * table holds this, so the panel reports it as the declared policy it is;
  * `detach_job_built` is false because the partition detach job that section
@@ -475,8 +483,59 @@ export class ReportingService {
           n: tile.n,
         });
       grouped.per_account = await this.reporting.usagePerAccount(tx, accountIds, days);
+      grouped.funnel = await this.coreLoopFunnel(tx, accountIds, days);
+      grouped.adoption = { by_role: await this.reporting.actionAdoption(tx, accountIds, days) };
       return grouped;
     });
+  }
+
+  /**
+   * The core loop of Audit & Analytics 7.1, "ticket opened, first reply,
+   * time logged, solution linked, resolved", over the window and again per
+   * account. Every step is counted from the record that proves it, named in
+   * `ReportingRepository.coreLoopFunnel`: the ticket row for the opening,
+   * the first response, the linked solution and the resolution, and
+   * `acct.time_entries` for the logged time. `closed` follows `resolved`
+   * because closure is the end of the same loop and `acct.tickets.closed_at`
+   * records it; the five the specification names are the first five.
+   *
+   * `drop_off` is the fall from the step before, which is what the screen
+   * draws. A step is not a subset of the one before it (a ticket can be
+   * resolved with a time exemption and no logged time), so the figure can
+   * be negative; that is a real property of the data, not an error, and
+   * hiding it would misreport the loop.
+   */
+  private async coreLoopFunnel(
+    tx: Tx,
+    accountIds: readonly string[],
+    days: number,
+  ): Promise<{
+    steps: { step: string; n: number; drop_off: number }[];
+    per_account: {
+      account_id: string;
+      key: string;
+      name: string;
+      steps: { step: string; n: number; drop_off: number }[];
+    }[];
+  }> {
+    const rows = await this.reporting.coreLoopFunnel(tx, accountIds, days);
+    const stepsOf = (counts: Record<FunnelStep, number>): { step: string; n: number; drop_off: number }[] =>
+      FUNNEL_STEPS.map((step, index) => ({
+        step,
+        n: counts[step],
+        drop_off: index === 0 ? 0 : counts[FUNNEL_STEPS[index - 1]] - counts[step],
+      }));
+    const total = Object.fromEntries(FUNNEL_STEPS.map((step) => [step, 0])) as Record<FunnelStep, number>;
+    for (const row of rows) for (const step of FUNNEL_STEPS) total[step] += row[step];
+    return {
+      steps: stepsOf(total),
+      per_account: rows.map((row) => ({
+        account_id: row.account_id,
+        key: row.key,
+        name: row.name,
+        steps: stepsOf(row),
+      })),
+    };
   }
 
   /**
