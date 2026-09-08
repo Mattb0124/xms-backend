@@ -73,7 +73,7 @@
       { "key": "assessment", "label": "Assessment", "kind": "active", "effects": { "responseMet": true } },
       { "key": "approved", "label": "Approved", "kind": "active" },
       { "key": "scheduled", "label": "Scheduled", "kind": "active" },
-      { "key": "implementing", "label": "Implementing", "kind": "active" },
+      { "key": "implementing", "label": "Implementing", "kind": "active", "effects": { "deploy": true } },
       { "key": "awaiting_client", "label": "Awaiting client", "kind": "paused", "effects": { "pause": true } },
       { "key": "validation", "label": "Validation", "kind": "active" },
       { "key": "completed", "label": "Completed", "kind": "resolved", "effects": { "resolve": true } },

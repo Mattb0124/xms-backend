@@ -26,6 +26,8 @@ import {
   type ClockView,
 } from '../../domain/sla/engine.js';
 import { checkRequirements } from '../../domain/tickets/close-discipline.js';
+import { freezeAt, freezeOverlapping, insideWindow } from '../../domain/tickets/change-window.js';
+import { TicketGroupsRepository, toChangeWindow, windowSpan, type TicketGroupRow } from './change-windows.module.js';
 import { translate, type ConditionSet } from './conditions.js';
 import { RoutingRepository } from './routing.module.js';
 import { ViewsRepository } from './views.js';
@@ -110,6 +112,8 @@ export interface TicketView {
   source: string;
   requester: { id: string; email: string; display_name: string } | null;
   group_id: string | null;
+  /** The project or change window the ticket belongs to (TM-10). */
+  ticket_group_id: string | null;
   assignee_id: string | null;
   assignee_name: string | null;
   contract_id: string;
@@ -190,6 +194,7 @@ export class TicketsService {
     private readonly knowledge: KnowledgeRepository,
     private readonly calendars: CalendarService,
     private readonly routing: RoutingRepository,
+    private readonly groups: TicketGroupsRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -385,6 +390,7 @@ export class TicketsService {
       // routing default for this type and category (TM-08). A default is a
       // starting point, so a ticket with no matching rule simply has no group.
       const groupId = dto.group_id ?? (await this.routing.resolve(tx, dto.account_id, dto.type, dto.category ?? null));
+      if (dto.ticket_group_id) await this.assertTicketGroup(tx, dto.account_id, dto.ticket_group_id);
 
       const row = await this.tickets.insert(tx, {
         account_id: dto.account_id,
@@ -406,6 +412,7 @@ export class TicketsService {
               : (dto.source ?? 'internal'),
         requester_contact_id: requester?.id ?? null,
         group_id: groupId,
+        ticket_group_id: dto.ticket_group_id ?? null,
         assignee_id: assignee?.id ?? null,
         assignee_name: assignee ? name(assignee) : null,
         contract_id: contract.id,
@@ -533,6 +540,19 @@ export class TicketsService {
       if (dto.group_id !== undefined) {
         if (dto.group_id) await this.assertGroup(tx, dto.group_id);
         assignments.group_id = dto.group_id;
+      }
+      if (dto.ticket_group_id !== undefined && dto.ticket_group_id !== before.ticket_group_id) {
+        if (dto.ticket_group_id) await this.assertTicketGroup(tx, before.account_id, dto.ticket_group_id);
+        assignments.ticket_group_id = dto.ticket_group_id;
+        entries.push({
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.grouped',
+          field: 'ticket_group_id',
+          oldValue: before.ticket_group_id,
+          newValue: dto.ticket_group_id,
+        });
       }
       let newAssignee: { id: string; first_name: string; last_name: string; email: string } | null | undefined;
       if (dto.assignee_id !== undefined && dto.assignee_id !== before.assignee_id) {
@@ -721,6 +741,12 @@ export class TicketsService {
         });
       }
       const requirements = machine.requirements(before.state, dto.to);
+      // The change window the ticket belongs to, if any: the same record the
+      // change calendar and GET /v1/change-calendar/at read (TM-10, TM-18).
+      const groupRow = before.ticket_group_id ? await this.groups.byId(tx, before.ticket_group_id) : undefined;
+      const windowRow =
+        groupRow && groupRow.kind === 'change_window' && groupRow.status !== 'cancelled' ? groupRow : undefined;
+      const span = windowRow ? windowSpan(windowRow) : null;
       const codes = await this.resolutionCodes(tx, before.account_id);
       const missing = checkRequirements(
         requirements,
@@ -736,6 +762,7 @@ export class TicketsService {
         },
         {
           loggedMinutes: await this.time.loggedMinutes(tx, before.id),
+          inChangeWindow: span !== null,
           noSolutionCodes: codes.noSolution,
           knownCodes: codes.known,
         },
@@ -744,6 +771,17 @@ export class TicketsService {
       if (missing.length > 0) throw new ConflictException({ code: 'missing_requirements', items: missing });
 
       const now = new Date();
+      const windowNotes = this.assertChangeWindow(
+        principal,
+        before,
+        requirements,
+        machine.effects(dto.to),
+        windowRow,
+        span,
+        dto.change_window_reason,
+        now,
+        windowRow ? await this.conflictsFor(tx, before, windowRow, span) : [],
+      );
       const transitionDef = machine.transition(before.state, dto.to)!;
       const fromEffects = machine.effects(before.state);
       const toEffects = machine.effects(dto.to);
@@ -759,6 +797,7 @@ export class TicketsService {
           newValue: dto.to,
         },
       ];
+      entries.push(...windowNotes);
       const outboxEvents: { type: string; payload: Record<string, unknown> }[] = [
         { type: 'ticket.transitioned', payload: { from: before.state, to: dto.to } },
       ];
@@ -1548,6 +1587,112 @@ export class TicketsService {
     return user;
   }
 
+  /**
+   * The change window rules (TM-10, TM-18), in one place so the Scheduled
+   * gate and the implementation gate cannot drift apart. Returns the audit
+   * entries the decision earns; throws a worded 409 where it refuses.
+   *
+   * Scheduling: the window must not be frozen over its own span, and no other
+   * change may already be scheduled on the same configuration item in a
+   * window that overlaps it. Both are warnings the spec says must be
+   * acknowledged with a reason rather than hard walls, so a reason lets the
+   * transition through and lands on the audit.
+   *
+   * Implementing: the state the machine marks `deploy` may only be entered
+   * while the instant is inside the window and outside every freeze. Outside
+   * it, only `tickets:override-change-window` plus a reason gets through,
+   * and the override is audited.
+   */
+  private assertChangeWindow(
+    principal: Principal,
+    before: TicketRow,
+    requirements: readonly string[],
+    effects: { deploy?: boolean },
+    windowRow: TicketGroupRow | undefined,
+    span: { startsAt: Date; endsAt: Date } | null,
+    reason: string | undefined,
+    now: Date,
+    conflicts: { key: string; group_name: string }[],
+  ): AuditEntry[] {
+    const entries: AuditEntry[] = [];
+    const note = reason?.trim();
+    const audit = (
+      eventType: 'ticket.change_window_acknowledged' | 'ticket.change_window_overridden',
+      value: unknown,
+    ) =>
+      entries.push({
+        entityKind: 'ticket',
+        entityId: before.id,
+        ticketId: before.id,
+        eventType,
+        field: 'ticket_group_id',
+        oldValue: before.ticket_group_id,
+        newValue: value,
+      });
+
+    if (requirements.includes('change_window') && windowRow && span) {
+      const window = toChangeWindow(windowRow);
+      const freeze = freezeOverlapping(window, span);
+      if ((freeze || conflicts.length > 0) && !note) {
+        throw new ConflictException(
+          freeze
+            ? { code: 'change_freeze', window: windowRow.name, freeze }
+            : { code: 'change_conflict', window: windowRow.name, conflicts },
+        );
+      }
+      if (freeze || conflicts.length > 0)
+        audit('ticket.change_window_acknowledged', {
+          reason: note,
+          freeze: freeze ?? null,
+          conflicts: conflicts.map((row) => row.key),
+        });
+    }
+
+    if (effects.deploy) {
+      const window = windowRow ? toChangeWindow(windowRow) : undefined;
+      const frozen = window ? freezeAt(window, now) : undefined;
+      const open = window !== undefined && insideWindow(window, now) && frozen === undefined;
+      if (!open) {
+        const overridable = principal.permissions.has('tickets:override-change-window') && Boolean(note);
+        if (!overridable) {
+          throw new ConflictException({
+            code: window === undefined ? 'change_window_required' : 'outside_change_window',
+            window: windowRow?.name ?? null,
+            starts_at: span?.startsAt.toISOString() ?? null,
+            ends_at: span?.endsAt.toISOString() ?? null,
+            freeze: frozen ?? null,
+            at: now.toISOString(),
+            permission: 'tickets:override-change-window',
+          });
+        }
+        audit('ticket.change_window_overridden', {
+          reason: note,
+          window: windowRow?.name ?? null,
+          at: now.toISOString(),
+          freeze: frozen ?? null,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Other changes holding the same configuration item in an overlapping window (TM-18). */
+  private async conflictsFor(
+    tx: Tx,
+    before: TicketRow,
+    windowRow: TicketGroupRow,
+    span: { startsAt: Date; endsAt: Date } | null,
+  ): Promise<{ key: string; group_name: string }[]> {
+    if (!span || !before.configuration_item_id) return [];
+    return this.groups.conflictsOnItem(tx, before.account_id, before.configuration_item_id, before.id, span);
+  }
+
+  private async assertTicketGroup(tx: Tx, accountId: string, groupId: string): Promise<void> {
+    const group = await this.groups.byId(tx, groupId);
+    if (group.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'ticket_group' });
+    if (group.status === 'cancelled') throw new BadRequestException({ code: 'ticket_group_cancelled', groupId });
+  }
+
   /** The assignment groups the signed-in person belongs to (TM-08). */
   async groupsOf(tx: Tx, principal: Principal): Promise<string[]> {
     if (principal.kind === 'portal') return [];
@@ -1680,6 +1825,7 @@ export class TicketsService {
       source: row.source,
       requester: requester ? { id: requester.id, email: requester.email, display_name: requester.display_name } : null,
       group_id: row.group_id,
+      ticket_group_id: row.ticket_group_id,
       assignee_id: row.assignee_id,
       assignee_name: row.assignee_name,
       contract_id: row.contract_id,

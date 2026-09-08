@@ -64,6 +64,11 @@ export class CreateTicketDto {
   @IsUUID('4')
   contract_id?: string;
 
+  /** The project or change window this ticket belongs to (TM-10). */
+  @IsOptional()
+  @IsUUID('4')
+  ticket_group_id?: string;
+
   @IsOptional()
   @IsEmail()
   requester_email?: string;
@@ -124,6 +129,11 @@ export class PatchTicketDto {
   @IsUUID('4')
   contract_id?: string;
 
+  /** The project or change window this ticket belongs to (TM-10); null leaves it. */
+  @IsOptional()
+  @IsUUID('4')
+  ticket_group_id?: string | null;
+
   @IsOptional()
   @IsObject()
   @MaxJsonSize(8 * 1024)
@@ -172,6 +182,20 @@ export class TransitionDto {
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  /**
+   * The reason that carries a change past its window rules (TM-18): it
+   * acknowledges a freeze or a clash on the same configuration item when
+   * scheduling, and it is the override reason when implementing outside the
+   * window, which additionally needs tickets:override-change-window. Either
+   * way it lands on the audit, because a window nobody can cross is not a
+   * window and a crossing nobody recorded is not a decision.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(1000)
+  change_window_reason?: string;
 
   @IsOptional()
   @ValidateNested()

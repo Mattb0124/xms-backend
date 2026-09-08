@@ -16,12 +16,20 @@ export interface ResolutionInput {
 
 export interface CloseDisciplineFacts {
   readonly loggedMinutes: number;
+  /** The ticket belongs to a scheduled change window (TM-10). */
+  readonly inChangeWindow?: boolean;
   readonly noSolutionCodes: ReadonlySet<string>;
   readonly knownCodes: ReadonlySet<string>;
 }
 
 export type MissingItem =
-  'resolution_code' | 'unknown_resolution_code' | 'resolution_notes' | 'solution_link' | 'time_logged' | 'pause_reason';
+  | 'resolution_code'
+  | 'unknown_resolution_code'
+  | 'resolution_notes'
+  | 'solution_link'
+  | 'time_logged'
+  | 'pause_reason'
+  | 'change_window';
 
 export interface TransitionInput {
   readonly pauseReason?: string | null;
@@ -49,5 +57,7 @@ export function checkRequirements(
   if (requirements.includes('time_logged') && facts.loggedMinutes <= 0 && !resolution.timeExemptionReason?.trim()) {
     missing.push('time_logged');
   }
+  // TM-10: a Change must belong to a scheduled change window before Scheduled.
+  if (requirements.includes('change_window') && !facts.inChangeWindow) missing.push('change_window');
   return missing;
 }

@@ -12,6 +12,11 @@ export interface StateEffects {
   readonly responseMet?: boolean;
   /** Entering stops the resolution clock (resolved, fulfilled, completed, done). */
   readonly resolve?: boolean;
+  /**
+   * Entering touches production: a change may only enter it inside its
+   * change window, or with the override permission and a reason (TM-18).
+   */
+  readonly deploy?: boolean;
   /** Entering closes the ticket. */
   readonly close?: boolean;
   /** Entering cancels the ticket. */

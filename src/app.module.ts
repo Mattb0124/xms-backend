@@ -31,6 +31,7 @@ import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { TimeModule } from './modules/time/time.module.js';
 import { TicketsModule } from './modules/tickets/tickets.module.js';
 import { RoutingModule } from './modules/tickets/routing.module.js';
+import { ChangeWindowsModule } from './modules/tickets/change-windows.module.js';
 
 /**
  * Root module of the API. Feature modules are added one per spec module
@@ -53,6 +54,7 @@ import { RoutingModule } from './modules/tickets/routing.module.js';
     WaitingModule,
     TicketsModule,
     RoutingModule,
+    ChangeWindowsModule,
     PortalModule,
     TimeModule,
     KnowledgeModule,

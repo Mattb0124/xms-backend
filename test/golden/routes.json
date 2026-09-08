@@ -1331,6 +1331,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/change-calendar",
+    "controller": "ChangeCalendarController",
+    "handler": "calendar",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/change-calendar/at",
+    "controller": "ChangeCalendarController",
+    "handler": "at",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/connectors/:instanceId",
     "controller": "ConnectorsController",
     "handler": "get",
@@ -2386,6 +2406,46 @@
     "handler": "ingest",
     "realm": "any",
     "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/ticket-groups",
+    "controller": "TicketGroupsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/ticket-groups",
+    "controller": "TicketGroupsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/ticket-groups/:id",
+    "controller": "TicketGroupsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/ticket-groups/:id",
+    "controller": "TicketGroupsController",
+    "handler": "patch",
+    "realm": "internal",
+    "permission": "tickets:work",
     "public": null,
     "axel": false
   },
