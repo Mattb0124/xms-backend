@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsInt, IsString, Matches, MaxLength, Min, MinLength } from 'class-validator';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   CurrentPrincipal,
   RealmOf,
@@ -48,6 +48,19 @@ import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
  * confirm for a browser upload, in `ingest` for a connector, in the email
  * service for a message.
  */
+/**
+ * How long the upload credential lives. It is a POST against a fixed key,
+ * so for as long as it is valid its holder can replace the object; the
+ * browser already holds the bytes when it asks, so three minutes is
+ * generous and fifteen was an open window over a scanned, re-encoded file.
+ */
+export const UPLOAD_LINK_SECONDS = 180;
+
+/** What the stored bytes are, so a later confirm can tell they changed. */
+function digestOf(body: Buffer): string {
+  return createHash('sha256').update(body).digest('hex');
+}
+
 export const ALLOWED_TYPES: Record<string, readonly string[]> = {
   'image/png': ['png'],
   'image/jpeg': ['jpg', 'jpeg'],
@@ -310,6 +323,7 @@ export class AttachmentsService {
       const upload = await this.store.presignUpload(objectKey, {
         contentType,
         maxBytes: Math.min(dto.size_bytes, maxBytes),
+        expiresSeconds: UPLOAD_LINK_SECONDS,
       });
       await this.audit.account(tx, ticket.account_id, actorOf(principal), ctx, [
         {
@@ -368,16 +382,26 @@ export class AttachmentsService {
    *
    * A file that says it is an image and is not one is not stored on a
    * guess: it goes to quarantine with `image_not_decodable`, in the same
-   * words the email path uses. A row that already carries `re_encode` is
-   * left alone, so a second confirm re-encodes nothing.
+   * words the email path uses.
+   *
+   * The short-circuit is keyed to the object, not to the row. The upload
+   * credential is a POST against a fixed key, so for as long as it lives
+   * the uploader can put the same key again; a row that simply carried
+   * `re_encode` went on asserting that the stored bytes were rebuilt from
+   * their pixels after an overwrite had replaced them. The digest of what
+   * was written is recorded and compared, so a second confirm over changed
+   * bytes re-encodes and re-scans them, and one over the same bytes still
+   * does no work.
    */
   private async reEncodeStored(
     tx: Tx,
     row: AttachmentRow,
     ctx: RequestContext,
   ): Promise<{ row: AttachmentRow; body?: Buffer; quarantined: boolean }> {
-    if (row.re_encode || !isReEncodedImage(row.content_type)) return { row, quarantined: false };
+    if (!isReEncodedImage(row.content_type)) return { row, quarantined: false };
     const raw = await this.store.getObject(row.s3_key);
+    if (row.re_encode && (row.re_encode as { digest?: string }).digest === digestOf(raw))
+      return { row, body: raw, quarantined: false };
     let encoded;
     try {
       encoded = await reEncodeImage(raw, row.content_type, row.file_name);
@@ -399,7 +423,7 @@ export class AttachmentsService {
       fileName: encoded.fileName,
       contentType: encoded.contentType,
       sizeBytes: encoded.body.length,
-      detail: encoded.detail,
+      detail: { ...encoded.detail, digest: digestOf(encoded.body) },
     });
     return { row: updated, body: encoded.body, quarantined: false };
   }

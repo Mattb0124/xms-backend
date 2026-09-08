@@ -272,6 +272,56 @@ describe('attachments', () => {
     await api().get(`/v1/attachments/${trap.id}/download`).set(bearer(adminToken)).expect(403);
   });
 
+  it('detects an overwrite after confirm and re-encodes the bytes that are actually there', async () => {
+    // The upload credential is a POST against a fixed key, so its holder
+    // can replace the object for as long as it lives. A row that simply
+    // carried `re_encode` went on asserting that what is stored was rebuilt
+    // from its pixels; the digest of what was written is what the second
+    // confirm compares.
+    const first = await sharp({ create: { width: 40, height: 30, channels: 3, background: { r: 10, g: 90, b: 200 } } })
+      .png()
+      .toBuffer();
+    const presigned = await api()
+      .post(`/v1/tickets/${key}/attachments/presign`)
+      .set(bearer(adminToken))
+      .send({ file_name: 'chart.png', content_type: 'image/png', size_bytes: first.length })
+      .expect(201);
+    // Three minutes, not fifteen: a browser that already holds the bytes
+    // needs no window to replace them in.
+    const life = new Date(presigned.body.upload.expiresAt).getTime() - Date.now();
+    expect(life).toBeLessThanOrEqual(180_000);
+
+    await request(app.getHttpServer())
+      .put(localPath(presigned.body.upload.url))
+      .set('content-type', 'image/png')
+      .send(first)
+      .expect(200);
+    const confirmed = await api()
+      .post(`/v1/tickets/${key}/attachments/${presigned.body.attachment.id}/confirm`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(confirmed.body.scan_state).toBe('clean');
+    expect(confirmed.body.re_encode.digest).toMatch(/^[0-9a-f]{64}$/);
+    const firstDigest = confirmed.body.re_encode.digest;
+
+    // The uploader puts different bytes at the same key and confirms again.
+    const swapped = Buffer.from('<svg onload="alert(1)"><script>steal()</script></svg>', 'utf8');
+    await request(app.getHttpServer())
+      .put(localPath(presigned.body.upload.url))
+      .set('content-type', 'image/png')
+      .send(swapped)
+      .expect(200);
+    const second = await api()
+      .post(`/v1/tickets/${key}/attachments/${presigned.body.attachment.id}/confirm`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(second.body.scan_state).toBe('quarantined');
+    expect(second.body.scan_detail).toMatchObject({ reason: 'image_not_decodable' });
+    await api().get(`/v1/attachments/${second.body.id}/download`).set(bearer(adminToken)).expect(403);
+    expect(String(second.body.s3_key).startsWith('quarantine/')).toBe(true);
+    expect(firstDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it('soft deletes and hides the row', async () => {
     const list = await api().get(`/v1/tickets/${key}/attachments`).set(bearer(adminToken)).expect(200);
     const target = list.body.find((row: { file_name: string }) => row.file_name === 'internal.txt');
