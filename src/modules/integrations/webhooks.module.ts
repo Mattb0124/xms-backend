@@ -128,6 +128,7 @@ const API_SCOPES: readonly Permission[] = [
   'tickets:work',
   'time:log',
   'kb:read',
+  'exports:read',
   'webhooks:manage',
 ].filter(isPermission);
 

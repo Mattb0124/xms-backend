@@ -36,6 +36,7 @@ export const OPERATOR_PERMISSIONS = {
   'admin:connectors': 'Manage connectors and replay dead letters',
   'admin:migration': 'Run imports, reconcile and sign off migrations',
   'webhooks:manage': 'Register and manage webhook subscriptions (API clients)',
+  'exports:read': 'Read and acknowledge finance deliveries (API clients)',
   'admin:api-clients': 'Create, scope and revoke API clients',
 } as const;
 
@@ -70,7 +71,7 @@ export const PERMISSION_IMPLICATIONS: Partial<Record<Permission, readonly Permis
   'audit:export': ['audit:read'],
   'analytics:read-individual': ['analytics:read'],
   'admin:users': ['admin:accounts', 'admin:api-clients'],
-  'admin:api-clients': ['webhooks:manage'],
+  'admin:api-clients': ['webhooks:manage', 'exports:read'],
   'portal:view-org-tickets': ['portal:submit'],
   'portal:comment': ['portal:submit'],
   'portal:manage-users': ['portal:view-org-tickets'],

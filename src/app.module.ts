@@ -10,6 +10,7 @@ import { CapacityModule } from './modules/capacity/capacity.module.js';
 import { ReportSchedulesModule } from './modules/reporting/schedules.module.js';
 import { CsatModule } from './modules/portal/csat.module.js';
 import { WebhooksModule } from './modules/integrations/webhooks.module.js';
+import { FinanceModule } from './modules/integrations/finance.module.js';
 import { CspModule } from './modules/security/csp.module.js';
 import { StorageModule } from './common/storage/storage.module.js';
 import { DbModule } from './db/db.module.js';
@@ -60,6 +61,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     ReportSchedulesModule,
     CsatModule,
     WebhooksModule,
+    FinanceModule,
     CalendarsModule,
     MigrationModule,
   ],

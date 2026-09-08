@@ -92,6 +92,8 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.ai_feedback': { rating: 3 },
   // The connector type is an operator catalog row, not an account row.
   'acct.connector_instances': { type: 'servicenow' },
+  // A finance destination carries the target column its kind names.
+  'acct.finance_destinations': { kind: 'https', endpoint_url: 'https://finance.example.test/inbound' },
   // A link needs two distinct tickets; the second is created outside the cache.
   'acct.ticket_links': {
     to_ticket_id: (client: pg.Client, accountId: string) =>

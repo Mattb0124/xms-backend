@@ -58,7 +58,7 @@ import {
   type BillingAction,
 } from '../../domain/time/billing.js';
 import { SecurityEventsService } from '../../common/events/security-events.service.js';
-import { OBJECT_STORE, StorageModule } from '../../common/storage/storage.module.js';
+import { OBJECT_STORE, StorageCoreModule } from '../../common/storage/storage.module.js';
 import type { ObjectStore } from '../../common/storage/object-store.js';
 import { Inject } from '@nestjs/common';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
@@ -69,7 +69,7 @@ import { ConfigService } from '../admin/config/config.service.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import { TicketsRepository } from '../tickets/tickets.repository.js';
-import { TimeRepository, type TimeEntryRow } from './time.repository.js';
+import { TimeRepository, type BillingExportRow, type BillingPeriodRow, type TimeEntryRow } from './time.repository.js';
 
 /**
  * Time, Contracts & Budget (02-modules/time-and-budget, cut per Thirty-Day
@@ -677,48 +677,19 @@ export class TimeService {
       if (period.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'billing_period' });
       if (period.status !== 'locked' && period.status !== 'exported')
         throw new ConflictException({ code: 'period_not_locked', status: period.status });
-      const lines = await this.time.financeLines(tx, accountId, period.starts_on, period.ends_on);
-      const label = period.starts_on.slice(0, 7);
-      const rows = financeRows(lines, label);
-      let body: Buffer;
-      if (format === 'csv') body = Buffer.from(toCsv(FINANCE_COLUMNS, rows), 'utf8');
-      else {
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet('Finance');
-        sheet.addRow([...FINANCE_COLUMNS]);
-        for (const row of rows)
-          sheet.addRow(row.map((value) => (typeof value === 'string' && /^[=+\-@]/.test(value) ? `'${value}` : value)));
-        sheet.getRow(1).font = { bold: true };
-        body = Buffer.from(await workbook.xlsx.writeBuffer());
-      }
-      const checksum = createHash('sha256').update(body).digest('hex');
-      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      const objectKey = `accounts/${accountId}/billing/${periodId}/finance-${stamp}.${format}`;
-      await this.store.putObject(
-        objectKey,
-        body,
-        format === 'csv'
-          ? 'text/csv; charset=utf-8'
-          : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      const record = await this.time.insertBillingExport(tx, {
-        accountId,
-        periodId,
+      const { body, checksum, record, rows, label } = await this.produceFinanceFile(
+        tx,
+        period,
         format,
-        objectKey,
-        checksum,
-        rowCount: rows.length,
-        producedBy: principal.userId,
-      });
-      const summary = periodSummary(lines);
-      await this.time.updateBillingPeriod(tx, periodId, period.version, { checksum, summary });
+        principal.userId,
+      );
       await this.audit.account(tx, accountId, actorOf(principal), ctx, [
         {
           entityKind: 'billing_period',
           entityId: periodId,
           eventType: 'updated',
           field: 'export',
-          newValue: { export_id: record.id, format, rows: rows.length, checksum },
+          newValue: { export_id: record.id, format, rows, checksum },
         },
       ]);
       await this.security.write(
@@ -731,7 +702,7 @@ export class TimeService {
           actorName: principal.displayName,
           principalKind: principal.kind,
           requestId: ctx.requestId,
-          attrs: { kind: 'finance', format, rows: rows.length, checksum, period: label },
+          attrs: { kind: 'finance', format, rows, checksum, period: label },
         },
         tx,
       );
@@ -742,10 +713,67 @@ export class TimeService {
             ? 'text/csv; charset=utf-8'
             : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         body,
-        rows: rows.length,
+        rows,
         checksum,
       };
     });
+  }
+
+  /**
+   * TB-14: the finance file for a locked period inside an open transaction:
+   * rows in the THG layout, stored, checksummed on the period, recorded as an
+   * append-only export row. The download route and the finance connector
+   * share it; the caller adds the audit and security events.
+   */
+  async produceFinanceFile(
+    tx: Tx,
+    period: BillingPeriodRow,
+    format: 'xlsx' | 'csv',
+    producedBy: string,
+  ): Promise<{
+    body: Buffer;
+    checksum: string;
+    record: BillingExportRow;
+    rows: number;
+    label: string;
+    objectKey: string;
+  }> {
+    const lines = await this.time.financeLines(tx, period.account_id, period.starts_on, period.ends_on);
+    const label = period.starts_on.slice(0, 7);
+    const rows = financeRows(lines, label);
+    let body: Buffer;
+    if (format === 'csv') body = Buffer.from(toCsv(FINANCE_COLUMNS, rows), 'utf8');
+    else {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Finance');
+      sheet.addRow([...FINANCE_COLUMNS]);
+      for (const row of rows)
+        sheet.addRow(row.map((value) => (typeof value === 'string' && /^[=+\-@]/.test(value) ? `'${value}` : value)));
+      sheet.getRow(1).font = { bold: true };
+      body = Buffer.from(await workbook.xlsx.writeBuffer());
+    }
+    const checksum = createHash('sha256').update(body).digest('hex');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const objectKey = `accounts/${period.account_id}/billing/${period.id}/finance-${stamp}.${format}`;
+    await this.store.putObject(
+      objectKey,
+      body,
+      format === 'csv'
+        ? 'text/csv; charset=utf-8'
+        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    const record = await this.time.insertBillingExport(tx, {
+      accountId: period.account_id,
+      periodId: period.id,
+      format,
+      objectKey,
+      checksum,
+      rowCount: rows.length,
+      producedBy,
+    });
+    const fresh = await this.time.billingPeriod(tx, period.id);
+    await this.time.updateBillingPeriod(tx, period.id, fresh.version, { checksum, summary: periodSummary(lines) });
+    return { body, checksum, record, rows: rows.length, label, objectKey };
   }
 
   // Helpers -------------------------------------------------------------------
@@ -1367,10 +1395,17 @@ function dateOr(value: string | undefined, offsetDays: number): string {
   return new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** Providers only, shared by the API and the worker (the worker never mounts controllers). */
 @Module({
-  imports: [TicketsCoreModule, CalendarsCoreModule, StorageModule],
-  controllers: [TimeController],
+  imports: [TicketsCoreModule, CalendarsCoreModule, StorageCoreModule],
   providers: [TimeService, TimeRepository],
-  exports: [TimeService],
+  exports: [TimeService, TimeRepository],
+})
+export class TimeCoreModule {}
+
+@Module({
+  imports: [TimeCoreModule],
+  controllers: [TimeController],
+  exports: [TimeCoreModule],
 })
 export class TimeModule {}

@@ -14,6 +14,7 @@ import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting
 import { ReportSchedulesCoreModule, SchedulesService } from '../modules/reporting/schedules.module.js';
 import { CsatCoreModule, CsatService } from '../modules/portal/csat.module.js';
 import { WebhooksCoreModule, WebhookDeliveryService } from '../modules/integrations/webhooks.module.js';
+import { FinanceCoreModule, FinanceService } from '../modules/integrations/finance.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
@@ -44,6 +45,7 @@ import { RosterJobs } from './roster-jobs.js';
     ReportSchedulesCoreModule,
     CsatCoreModule,
     WebhooksCoreModule,
+    FinanceCoreModule,
     AiCoreModule,
     IntegrityCoreModule,
     ConnectorsCoreModule,
@@ -78,6 +80,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly schedules: SchedulesService,
     private readonly csat: CsatService,
     private readonly webhooks: WebhookDeliveryService,
+    private readonly finance: FinanceService,
   ) {}
 
   onModuleInit(): void {
@@ -95,6 +98,11 @@ export class WorkerModule implements OnModuleInit {
       'connector.webhook',
       (type) => this.webhooks.handles(type),
       (row) => this.webhooks.onOutbox(row),
+    );
+    this.dispatcher.subscribe(
+      'connector.finance',
+      (type) => type === 'billing_period.locked',
+      (row) => this.finance.onOutbox(row),
     );
     this.dispatcher.subscribe(
       'axel.intake',

@@ -1491,6 +1491,56 @@
   },
   {
     "method": "GET",
+    "path": "/v1/finance/deliveries",
+    "controller": "FinanceController",
+    "handler": "deliveries",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/finance/deliveries",
+    "controller": "FinanceController",
+    "handler": "deliver",
+    "realm": "internal",
+    "permission": "time:lock-period",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/finance/deliveries/:id/ack",
+    "controller": "FinanceController",
+    "handler": "acknowledge",
+    "realm": "internal",
+    "permission": "exports:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/finance/destinations/:accountId",
+    "controller": "FinanceController",
+    "handler": "destination",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/finance/destinations/:accountId",
+    "controller": "FinanceController",
+    "handler": "setDestination",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/groups",
     "controller": "DirectoryController",
     "handler": "groups",
