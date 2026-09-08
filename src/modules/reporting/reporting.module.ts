@@ -2,12 +2,14 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Injectable,
   Module,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Res,
@@ -33,6 +35,9 @@ import type { Job } from '../../worker/jobs.js';
 import type { EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
 import { packFormat, ReportingService } from './reporting.service.js';
+import { CreateSavedQueryDto, RunSavedQueryDto, UpdateSavedQueryDto } from './saved-queries.dto.js';
+import { SavedQueriesRepository } from './saved-queries.repository.js';
+import { SavedQueriesService } from './saved-queries.service.js';
 
 function decodeJson<T>(encoded: string | undefined, code: string): T | undefined {
   if (!encoded) return undefined;
@@ -47,7 +52,10 @@ function decodeJson<T>(encoded: string | undefined, code: string): T | undefined
 @ApiBearerAuth()
 @Controller()
 export class ReportingController {
-  constructor(private readonly reporting: ReportingService) {}
+  constructor(
+    private readonly reporting: ReportingService,
+    private readonly savedQueries: SavedQueriesService,
+  ) {}
 
   @Get('dashboards/operations')
   @RequirePermission('reports:view-portfolio')
@@ -116,6 +124,67 @@ export class ReportingController {
     const result = await this.reporting.exportEvents(principal, ctx, body ?? { conditions: [] });
     response.setHeader('content-disposition', `attachment; filename="${result.fileName}"`);
     response.send(result.body);
+  }
+
+  /**
+   * Saved queries (Audit & Analytics 7.1). Every route stands on
+   * `audit:read`, the permission the search itself takes; sharing a query
+   * additionally needs `audit:export`, which the service checks because it
+   * is a property of the body rather than of the route.
+   */
+  @Get('audit/saved-queries')
+  @RequirePermission('audit:read')
+  listSavedQueries(@CurrentPrincipal() principal: Principal) {
+    return this.savedQueries.list(principal);
+  }
+
+  @Post('audit/saved-queries')
+  @RequirePermission('audit:read')
+  createSavedQuery(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Body() dto: CreateSavedQueryDto,
+  ) {
+    return this.savedQueries.create(principal, ctx, dto);
+  }
+
+  @Get('audit/saved-queries/:id')
+  @RequirePermission('audit:read')
+  savedQuery(@CurrentPrincipal() principal: Principal, @Param('id', ParseUUIDPipe) id: string) {
+    return this.savedQueries.get(principal, id);
+  }
+
+  @Patch('audit/saved-queries/:id')
+  @RequirePermission('audit:read')
+  updateSavedQuery(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateSavedQueryDto,
+  ) {
+    return this.savedQueries.update(principal, ctx, id, dto);
+  }
+
+  @Delete('audit/saved-queries/:id')
+  @RequirePermission('audit:read')
+  deleteSavedQuery(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.savedQueries.remove(principal, ctx, id);
+  }
+
+  /** Running one is the inline search with the stored conditions. */
+  @Post('audit/saved-queries/:id/run')
+  @RequirePermission('audit:read')
+  runSavedQuery(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RunSavedQueryDto,
+  ) {
+    return this.savedQueries.run(principal, ctx, id, dto ?? {});
   }
 
   @Get('accounts/:id/reports')
@@ -284,8 +353,8 @@ export class SnapshotJob {
 
 @Module({
   imports: [TicketsCoreModule],
-  providers: [ReportingRepository, ReportingService, SnapshotJob],
-  exports: [ReportingService, ReportingRepository, SnapshotJob],
+  providers: [ReportingRepository, ReportingService, SnapshotJob, SavedQueriesRepository, SavedQueriesService],
+  exports: [ReportingService, ReportingRepository, SnapshotJob, SavedQueriesService],
 })
 export class ReportingCoreModule {}
 

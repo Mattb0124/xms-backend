@@ -667,6 +667,171 @@ describe('audit search', () => {
   });
 });
 
+describe('audit saved queries', () => {
+  /** An auditor holding audit:read and nothing more, to read someone else's saved queries with. */
+  async function auditor(): Promise<string> {
+    const role = await api()
+      .post('/v1/admin/roles')
+      .set(bearer(adminToken))
+      .send({ catalog: 'operator', name: 'Query Auditor', permissions: ['audit:read'] })
+      .expect(201);
+    await api()
+      .post('/v1/admin/users')
+      .set(bearer(adminToken))
+      .send({
+        email: 'quinn@example.test',
+        first_name: 'Quinn',
+        last_name: 'Marsh',
+        role_ids: [role.body.id],
+        account_ids: [accountId],
+      })
+      .expect(201);
+    return devToken({ sub: 'dev_quinn', email: 'quinn@example.test', sid: 'sess_quinn' });
+  }
+
+  it('saves a condition set, lists it and runs it into the same rows as the inline search', async () => {
+    const conditions = [
+      { field: 'stream', op: 'eq', value: 'audit' },
+      { field: 'account_id', op: 'eq', value: accountId },
+    ];
+    const saved = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({ name: 'Brookfield changes', description: 'Everything audited on Brookfield', conditions })
+      .expect(201);
+    expect(saved.body).toMatchObject({
+      name: 'Brookfield changes',
+      shared: false,
+      description: 'Everything audited on Brookfield',
+    });
+    expect(saved.body.conditions).toEqual(conditions);
+
+    const list = await api().get('/v1/audit/saved-queries').set(bearer(adminToken)).expect(200);
+    expect(list.body.map((row: { name: string }) => row.name)).toContain('Brookfield changes');
+
+    // The run route and the inline search are one code path, so the rows match.
+    const run = await api()
+      .post(`/v1/audit/saved-queries/${saved.body.id}/run`)
+      .set(bearer(adminToken))
+      .send({ limit: 25 })
+      .expect(201);
+    const inline = await api()
+      .post('/v1/audit/search')
+      .set(bearer(adminToken))
+      .send({ conditions, limit: 25 })
+      .expect(201);
+    expect(run.body.items.map((row: { id: string }) => row.id)).toEqual(
+      inline.body.items.map((row: { id: string }) => row.id),
+    );
+    expect(run.body.items.length).toBeGreaterThan(0);
+    expect(run.body.saved_query.name).toBe('Brookfield changes');
+
+    // The save is audited without an account, like every operator record.
+    const audited = await withSuperuser((client) =>
+      client.query(`select event_type, entity_id from op.audit_events where entity_kind = 'audit_saved_query'`),
+    );
+    expect(audited.rows.some((row) => row.event_type === 'created' && row.entity_id === saved.body.id)).toBe(true);
+  });
+
+  it('refuses at save a condition the search would refuse at run time', async () => {
+    const bad = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({ name: 'Impossible', conditions: [{ field: 'stream', op: 'is_null' }] })
+      .expect(400);
+    expect(bad.body).toMatchObject({
+      code: 'invalid_conditions',
+      problems: ['condition 0: is_null needs a nullable field'],
+    });
+    const unknownField = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({ name: 'Impossible', conditions: [{ field: 'attrs', op: 'eq', value: 'x' }] })
+      .expect(400);
+    expect(unknownField.body.code).toBe('invalid_conditions');
+    expect(
+      (await api().get('/v1/audit/saved-queries').set(bearer(adminToken)).expect(200)).body.some(
+        (row: { name: string }) => row.name === 'Impossible',
+      ),
+    ).toBe(false);
+
+    // The same judge on the way in through an edit.
+    const saved = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({ name: 'Editable', conditions: [{ field: 'stream', op: 'eq', value: 'security' }] })
+      .expect(201);
+    await api()
+      .patch(`/v1/audit/saved-queries/${saved.body.id}`)
+      .set(bearer(adminToken))
+      .send({ conditions: [{ field: 'occurred_at', op: 'is_null' }] })
+      .expect(400);
+    const unchanged = await api().get(`/v1/audit/saved-queries/${saved.body.id}`).set(bearer(adminToken)).expect(200);
+    expect(unchanged.body.conditions).toEqual([{ field: 'stream', op: 'eq', value: 'security' }]);
+    await api().delete(`/v1/audit/saved-queries/${saved.body.id}`).set(bearer(adminToken)).expect(200);
+    await api().get(`/v1/audit/saved-queries/${saved.body.id}`).set(bearer(adminToken)).expect(404);
+  });
+
+  it('keeps a private query to its owner and needs audit:export to share one', async () => {
+    const quinnToken = await auditor();
+    const privateQuery = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({ name: 'My own denials', conditions: [{ field: 'outcome', op: 'eq', value: 'denied' }] })
+      .expect(201);
+    const sharedQuery = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(adminToken))
+      .send({
+        name: 'Every sign-in failure',
+        shared: true,
+        conditions: [{ field: 'stream', op: 'eq', value: 'security' }],
+      })
+      .expect(201);
+    expect(sharedQuery.body.shared).toBe(true);
+
+    const theirs = await api().get('/v1/audit/saved-queries').set(bearer(quinnToken)).expect(200);
+    const names = theirs.body.map((row: { name: string }) => row.name);
+    expect(names).toContain('Every sign-in failure');
+    expect(names).not.toContain('My own denials');
+    // A private query of someone else is invisible rather than forbidden.
+    await api().get(`/v1/audit/saved-queries/${privateQuery.body.id}`).set(bearer(quinnToken)).expect(404);
+    await api()
+      .post(`/v1/audit/saved-queries/${privateQuery.body.id}/run`)
+      .set(bearer(quinnToken))
+      .send({})
+      .expect(404);
+    // The shared one runs, under the reader's own grants.
+    const ran = await api()
+      .post(`/v1/audit/saved-queries/${sharedQuery.body.id}/run`)
+      .set(bearer(quinnToken))
+      .send({ limit: 10 })
+      .expect(201);
+    expect(ran.body.items.every((row: { account_id: string | null }) => row.account_id !== otherAccountId)).toBe(true);
+    // Editing and deleting are the owner's alone.
+    await api()
+      .patch(`/v1/audit/saved-queries/${sharedQuery.body.id}`)
+      .set(bearer(quinnToken))
+      .send({ name: 'Renamed by a reader' })
+      .expect(404);
+    await api().delete(`/v1/audit/saved-queries/${sharedQuery.body.id}`).set(bearer(quinnToken)).expect(404);
+    // Sharing puts audit rows in front of other people, so it takes audit:export.
+    const refused = await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(quinnToken))
+      .send({ name: 'Mine, shared', shared: true, conditions: [] })
+      .expect(403);
+    expect(refused.body).toMatchObject({ code: 'forbidden', permission: 'audit:export' });
+    await api()
+      .post('/v1/audit/saved-queries')
+      .set(bearer(quinnToken))
+      .send({ name: 'Mine, private', conditions: [] })
+      .expect(201);
+    // A consultant reads no saved queries: the routes stand on audit:read.
+    await api().get('/v1/audit/saved-queries').set(bearer(consultantToken)).expect(403);
+  });
+});
+
 describe('report packs and snapshots', () => {
   it('generates a five-slide WSR on demand, stores both renditions and records the run', async () => {
     await api().post(`/v1/accounts/${accountId}/reports/wsr`).set(bearer(consultantToken)).expect(403);

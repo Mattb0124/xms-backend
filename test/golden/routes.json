@@ -1030,6 +1030,66 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/audit/saved-queries",
+    "controller": "ReportingController",
+    "handler": "listSavedQueries",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/audit/saved-queries",
+    "controller": "ReportingController",
+    "handler": "createSavedQuery",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/audit/saved-queries/:id",
+    "controller": "ReportingController",
+    "handler": "deleteSavedQuery",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/audit/saved-queries/:id",
+    "controller": "ReportingController",
+    "handler": "savedQuery",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/audit/saved-queries/:id",
+    "controller": "ReportingController",
+    "handler": "updateSavedQuery",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/audit/saved-queries/:id/run",
+    "controller": "ReportingController",
+    "handler": "runSavedQuery",
+    "realm": "internal",
+    "permission": "audit:read",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/audit/search",
     "controller": "ReportingController",
