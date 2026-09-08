@@ -1601,6 +1601,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/me/waiting",
+    "controller": "WaitingController",
+    "handler": "waitingOnMe",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/migration/batches",
     "controller": "MigrationController",
     "handler": "list",
