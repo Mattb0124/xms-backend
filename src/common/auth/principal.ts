@@ -21,6 +21,13 @@ export interface Principal {
   /** Clerk session id, harness session id or the API client id. */
   readonly sessionId?: string;
   readonly tokenType: 'clerk' | 'clerk_agents' | 'harness' | 'api_key' | 'dev';
+  /**
+   * The API client's own requests-per-minute allowance (Integrations
+   * technical 5). It rides on the principal because the guard has already
+   * read the client row, so the rate-limit interceptor needs no second
+   * credential lookup. Set for `api_key` principals only.
+   */
+  readonly rateLimitPerMinute?: number;
 }
 
 export function hasPermission(principal: Principal, permission: Permission): boolean {

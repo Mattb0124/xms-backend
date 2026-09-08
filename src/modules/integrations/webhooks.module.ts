@@ -23,11 +23,14 @@ import {
   ArrayMinSize,
   IsArray,
   IsIn,
+  IsInt,
   IsISO8601,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
   MinLength,
 } from 'class-validator';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -142,6 +145,7 @@ export class WebhooksRepository extends RepositoryBase {
     return this.many(
       tx,
       `select c.id, c.name, c.owner_user_id, c.service_user_id, c.key_prefix, c.scopes, c.expires_at, c.last_used_at, c.status, c.created_at, c.version,
+              c.rate_limit_per_minute,
               coalesce((select array_agg(g.account_id order by a.key) from op.api_client_grants g
                           join op.accounts a on a.id = g.account_id where g.api_client_id = c.id), '{}') as account_ids,
               coalesce((select json_agg(json_build_object('id', a.id, 'key', a.key, 'name', a.name) order by a.key)
@@ -155,7 +159,7 @@ export class WebhooksRepository extends RepositoryBase {
     return this.one(
       tx,
       'api_client',
-      'select id, name, owner_user_id, service_user_id, key_prefix, scopes, expires_at, last_used_at, status, created_at, version from op.api_clients where id = $1',
+      'select id, name, owner_user_id, service_user_id, key_prefix, scopes, expires_at, last_used_at, status, created_at, version, rate_limit_per_minute from op.api_clients where id = $1',
       [id],
     );
   }
@@ -171,14 +175,15 @@ export class WebhooksRepository extends RepositoryBase {
       secretHash: string;
       scopes: string[];
       expiresAt: string | null;
+      ratePerMinute: number | null;
     },
   ): Promise<ApiClientRow> {
     return this.one(
       tx,
       'api_client',
-      `insert into op.api_clients (name, owner_user_id, service_user_id, key_prefix, lookup_hash, secret_hash, scopes, expires_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)
-       returning id, name, owner_user_id, service_user_id, key_prefix, scopes, expires_at, last_used_at, status, created_at, version`,
+      `insert into op.api_clients (name, owner_user_id, service_user_id, key_prefix, lookup_hash, secret_hash, scopes, expires_at, rate_limit_per_minute)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, 600))
+       returning id, name, owner_user_id, service_user_id, key_prefix, scopes, expires_at, last_used_at, status, created_at, version, rate_limit_per_minute`,
       [
         input.name,
         input.ownerUserId,
@@ -188,6 +193,7 @@ export class WebhooksRepository extends RepositoryBase {
         input.secretHash,
         input.scopes,
         input.expiresAt,
+        input.ratePerMinute,
       ],
     );
   }
@@ -380,6 +386,8 @@ export class CreateApiClientDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @IsIn(API_SCOPES, { each: true }) scopes!: Permission[];
   @IsArray() @ArrayMaxSize(200) @IsUUID('4', { each: true }) account_ids!: string[];
   @IsOptional() @IsISO8601() expires_at?: string;
+  /** Requests per minute for this client (Integrations technical 5); 600 when not given. */
+  @IsOptional() @IsInt() @Min(1) @Max(100_000) rate_limit_per_minute?: number;
 }
 
 export class CreateSubscriptionDto {
@@ -457,6 +465,7 @@ export class ApiClientsService {
         secretHash: await bcrypt.hash(key, 10),
         scopes: dto.scopes,
         expiresAt: dto.expires_at ?? null,
+        ratePerMinute: dto.rate_limit_per_minute ?? null,
       });
       await this.repo.grant(tx, client.id, [...new Set(dto.account_ids)]);
       // Read back what was persisted rather than echoing the request: the

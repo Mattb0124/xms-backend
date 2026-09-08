@@ -7,9 +7,11 @@ import {
   type NestMiddleware,
   type NestModule,
 } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import type { NextFunction, Request, Response } from 'express';
 import { loadEnv } from '../../config/env.js';
 import type { RequestContext } from '../auth/decorators.js';
+import { ApiClientRateLimitInterceptor } from './api-client-rate-limit.interceptor.js';
 import { SecurityEventsService } from '../events/security-events.service.js';
 import { RateLimiter } from './rate-limiter.js';
 
@@ -105,8 +107,19 @@ export class RateLimitMiddleware implements NestMiddleware {
   }
 }
 
+/**
+ * The middleware carries the unauthenticated surfaces; the interceptor
+ * carries the authenticated API clients, because their limit is per client
+ * and only the guard knows which client a key belongs to. Registering the
+ * interceptor here keeps the two halves of one policy in one module.
+ */
 @Module({
-  providers: [RateLimitMiddleware, { provide: RATE_POLICIES, useFactory: policiesFromEnv }],
+  providers: [
+    RateLimitMiddleware,
+    { provide: RATE_POLICIES, useFactory: policiesFromEnv },
+    ApiClientRateLimitInterceptor,
+    { provide: APP_INTERCEPTOR, useExisting: ApiClientRateLimitInterceptor },
+  ],
 })
 export class RateLimitModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {

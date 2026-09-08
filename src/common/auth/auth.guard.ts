@@ -276,6 +276,9 @@ export class AuthGuard implements CanActivate {
       accountIds: client.accountIds,
       permissions: new Set(client.scopes.filter(isPermission)),
       sessionId: client.id,
+      // Carried so the rate-limit interceptor keys and bounds the client
+      // without a second credential lookup of its own.
+      rateLimitPerMinute: client.rate_limit_per_minute,
       tokenType: 'api_key',
     };
     await this.events.write({

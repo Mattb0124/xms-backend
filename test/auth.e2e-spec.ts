@@ -1,5 +1,5 @@
 import { Controller, Get, INestApplication, VersioningType } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -16,6 +16,7 @@ import { PrincipalRepository } from '../src/common/auth/principal.repository.js'
 import { Public } from '../src/common/auth/public.decorator.js';
 import { TokenVerifiers } from '../src/common/auth/token-verifier.js';
 import { SecurityEventsService } from '../src/common/events/security-events.service.js';
+import { ApiClientRateLimitInterceptor } from '../src/common/rate-limit/api-client-rate-limit.interceptor.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import {
   AGENTS_AUDIENCE,
@@ -136,6 +137,10 @@ beforeAll(async () => {
       },
       AuthGuard,
       { provide: APP_GUARD, useExisting: AuthGuard },
+      // The per-client rate limit runs after the guard, so it keys on the
+      // resolved client rather than on a string from the request.
+      ApiClientRateLimitInterceptor,
+      { provide: APP_INTERCEPTOR, useExisting: ApiClientRateLimitInterceptor },
     ],
   }).compile();
   app = moduleRef.createNestApplication();
@@ -502,5 +507,62 @@ describe('API clients', () => {
     expect(sink.ofType('auth.signin.failed')[0].attrs).toMatchObject({
       reason: 'service_user',
     });
+  });
+});
+
+/**
+ * Per-client rate limiting (Integrations technical 5). The interceptor runs
+ * after the guard, so the counter keys on the resolved API client id and
+ * the allowance is the one configured on that client, not a policy shared
+ * by every integration.
+ */
+describe('API client rate limits', () => {
+  it('counts per client, refuses past the client limit with the three headers and one event per burst', async () => {
+    const service = principals.add(aUser({ kind: 'service', email: 'slow-bot@example.test' }));
+    const key = await principals.addApiClient(service, ['tickets:view'], [ACCOUNT], 'active', 2);
+    const first = await get('/v1/probe/internal', key).expect(200);
+    expect(first.headers['x-ratelimit-limit']).toBe('2');
+    expect(first.headers['x-ratelimit-remaining']).toBe('1');
+    const second = await get('/v1/probe/internal', key).expect(200);
+    expect(second.headers['x-ratelimit-remaining']).toBe('0');
+
+    const refused = await get('/v1/probe/internal', key).expect(429);
+    expect(refused.body).toMatchObject({ code: 'rate_limited', policy: 'api_client' });
+    expect(refused.headers['x-ratelimit-limit']).toBe('2');
+    expect(refused.headers['x-ratelimit-remaining']).toBe('0');
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+    await get('/v1/probe/internal', key).expect(429);
+
+    const events = sink.ofType('abuse.rate_limited');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      outcome: 'denied',
+      actorKind: 'api_client',
+      actorId: service.id,
+      principalKind: 'api_client',
+      attrs: { policy: 'api_client', per_minute: 2, route: '/v1/probe/internal' },
+    });
+  });
+
+  it('gives every client its own window and its own limit', async () => {
+    const busy = principals.add(aUser({ kind: 'service', email: 'busy-bot@example.test' }));
+    const quiet = principals.add(aUser({ kind: 'service', email: 'quiet-bot@example.test' }));
+    const busyKey = await principals.addApiClient(busy, ['tickets:view'], [ACCOUNT], 'active', 1);
+    const quietKey = await principals.addApiClient(quiet, ['tickets:view'], [ACCOUNT]);
+    await get('/v1/probe/internal', busyKey).expect(200);
+    await get('/v1/probe/internal', busyKey).expect(429);
+    // The default from the client row, and a window of its own.
+    const other = await get('/v1/probe/internal', quietKey).expect(200);
+    expect(other.headers['x-ratelimit-limit']).toBe('600');
+    expect(other.headers['x-ratelimit-remaining']).toBe('599');
+  });
+
+  it('leaves a session principal uncounted: the limit is a contract with an API client', async () => {
+    const user = principals.add(aUser({ clerk_user_id: 'dev_unlimited', accountIds: [ACCOUNT] }));
+    const token = await devToken({ sub: user.clerk_user_id!, sid: 'sess_unlimited' });
+    for (let index = 0; index < 5; index += 1) {
+      const response = await get('/v1/probe/internal', token).expect(200);
+      expect(response.headers['x-ratelimit-limit']).toBeUndefined();
+    }
   });
 });

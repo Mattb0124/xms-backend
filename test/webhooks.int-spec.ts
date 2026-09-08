@@ -156,6 +156,45 @@ describe('API clients', () => {
       .expect(400);
     expect(bad.body.code).toBe('validation_failed');
   });
+
+  it('defaults the rate limit to 600 a minute, takes a configured one and enforces it on the key', async () => {
+    // The default from 0029, on the client created above.
+    const listed = await api().get('/v1/admin/api-clients').set(bearer(adminToken)).expect(200);
+    expect(listed.body[0].rate_limit_per_minute).toBe(600);
+    const headers = await api().get('/v1/tickets').set(bearer(apiKey)).expect(200);
+    expect(headers.headers['x-ratelimit-limit']).toBe('600');
+
+    const slow = await api()
+      .post('/v1/admin/api-clients')
+      .set(bearer(adminToken))
+      .send({ name: 'Rationed', scopes: ['tickets:view'], account_ids: [accountId], rate_limit_per_minute: 2 })
+      .expect(201);
+    expect(slow.body.rate_limit_per_minute).toBe(2);
+    const slowKey: string = slow.body.key;
+    for (const remaining of ['1', '0']) {
+      const allowed = await api().get('/v1/tickets').set(bearer(slowKey)).expect(200);
+      expect(allowed.headers['x-ratelimit-limit']).toBe('2');
+      expect(allowed.headers['x-ratelimit-remaining']).toBe(remaining);
+    }
+    const refused = await api().get('/v1/tickets').set(bearer(slowKey)).expect(429);
+    expect(refused.body).toMatchObject({ code: 'rate_limited', policy: 'api_client' });
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+    // The rationed client's window is its own: the first key still answers.
+    await api().get('/v1/tickets').set(bearer(apiKey)).expect(200);
+    const events = await withSuperuser((client) =>
+      client.query<{ attrs: { policy: string; per_minute: number } }>(
+        `select attrs from sys.security_events where event_type = 'abuse.rate_limited'`,
+      ),
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(events.rows[0].attrs).toMatchObject({ policy: 'api_client', per_minute: 2 });
+    // A limit outside the column's range is refused before it reaches the database.
+    await api()
+      .post('/v1/admin/api-clients')
+      .set(bearer(adminToken))
+      .send({ name: 'Zero', scopes: ['tickets:view'], account_ids: [accountId], rate_limit_per_minute: 0 })
+      .expect(400);
+  });
 });
 
 describe('webhooks (INT-05)', () => {

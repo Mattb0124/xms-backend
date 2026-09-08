@@ -67,6 +67,7 @@ export class InMemoryPrincipals implements Pick<
       scopes: string[];
       expires_at: string | null;
       status: 'active' | 'revoked';
+      rate_limit_per_minute: number;
       accountIds: string[];
     }
   >();
@@ -127,6 +128,7 @@ export class InMemoryPrincipals implements Pick<
     scopes: Permission[],
     accountIds: string[],
     status: 'active' | 'revoked' = 'active',
+    ratePerMinute = 600,
   ) {
     const key = `${API_KEY_PREFIX}${randomUUID().replace(/-/g, '')}`;
     this.apiClients.set(apiKeyLookupHash(key), {
@@ -137,6 +139,7 @@ export class InMemoryPrincipals implements Pick<
       scopes,
       expires_at: null,
       status,
+      rate_limit_per_minute: ratePerMinute,
       accountIds,
     });
     return key;

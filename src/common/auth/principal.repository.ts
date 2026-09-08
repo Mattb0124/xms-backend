@@ -37,6 +37,8 @@ export interface ApiClientRow {
   readonly scopes: string[];
   readonly expires_at: string | null;
   readonly status: 'active' | 'revoked';
+  /** Requests per minute this client may make (Integrations technical 5); 600 by default. */
+  readonly rate_limit_per_minute: number;
 }
 
 export const API_KEY_PREFIX = 'xms_live_';
@@ -155,7 +157,7 @@ export class PrincipalRepository {
     if (!key.startsWith(API_KEY_PREFIX)) return undefined;
     const pool = this.pools.get('app');
     const result = await pool.query<ApiClientRow>(
-      `select id, name, service_user_id, secret_hash, scopes, expires_at, status
+      `select id, name, service_user_id, secret_hash, scopes, expires_at, status, rate_limit_per_minute
          from op.api_clients where lookup_hash = $1`,
       [apiKeyLookupHash(key)],
     );
