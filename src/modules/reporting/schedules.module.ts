@@ -471,8 +471,16 @@ export class PatchScheduleDto extends ScheduleFieldsDto {
   @IsInt() @Min(1) version!: number;
 }
 
+/**
+ * The reason a run was cancelled is the only record of why nothing shipped
+ * that period, so it is required. It is optional to the validator on
+ * purpose: a missing, empty or blank reason is one refusal in one shape,
+ * `400 { code: 'reason_required' }` from the service, rather than the
+ * validator's generic message for one of the three and silence for the
+ * other two.
+ */
 export class CancelRunDto {
-  @IsString() @MinLength(1) @MaxLength(500) reason!: string;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 export class RunNowDto {
@@ -977,19 +985,25 @@ export class SchedulesService {
     });
   }
 
-  /** Cancel with a reason: nothing is delivered and the reason stays on the run. */
+  /**
+   * Cancel with a reason: nothing is delivered and the reason stays on the
+   * run. A reason of spaces is no reason, so it is refused in the same
+   * shape as a missing one, and what is stored is the trimmed text.
+   */
   cancel(principal: Principal, ctx: RequestContext, id: string, dto: CancelRunDto) {
+    const reason = (dto.reason ?? '').trim();
+    if (!reason) throw new BadRequestException({ code: 'reason_required' });
     return this.uow.run(principal, async (tx) => {
       const { run, schedule, pack, period } = await this.heldRun(tx, id);
-      await this.repo.markCancelled(tx, run.id, principal.userId, dto.reason);
+      await this.repo.markCancelled(tx, run.id, principal.userId, reason);
       await this.transition(tx, run.account_id, run.id, 'report.run.cancelled', actorOf(principal), ctx, {
         schedule_id: schedule.id,
         pack_id: pack.id,
         period: [period.start, period.end],
         was: run.status,
-        reason: dto.reason,
+        reason,
       });
-      return { run_id: run.id, status: 'skipped', reason: dto.reason };
+      return { run_id: run.id, status: 'skipped', reason };
     });
   }
 

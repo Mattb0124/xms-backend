@@ -389,14 +389,31 @@ describe('review before send (DR-05, functional 5.8)', () => {
     });
     expect(await auditOf(held.run_id)).toEqual(['report.run.held_for_review', 'report.run.cancelled']);
     expect(await outboxOf(held.run_id)).toEqual(['report.run.held_for_review', 'report.run.cancelled']);
-    // A reason is required.
+    // A reason is required, and the refusal names itself: a missing one, an
+    // empty one and one of spaces are the same refusal in the same shape,
+    // not a validator message for two of them and a blank note for the
+    // third.
     const second = await hold({ period_start: '2026-09-15', period_end: '2026-09-21' });
-    await api().post(`/v1/reporting/runs/${second.run_id}/cancel`).set(bearer(adminToken)).send({}).expect(400);
-    await api()
+    for (const body of [{}, { reason: '' }, { reason: '   ' }]) {
+      const refused = await api()
+        .post(`/v1/reporting/runs/${second.run_id}/cancel`)
+        .set(bearer(adminToken))
+        .send(body)
+        .expect(400);
+      expect(refused.body).toMatchObject({ code: 'reason_required' });
+    }
+    // A refused cancel leaves the run held and its note empty.
+    const untouched = await withSuperuser((client) =>
+      client.query('select status, review_note from acct.report_runs where id = $1', [second.run_id]),
+    );
+    expect(untouched.rows[0]).toMatchObject({ status: 'ready_for_review', review_note: null });
+    // What is recorded is the trimmed text, not the padding around it.
+    const padded = await api()
       .post(`/v1/reporting/runs/${second.run_id}/cancel`)
       .set(bearer(adminToken))
-      .send({ reason: 'Superseded.' })
+      .send({ reason: '  Superseded.  ' })
       .expect(201);
+    expect(padded.body.reason).toBe('Superseded.');
   });
 
   it('the deadline expires the hold to awaiting review, reminds the reviewers and never sends', async () => {
