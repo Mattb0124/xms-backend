@@ -238,27 +238,51 @@ export class ReportingRepository extends RepositoryBase {
 
   // Security and usage tiles ----------------------------------------------
 
-  securityTiles(tx: Tx, days: number): Promise<Record<string, unknown>[]> {
+  /**
+   * The grant clause every read of `sys.security_events` carries. That
+   * table is an operator table with no policy of its own, so the session
+   * binding does nothing for it and the clause is the only thing standing
+   * between an `audit:read` holder bound to one account and every other
+   * account's security rows. The audit search writes the same clause for
+   * the same reason. Rows with no account (the portfolio-wide events) stay
+   * visible: that is the operator scope the permission grants.
+   */
+  private granted(position: number): string {
+    return ` and (account_id is null or account_id = any ($${position}::uuid[]))`;
+  }
+
+  securityTiles(tx: Tx, days: number, accountIds: readonly string[]): Promise<Record<string, unknown>[]> {
     return this.many(
       tx,
-      `select event_type, outcome, count(*)::int as n from sys.security_events where occurred_at >= now() - ($1::int * interval '1 day') group by 1, 2 order by 3 desc`,
-      [days],
+      `select event_type, outcome, count(*)::int as n from sys.security_events
+        where occurred_at >= now() - ($1::int * interval '1 day')${this.granted(2)}
+        group by 1, 2 order by 3 desc`,
+      [days, [...accountIds]],
     );
   }
 
-  signinFailures(tx: Tx, days: number): Promise<{ actor_id: string; ip_hash: string | null; n: number }[]> {
+  signinFailures(
+    tx: Tx,
+    days: number,
+    accountIds: readonly string[],
+  ): Promise<{ actor_id: string; ip_hash: string | null; n: number }[]> {
     return this.many(
       tx,
-      `select actor_id, ip_hash, count(*)::int as n from sys.security_events where event_type = 'auth.signin.failed' and occurred_at >= now() - ($1::int * interval '1 day') group by 1, 2 order by 3 desc limit 20`,
-      [days],
+      `select actor_id, ip_hash, count(*)::int as n from sys.security_events
+        where event_type = 'auth.signin.failed' and occurred_at >= now() - ($1::int * interval '1 day')${this.granted(2)}
+        group by 1, 2 order by 3 desc limit 20`,
+      [days, [...accountIds]],
     );
   }
 
-  isolationProbes(tx: Tx, days: number): Promise<{ actor_id: string; n: number }[]> {
+  isolationProbes(tx: Tx, days: number, accountIds: readonly string[]): Promise<{ actor_id: string; n: number }[]> {
     return this.many(
       tx,
-      `select actor_id, count(*)::int as n from sys.security_events where event_type in ('authz.isolation.filtered', 'authz.account.denied', 'authz.realm.denied') and occurred_at >= now() - ($1::int * interval '1 day') group by 1 order by 2 desc limit 20`,
-      [days],
+      `select actor_id, count(*)::int as n from sys.security_events
+        where event_type in ('authz.isolation.filtered', 'authz.account.denied', 'authz.realm.denied')
+          and occurred_at >= now() - ($1::int * interval '1 day')${this.granted(2)}
+        group by 1 order by 2 desc limit 20`,
+      [days, [...accountIds]],
     );
   }
 
@@ -267,24 +291,28 @@ export class ReportingRepository extends RepositoryBase {
    * the `abuse.*` group of the catalog): rate limits, bad webhook
    * signatures, suspected mail loops, rejected uploads and CSP reports.
    */
-  abuseByKind(tx: Tx, days: number): Promise<{ event_type: string; n: number }[]> {
+  abuseByKind(tx: Tx, days: number, accountIds: readonly string[]): Promise<{ event_type: string; n: number }[]> {
     return this.many(
       tx,
       `select event_type, count(*)::int as n from sys.security_events
-        where event_type like 'abuse.%' and occurred_at >= now() - ($1::int * interval '1 day')
+        where event_type like 'abuse.%' and occurred_at >= now() - ($1::int * interval '1 day')${this.granted(2)}
         group by 1 order by 2 desc`,
-      [days],
+      [days, [...accountIds]],
     );
   }
 
   /** Who the rate limiter turned away (`sys.security_events`, `abuse.rate_limited`). */
-  rateLimitedClients(tx: Tx, days: number): Promise<{ actor_id: string; principal_kind: string | null; n: number }[]> {
+  rateLimitedClients(
+    tx: Tx,
+    days: number,
+    accountIds: readonly string[],
+  ): Promise<{ actor_id: string; principal_kind: string | null; n: number }[]> {
     return this.many(
       tx,
       `select actor_id, principal_kind, count(*)::int as n from sys.security_events
-        where event_type = 'abuse.rate_limited' and occurred_at >= now() - ($1::int * interval '1 day')
+        where event_type = 'abuse.rate_limited' and occurred_at >= now() - ($1::int * interval '1 day')${this.granted(2)}
         group by 1, 2 order by 3 desc limit 20`,
-      [days],
+      [days, [...accountIds]],
     );
   }
 

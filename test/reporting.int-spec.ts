@@ -243,6 +243,66 @@ describe('dashboards', () => {
     expect(usage.body).toHaveProperty('api_errors');
   });
 
+  it('stops the security dashboard at the reader’s account grants', async () => {
+    // `sys.security_events` carries no policy of its own, so the session
+    // binding does nothing for it and the grant clause is the whole
+    // control. An auditor bound to one account must not read another
+    // account's sign-in failures, rate limits or isolation probes.
+    const role = await api()
+      .post('/v1/admin/roles')
+      .set(bearer(adminToken))
+      .send({ catalog: 'operator', name: 'Dashboard auditor', permissions: ['audit:read'] })
+      .expect(201);
+    await api()
+      .post('/v1/admin/users')
+      .set(bearer(adminToken))
+      .send({
+        email: 'dara@example.test',
+        first_name: 'Dara',
+        last_name: 'Nolan',
+        role_ids: [role.body.id],
+        account_ids: [accountId],
+      })
+      .expect(201);
+    const auditorToken = await devToken({ sub: 'dev_dara', email: 'dara@example.test', sid: 'sess_dara' });
+
+    await withSuperuser(async (client) => {
+      for (const [account, actor] of [
+        [accountId, 'mine@example.test'],
+        [otherAccountId, 'theirs@example.test'],
+      ]) {
+        await client.query(
+          `insert into sys.security_events (event_type, outcome, account_id, actor_kind, actor_id, ip_hash, principal_kind)
+           values ('auth.signin.failed', 'denied', $1, 'user', $2, 'hash-' || $2, 'portal')`,
+          [account, actor],
+        );
+        await client.query(
+          `insert into sys.security_events (event_type, outcome, account_id, actor_kind, actor_id, principal_kind)
+           values ('authz.account.denied', 'denied', $1, 'user', $2, 'internal')`,
+          [account, actor],
+        );
+        await client.query(
+          `insert into sys.security_events (event_type, outcome, account_id, actor_kind, actor_id, principal_kind)
+           values ('abuse.rate_limited', 'denied', $1, 'api_client', $2, 'api_client')`,
+          [account, actor],
+        );
+      }
+    });
+
+    const mine = await api().get('/v1/dashboards/security?days=7').set(bearer(auditorToken)).expect(200);
+    const actors = (rows: { actor_id: string }[]) => rows.map((row) => row.actor_id);
+    expect(actors(mine.body.signin_failures)).toContain('mine@example.test');
+    expect(actors(mine.body.signin_failures)).not.toContain('theirs@example.test');
+    expect(actors(mine.body.isolation_probes)).not.toContain('theirs@example.test');
+    expect(actors(mine.body.rate_limited_clients)).not.toContain('theirs@example.test');
+
+    // The administrator binds every live account and still sees both.
+    const all = await api().get('/v1/dashboards/security?days=7').set(bearer(adminToken)).expect(200);
+    expect(actors(all.body.signin_failures)).toEqual(
+      expect.arrayContaining(['mine@example.test', 'theirs@example.test']),
+    );
+  });
+
   it('the security dashboard counts every signal from the table that records it', async () => {
     const ticketId = await withSuperuser((client) =>
       client

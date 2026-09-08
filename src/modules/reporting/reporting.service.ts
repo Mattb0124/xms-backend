@@ -445,11 +445,11 @@ export class ReportingService {
    */
   securityDashboard(principal: Principal, days = 7) {
     return this.uow.run(principal, async (tx) => ({
-      by_type: await this.reporting.securityTiles(tx, days),
-      signin_failures: await this.reporting.signinFailures(tx, days),
-      isolation_probes: await this.reporting.isolationProbes(tx, days),
-      abuse_by_kind: await this.reporting.abuseByKind(tx, days),
-      rate_limited_clients: await this.reporting.rateLimitedClients(tx, days),
+      by_type: await this.reporting.securityTiles(tx, days, principal.accountIds),
+      signin_failures: await this.reporting.signinFailures(tx, days, principal.accountIds),
+      isolation_probes: await this.reporting.isolationProbes(tx, days, principal.accountIds),
+      abuse_by_kind: await this.reporting.abuseByKind(tx, days, principal.accountIds),
+      rate_limited_clients: await this.reporting.rateLimitedClients(tx, days, principal.accountIds),
       paused_integrations: await this.reporting.pausedIntegrations(tx),
       paused_integrations_by_reason: await this.reporting.pausedIntegrationsByReason(tx),
       quarantined_attachments: await this.reporting.quarantinedAttachments(tx, days),
