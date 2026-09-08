@@ -1,4 +1,4 @@
-import { readCappedJson, readCappedText } from '../../common/http/outbound.js';
+import { OutboundBodyTooLarge, readCappedBytes, readCappedJson, readCappedText } from '../../common/http/outbound.js';
 import { classifyHttpStatus, type ErrorClass } from '../../domain/sync/rules.js';
 
 /**
@@ -251,11 +251,18 @@ export class HttpSnowClient implements SnowClient {
       new URL(`/api/now/attachment/${encodeURIComponent(sysId)}/file`, this.baseUrl),
       { accept: '*/*' },
     );
-    const declared = Number(response.headers.get('content-length') ?? 0);
-    if (declared > maxBytes) throw new SnowError(0, `attachment ${sysId} is ${declared} bytes, over the limit`);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length > maxBytes) throw new SnowError(0, `attachment ${sysId} is over the limit`);
-    return bytes;
+    // Read through the cap rather than around it. `arrayBuffer()` buys the
+    // whole body before any check can refuse it, and an instance that omits
+    // `content-length` used to make the pre-check vacuous, so a chunked
+    // multi-gigabyte answer was a denial of service against the worker that
+    // runs every account's sync.
+    try {
+      return await readCappedBytes(response, maxBytes);
+    } catch (error) {
+      if (error instanceof OutboundBodyTooLarge)
+        throw new SnowError(0, `attachment ${sysId} is over the ${maxBytes} byte limit`);
+      throw new SnowError(0, (error as Error).message);
+    }
   }
 
   async uploadAttachment(

@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
+import { HttpSnowClient } from '../src/modules/connectors/snow-client.js';
 import { SyncWorker } from '../src/modules/connectors/sync.worker.js';
 import { startStandIn, type StandIn } from '../src/tools/servicenow-stand-in.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
@@ -1373,5 +1374,39 @@ describe('the outbound queue routes and the Sync card (SN-07, SN-09)', () => {
       .send({ version: promoted.body.version, mode: 'ingest_only' })
       .expect(200);
     expect(ingest.body.mode).toBe('ingest_only');
+  });
+});
+
+/**
+ * The download cap (review 2026-09-09 finding 3). The instance chooses both
+ * the size of the answer and whether it declares one, and the worker that
+ * reads it also runs every other account's sync, so an oversized body has to
+ * be refused while it is still on the wire rather than after it has been
+ * bought into the heap.
+ */
+describe('the attachment download cap', () => {
+  const client = () =>
+    new HttpSnowClient(standIn.url, { kind: 'basic', username: 'xms.integration', password: 'stand-in' });
+
+  it('refuses a body over the cap and one that declares no length', async () => {
+    const record = standIn.seed(TABLE, { short_description: 'A case with a file' });
+    const file = standIn.addAttachment(String(record.sys_id), 'small.txt', 'text/plain', Buffer.from('inside'));
+
+    // Inside the cap, declared: read as it always was.
+    expect((await client().downloadAttachment(file.sys_id, 4096)).toString()).toBe('inside');
+
+    // Declared and over: refused on the header.
+    standIn.fault = { attachmentBytes: 64 * 1024 };
+    await expect(client().downloadAttachment(file.sys_id, 4096)).rejects.toThrow(/over the 4096 byte limit/);
+
+    // No content-length at all: the old pre-check read this as zero bytes
+    // and let the whole body through.
+    standIn.fault = { attachmentBytes: 64 * 1024, attachmentWithoutLength: true };
+    await expect(client().downloadAttachment(file.sys_id, 4096)).rejects.toThrow(/over the 4096 byte limit/);
+
+    // Undeclared but inside the cap is still served.
+    standIn.fault = { attachmentWithoutLength: true };
+    expect((await client().downloadAttachment(file.sys_id, 4096)).toString()).toBe('inside');
+    standIn.fault = {};
   });
 });

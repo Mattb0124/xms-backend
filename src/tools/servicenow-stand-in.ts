@@ -26,6 +26,10 @@ export interface Fault {
   times?: number;
   timeoutMs?: number;
   invalidToken?: boolean;
+  /** Serve an attachment download of this many bytes, whatever the stored file holds. */
+  attachmentBytes?: number;
+  /** Serve the attachment download chunked, with no `content-length` at all. */
+  attachmentWithoutLength?: boolean;
 }
 
 /** One file on a record: the metadata the list returns and the bytes the download serves. */
@@ -256,8 +260,17 @@ export async function startStandIn(options: StandInOptions = {}): Promise<StandI
           json(404, { error: { message: 'No Record found' } });
           return;
         }
-        response.writeHead(200, { 'content-type': found.content_type, 'content-length': String(found.body.length) });
-        response.end(found.body);
+        // A hostile or misconfigured instance chooses the size and whether
+        // it declares one; both shapes are served on demand so the client's
+        // cap is tested against what it actually has to survive.
+        const served = state.fault.attachmentBytes ? Buffer.alloc(state.fault.attachmentBytes, 0x41) : found.body;
+        if (state.fault.attachmentWithoutLength) {
+          response.writeHead(200, { 'content-type': found.content_type, 'transfer-encoding': 'chunked' });
+          response.end(served);
+          return;
+        }
+        response.writeHead(200, { 'content-type': found.content_type, 'content-length': String(served.length) });
+        response.end(served);
         return;
       }
       if (url.pathname === '/api/now/attachment/file' && request.method === 'POST') {

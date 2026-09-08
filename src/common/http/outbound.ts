@@ -50,14 +50,23 @@ export class OutboundBodyTooLarge extends Error {
   }
 }
 
-/** Reads a response body through a byte cap, cancelling the stream past it. */
-export async function readCappedText(response: Response, limit = MAX_OUTBOUND_BODY_BYTES): Promise<string> {
-  const declared = Number(response.headers.get('content-length'));
-  if (Number.isFinite(declared) && declared > limit) {
+/**
+ * Reads a response body through a byte cap, cancelling the stream past it.
+ *
+ * A missing `content-length` is unknown, not zero: `Headers.get` answers
+ * `null` for an absent header and a chunked response carries none at all,
+ * so the pre-check is skipped and the reader loop is what holds the line.
+ * Nothing is ever materialised past the limit, which is the difference
+ * between refusing an oversized answer and buying it first.
+ */
+export async function readCappedBytes(response: Response, limit = MAX_OUTBOUND_BODY_BYTES): Promise<Buffer> {
+  const header = response.headers.get('content-length');
+  const declared = header === null ? undefined : Number(header);
+  if (declared !== undefined && Number.isFinite(declared) && declared > limit) {
     await discardBody(response);
     throw new OutboundBodyTooLarge(limit);
   }
-  if (!response.body) return '';
+  if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
   let size = 0;
@@ -71,7 +80,11 @@ export async function readCappedText(response: Response, limit = MAX_OUTBOUND_BO
     }
     chunks.push(Buffer.from(value));
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
+}
+
+export async function readCappedText(response: Response, limit = MAX_OUTBOUND_BODY_BYTES): Promise<string> {
+  return (await readCappedBytes(response, limit)).toString('utf8');
 }
 
 export async function readCappedJson<T>(response: Response, limit = MAX_OUTBOUND_BODY_BYTES): Promise<T> {

@@ -60,6 +60,15 @@ class CredentialDto {
  */
 export const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
 
+/**
+ * The ceiling on a connector's per-file download and upload budget. The
+ * value becomes the streaming cap on the attachment download, so leaving it
+ * unbounded meant an `admin:connectors` holder could hand a hostile
+ * instance the worker's whole heap. 100 MB is four times the platform's own
+ * default attachment ceiling and well past anything a ticket carries.
+ */
+export const MAX_ATTACHMENT_LIMIT_BYTES = 100 * 1024 * 1024;
+
 class CreateInstanceDto {
   @IsString() @MinLength(1) @MaxLength(80) name!: string;
   @IsString() @MaxLength(2000) base_url!: string;
@@ -83,7 +92,7 @@ class UpdateInstanceDto {
   @IsOptional() @IsInt() @Min(10) @Max(86400) poll_interval_seconds?: number;
   @IsOptional() @IsIn(['comments', 'work_notes']) journal_public?: string;
   @IsOptional() @IsBoolean() sync_work_notes?: boolean;
-  @IsOptional() @IsInt() @Min(0) attachment_limit_bytes?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(MAX_ATTACHMENT_LIMIT_BYTES) attachment_limit_bytes?: number;
   @IsOptional() @IsIn(['link', 'skip']) attachment_over_limit?: 'link' | 'skip';
   @IsOptional() @ValidateNested() @Type(() => ThresholdDto) error_trip_threshold?: ThresholdDto;
   @IsOptional() @Matches(TABLE_NAME) table_name?: string;
