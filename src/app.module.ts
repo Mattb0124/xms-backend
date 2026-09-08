@@ -30,6 +30,7 @@ import { ReportingModule } from './modules/reporting/reporting.module.js';
 import { TelemetryModule } from './modules/telemetry/telemetry.module.js';
 import { TimeModule } from './modules/time/time.module.js';
 import { TicketsModule } from './modules/tickets/tickets.module.js';
+import { RoutingModule } from './modules/tickets/routing.module.js';
 
 /**
  * Root module of the API. Feature modules are added one per spec module
@@ -51,6 +52,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     EngagementsModule,
     WaitingModule,
     TicketsModule,
+    RoutingModule,
     PortalModule,
     TimeModule,
     KnowledgeModule,

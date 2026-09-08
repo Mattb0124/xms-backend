@@ -318,6 +318,31 @@ export class UsersRepository extends RepositoryBase {
     return { added, removed };
   }
 
+  /**
+   * Open tickets still assigned to people leaving a group (TM-08: "removing
+   * a member with open assigned tickets lists them for reassignment"). The
+   * query lives here rather than in the ticket repository because the ticket
+   * module already depends on this one, so the dependency cannot run the
+   * other way. It reads under whatever account binding the caller holds, so
+   * an administrator sees the tickets on the accounts granted to them.
+   */
+  openAssignedTickets(
+    tx: Tx,
+    userIds: string[],
+  ): Promise<
+    { id: string; key: string; account_id: string; assignee_id: string; state: string; short_description: string }[]
+  > {
+    if (userIds.length === 0) return Promise.resolve([]);
+    return this.many(
+      tx,
+      `select id, 'CS' || lpad(number::text, 7, '0') as key, account_id, assignee_id, state, short_description
+         from acct.tickets
+        where assignee_id = any ($1::text[]) and state not in ('closed', 'cancelled')
+        order by account_id, number`,
+      [userIds],
+    );
+  }
+
   groupsOfUser(tx: Tx, userId: string): Promise<{ group_id: string; name: string }[]> {
     return this.many(
       tx,

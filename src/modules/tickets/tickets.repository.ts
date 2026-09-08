@@ -92,6 +92,8 @@ export interface ListFilters {
   priority?: string[];
   assigneeId?: string;
   groupId?: string;
+  /** The group queue: tickets assigned to any of these groups (TM-08). */
+  groupIds?: string[];
   unassigned?: boolean;
   open?: boolean;
   breached?: boolean;
@@ -192,6 +194,11 @@ export class TicketsRepository extends RepositoryBase {
     if (filters.priority?.length) add('priority = any (?::text[])', filters.priority);
     if (filters.assigneeId) add('assignee_id = ?', filters.assigneeId);
     if (filters.groupId) add('group_id = ?', filters.groupId);
+    if (filters.groupIds) {
+      // An empty list is an empty queue, not an absent filter.
+      if (filters.groupIds.length === 0) where.push('false');
+      else add('group_id = any (?::text[])', filters.groupIds);
+    }
     if (filters.requesterContactId) add('requester_contact_id = ?', filters.requesterContactId);
     if (filters.outOfScope?.length) add('out_of_scope = any (?::text[])', filters.outOfScope);
     if (filters.unassigned) where.push('assignee_id is null');

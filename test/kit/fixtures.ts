@@ -94,6 +94,11 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
   'acct.connector_instances': { type: 'servicenow' },
   // A finance destination carries the target column its kind names.
   'acct.finance_destinations': { kind: 'https', endpoint_url: 'https://finance.example.test/inbound' },
+  // One routing rule per (account, type, category): a null category would
+  // collide on the second fixture row, so each takes its own category.
+  'acct.group_routing_rules': {
+    category: (): Promise<unknown> => Promise.resolve(`fixture ${randomUUID().slice(0, 8)}`),
+  },
   // A link needs two distinct tickets; the second is created outside the cache.
   'acct.ticket_links': {
     to_ticket_id: (client: pg.Client, accountId: string) =>

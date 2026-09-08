@@ -20,6 +20,7 @@ import { UnitOfWork } from '../../db/unit-of-work.js';
 import { validate, type ConditionSet } from './conditions.js';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MaxJsonSize } from '../../common/validation/max-json-size.js';
+import { UsersRepository } from '../admin/users/users.repository.js';
 
 /**
  * Saved views (Ticket Management technical 2.5, 4; P2.11.1). A view is a
@@ -148,10 +149,22 @@ export class ViewsService {
     private readonly uow: UnitOfWork,
     private readonly views: ViewsRepository,
     private readonly audit: AuditService,
+    private readonly users: UsersRepository,
   ) {}
 
-  list(principal: Principal, groupIds: string[] = []): Promise<ViewRow[]> {
-    return this.uow.run(principal, (tx) => this.views.visible(tx, principal.userId, groupIds));
+  /**
+   * A view shared with a group is visible to that group's members (TM-08).
+   * The groups are read from op.group_members under the same transaction, so
+   * a client cannot widen what it sees by naming a group it is not in.
+   */
+  list(principal: Principal): Promise<ViewRow[]> {
+    return this.uow.run(principal, async (tx) => {
+      const groupIds =
+        principal.kind === 'portal'
+          ? []
+          : (await this.users.groupsOfUser(tx, principal.userId)).map((row) => row.group_id);
+      return this.views.visible(tx, principal.userId, groupIds);
+    });
   }
 
   get(principal: Principal, id: string): Promise<ViewRow> {

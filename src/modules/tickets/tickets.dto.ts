@@ -250,6 +250,16 @@ export class ListTicketsQueryDto {
   @IsBoolean()
   mine?: boolean;
 
+  /**
+   * The group queue (TM-08): every ticket assigned to a group the signed-in
+   * person belongs to. The groups are read from op.group_members on the
+   * server; the client never names them.
+   */
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  my_groups?: boolean;
+
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()

@@ -369,13 +369,20 @@ export class UsersService {
     });
   }
 
+  /**
+   * Reconciles the membership and answers with the members plus the work the
+   * people leaving still hold: "removing a member with open assigned tickets
+   * lists them for reassignment" (Accounts & Administration functional 5.6).
+   * The removal is not blocked, because a person may leave a team mid-flight;
+   * the screen is told what has to move.
+   */
   async replaceMembers(
     principal: Principal,
     ctx: RequestContext,
     id: string,
     dto: ReplaceMembersDto,
-  ): Promise<unknown[]> {
-    return this.uow.operator(async (tx) => {
+  ): Promise<{ members: unknown[]; reassign: unknown[] }> {
+    const result = await this.uow.operator(async (tx) => {
       await this.users.groupById(tx, id);
       for (const userId of dto.user_ids) {
         const user = await this.users.byId(tx, userId);
@@ -393,8 +400,12 @@ export class UsersService {
         },
       ]);
       await this.security.write(this.adminEvent(principal, ctx, 'admin.group.changed', 'group', id, change), tx);
-      return this.users.membersOf(tx, id);
+      return { members: await this.users.membersOf(tx, id), removed: change.removed };
     });
+    // Tickets are account-scoped, so the listing runs under the principal's
+    // own binding rather than the operator scope the membership write uses.
+    const reassign = await this.uow.run(principal, (tx) => this.users.openAssignedTickets(tx, result.removed));
+    return { members: result.members, reassign };
   }
 
   // Helpers ----------------------------------------------------------------

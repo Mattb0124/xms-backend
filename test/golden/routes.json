@@ -281,6 +281,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/routing-rules",
+    "controller": "RoutingController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/accounts/:accountId/routing-rules",
+    "controller": "RoutingController",
+    "handler": "replace",
+    "realm": "internal",
+    "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/time",
     "controller": "TimeController",
     "handler": "ofAccount",

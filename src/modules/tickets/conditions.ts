@@ -8,7 +8,7 @@ import { BadRequestException } from '@nestjs/common';
  * from the allowlist.
  */
 export type Operator =
-  'eq' | 'neq' | 'in' | 'not_in' | 'contains' | 'before' | 'after' | 'is_null' | 'is_not_null' | 'is_me';
+  'eq' | 'neq' | 'in' | 'not_in' | 'contains' | 'before' | 'after' | 'is_null' | 'is_not_null' | 'is_me' | 'is_mine';
 
 export interface Condition {
   readonly field: string;
@@ -31,7 +31,7 @@ export const OUT_OF_SCOPE = ['none', 'flagged', 'approved', 'declined'] as const
 
 interface FieldSpec {
   readonly column: string;
-  readonly kind: 'text' | 'enum' | 'timestamp' | 'boolean' | 'uuid' | 'actor';
+  readonly kind: 'text' | 'enum' | 'timestamp' | 'boolean' | 'uuid' | 'actor' | 'group';
   readonly values?: readonly string[];
 }
 
@@ -46,7 +46,10 @@ export const FIELDS: Record<string, FieldSpec> = {
   short_description: { column: 'short_description', kind: 'text' },
   account_id: { column: 'account_id', kind: 'uuid' },
   contract_id: { column: 'contract_id', kind: 'uuid' },
-  group_id: { column: 'group_id', kind: 'uuid' },
+  // The assignment group is a uuid the desk filters on like any other, plus
+  // `is_mine`, which is the "my groups" queue: the groups the signed-in
+  // person belongs to, resolved on the server from op.group_members (TM-08).
+  group_id: { column: 'group_id', kind: 'group' },
   assignee_id: { column: 'assignee_id', kind: 'actor' },
   created_by: { column: 'created_by', kind: 'actor' },
   created_at: { column: 'created_at', kind: 'timestamp' },
@@ -66,6 +69,7 @@ const OPERATORS_BY_KIND: Record<FieldSpec['kind'], readonly Operator[]> = {
   boolean: ['eq'],
   uuid: ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null'],
   actor: ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null', 'is_me'],
+  group: ['eq', 'neq', 'in', 'not_in', 'is_null', 'is_not_null', 'is_mine'],
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -78,7 +82,11 @@ export interface Translated {
 }
 
 /** Validates the set and returns a WHERE fragment with `$n` placeholders starting at `offset + 1`. */
-export function translate(set: ConditionSet, context: { userId: string }, offset = 0): Translated {
+export function translate(
+  set: ConditionSet,
+  context: { userId: string; groupIds?: readonly string[] },
+  offset = 0,
+): Translated {
   const problems = validate(set);
   if (problems.length > 0) throw new BadRequestException({ code: 'invalid_conditions', problems });
   const values: unknown[] = [];
@@ -130,6 +138,13 @@ export function translate(set: ConditionSet, context: { userId: string }, offset
       case 'is_me':
         parts.push(`${column} = ${bind(context.userId)}`);
         break;
+      case 'is_mine': {
+        // Belonging to no group is not the same as no filter: a person with no
+        // groups has an empty group queue, so the fragment matches nothing.
+        const groupIds = [...(context.groupIds ?? [])];
+        parts.push(groupIds.length === 0 ? 'false' : `${column} = any (${bind(groupIds)}::text[])`);
+        break;
+      }
     }
   }
   const joiner = set.match === 'any' ? ' or ' : ' and ';
@@ -153,7 +168,7 @@ export function validate(set: ConditionSet): string[] {
       problems.push(`condition ${index}: operator ${String(condition.op)} not allowed on ${condition.field}`);
       return;
     }
-    const needsValue = !['is_null', 'is_not_null', 'is_me'].includes(condition.op);
+    const needsValue = !['is_null', 'is_not_null', 'is_me', 'is_mine'].includes(condition.op);
     if (needsValue && (condition.value === undefined || condition.value === null || condition.value === '')) {
       problems.push(`condition ${index}: value required`);
       return;
@@ -171,7 +186,7 @@ export function validate(set: ConditionSet): string[] {
           ? [condition.value]
           : [];
     for (const scalar of scalars) {
-      if (spec.kind === 'uuid' && !UUID.test(String(scalar)))
+      if (isUuidKind(spec.kind) && !UUID.test(String(scalar)))
         problems.push(`condition ${index}: ${String(scalar)} is not a uuid`);
       if (spec.kind === 'enum' && spec.values && !spec.values.includes(String(scalar)))
         problems.push(`condition ${index}: ${String(scalar)} is not a ${condition.field}`);
@@ -181,6 +196,14 @@ export function validate(set: ConditionSet): string[] {
     }
   });
   return problems;
+}
+
+/**
+ * Kinds whose values must be uuids. The group column is stored as text
+ * (migration 0004), so its values are checked here but bound as text.
+ */
+function isUuidKind(kind: FieldSpec['kind']): boolean {
+  return kind === 'uuid' || kind === 'group';
 }
 
 function escapeLike(value: string): string {

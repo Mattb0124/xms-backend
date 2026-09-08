@@ -60,6 +60,24 @@ describe('condition translation', () => {
     expect(() => translate({ conditions: [{ field: 'x', op: 'eq', value: 1 }] }, me)).toThrow(BadRequestException);
   });
 
+  it('binds the group queue from the context and matches nothing when the person has no groups', () => {
+    const set: ConditionSet = { conditions: [{ field: 'group_id', op: 'is_mine' }] };
+    const mine = translate(set, { userId: 'user-1', groupIds: ['11111111-1111-4111-8111-111111111111'] });
+    expect(mine.sql).toBe('("group_id" = any ($1::text[]))');
+    expect(mine.values).toEqual([['11111111-1111-4111-8111-111111111111']]);
+    // No groups is an empty queue, not an unfiltered one.
+    expect(translate(set, me)).toEqual({ sql: '(false)', values: [] });
+  });
+
+  it('refuses is_mine on a field that is not a group and is_me on the group', () => {
+    expect(validate({ conditions: [{ field: 'assignee_id', op: 'is_mine' }] })).toEqual([
+      'condition 0: operator is_mine not allowed on assignee_id',
+    ]);
+    expect(validate({ conditions: [{ field: 'group_id', op: 'is_me' }] })).toEqual([
+      'condition 0: operator is_me not allowed on group_id',
+    ]);
+  });
+
   it('never interpolates a value into the SQL text', () => {
     const result = translate(
       { conditions: [{ field: 'category', op: 'eq', value: "'; drop table acct.tickets; --" }] },

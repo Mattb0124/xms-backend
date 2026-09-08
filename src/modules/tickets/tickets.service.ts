@@ -27,6 +27,7 @@ import {
 } from '../../domain/sla/engine.js';
 import { checkRequirements } from '../../domain/tickets/close-discipline.js';
 import { translate, type ConditionSet } from './conditions.js';
+import { RoutingRepository } from './routing.module.js';
 import { ViewsRepository } from './views.js';
 import { TimeRepository } from '../time/time.repository.js';
 import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
@@ -188,6 +189,7 @@ export class TicketsService {
     private readonly time: TimeRepository,
     private readonly knowledge: KnowledgeRepository,
     private readonly calendars: CalendarService,
+    private readonly routing: RoutingRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -211,16 +213,25 @@ export class TicketsService {
         conditions = view.definition.conditions;
         sort = sort ?? view.definition.sort;
       }
+      // The group queue (TM-08). Resolved from op.group_members here rather
+      // than taken from the query, so nobody can ask for another team's queue
+      // by naming its groups, and only when the request needs it.
+      const wantsGroups =
+        query.my_groups === true || (conditions?.conditions ?? []).some((condition) => condition.op === 'is_mine');
+      const groupIds = wantsGroups ? await this.groupsOf(tx, principal) : [];
       const page = await this.tickets.list(
         tx,
         {
           accountIds,
-          conditions: conditions ? (offset) => translate(conditions!, { userId: principal.userId }, offset) : undefined,
+          conditions: conditions
+            ? (offset) => translate(conditions!, { userId: principal.userId, groupIds }, offset)
+            : undefined,
           state: query.state,
           type: query.type,
           priority: query.priority,
           assigneeId: query.mine ? principal.userId : query.assignee_id,
           groupId: query.group_id,
+          groupIds: query.my_groups ? groupIds : undefined,
           unassigned: query.unassigned,
           open: query.open,
           breached: query.breached,
@@ -370,6 +381,10 @@ export class TicketsService {
         : undefined;
       const assignee = dto.assignee_id ? await this.assertAssignable(tx, dto.assignee_id) : undefined;
       if (dto.group_id) await this.assertGroup(tx, dto.group_id);
+      // Dispatch: what the caller asked for wins; otherwise the account's
+      // routing default for this type and category (TM-08). A default is a
+      // starting point, so a ticket with no matching rule simply has no group.
+      const groupId = dto.group_id ?? (await this.routing.resolve(tx, dto.account_id, dto.type, dto.category ?? null));
 
       const row = await this.tickets.insert(tx, {
         account_id: dto.account_id,
@@ -390,7 +405,7 @@ export class TicketsService {
               ? 'portal'
               : (dto.source ?? 'internal'),
         requester_contact_id: requester?.id ?? null,
-        group_id: dto.group_id ?? null,
+        group_id: groupId,
         assignee_id: assignee?.id ?? null,
         assignee_name: assignee ? name(assignee) : null,
         contract_id: contract.id,
@@ -420,6 +435,19 @@ export class TicketsService {
           eventType: 'ticket.created',
           newValue: { key: ticketKey(row.number), type: row.type, priority: row.priority, state: row.state },
         },
+        ...(groupId
+          ? [
+              {
+                entityKind: 'ticket',
+                entityId: row.id,
+                ticketId: row.id,
+                eventType: 'ticket.group_assigned' as const,
+                field: 'group_id',
+                oldValue: null,
+                newValue: groupId,
+              },
+            ]
+          : []),
         ...(assignee
           ? [
               {
@@ -444,6 +472,19 @@ export class TicketsService {
           origin: ctx.origin,
           payload: { key: ticketKey(row.number), type: row.type, priority: row.priority },
         });
+        if (groupId) {
+          // Says whether the desk chose the group or the account's routing
+          // default did, which is what makes a routing rule answerable later.
+          await this.outbox.write(tx, {
+            accountId: row.account_id,
+            aggregate: 'ticket',
+            aggregateId: row.id,
+            eventType: 'ticket.group_assigned',
+            correlationId,
+            origin: ctx.origin,
+            payload: { group_id: groupId, source: dto.group_id ? 'chosen' : 'routing_default' },
+          });
+        }
         if (assignee && assignee.id !== principal.userId) {
           await this.notifyAssignment(tx, row, assignee.id, principal.displayName, correlationId);
         }
@@ -557,6 +598,17 @@ export class TicketsService {
           { ticketId: before.id },
         ),
       );
+      if (assignments.group_id !== undefined && assignments.group_id !== before.group_id) {
+        entries.push({
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.group_assigned',
+          field: 'group_id',
+          oldValue: before.group_id,
+          newValue: (assignments.group_id as string | null) ?? null,
+        });
+      }
       if (newAssignee !== undefined) {
         entries.push({
           entityKind: 'ticket',
@@ -617,6 +669,17 @@ export class TicketsService {
           origin: ctx.origin,
           payload: { fields: entries.map((entry) => entry.field).filter(Boolean) },
         });
+      if (ctx.origin !== 'import' && assignments.group_id !== undefined && assignments.group_id !== before.group_id) {
+        await this.outbox.write(tx, {
+          accountId: before.account_id,
+          aggregate: 'ticket',
+          aggregateId: before.id,
+          eventType: 'ticket.group_assigned',
+          correlationId,
+          origin: ctx.origin,
+          payload: { group_id: assignments.group_id ?? null, previous_group_id: before.group_id },
+        });
+      }
       if (newAssignee) {
         await this.tickets.ensureWatcher(tx, before.account_id, before.id, newAssignee.id, 'assignee');
         if (newAssignee.id !== principal.userId)
@@ -1483,6 +1546,12 @@ export class TicketsService {
     if (user.kind !== 'internal' || user.status !== 'active')
       throw new BadRequestException({ code: 'not_assignable', userId });
     return user;
+  }
+
+  /** The assignment groups the signed-in person belongs to (TM-08). */
+  async groupsOf(tx: Tx, principal: Principal): Promise<string[]> {
+    if (principal.kind === 'portal') return [];
+    return (await this.users.groupsOfUser(tx, principal.userId)).map((row) => row.group_id);
   }
 
   private async assertGroup(tx: Tx, groupId: string): Promise<void> {

@@ -270,7 +270,9 @@ describe('accounts', () => {
       .set(asAdmin())
       .send({ user_ids: [consultantId] })
       .expect(200);
-    expect(members.body.map((member: { user_id: string }) => member.user_id)).toEqual([consultantId]);
+    expect(members.body.members.map((member: { user_id: string }) => member.user_id)).toEqual([consultantId]);
+    // Nobody left the group, so nothing waits to be reassigned (TM-08).
+    expect(members.body.reassign).toEqual([]);
     const directory = await api().get('/v1/groups').set(asAdmin(consultantToken)).expect(200);
     expect(directory.body.map((row: { name: string }) => row.name)).toEqual(['OneStream Technical']);
   });
