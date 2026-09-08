@@ -236,7 +236,8 @@ export class AttachmentsService {
   ): Promise<{ attachment: AttachmentRow; upload: Awaited<ReturnType<ObjectStore['presignUpload']>> }> {
     const contentType = dto.content_type.toLowerCase().split(';')[0].trim();
     const extension = dto.file_name.toLowerCase().split('.').pop() ?? '';
-    if (!ALLOWED_TYPES[contentType] || !ALLOWED_TYPES[contentType].includes(extension)) {
+    const extensions = Object.hasOwn(ALLOWED_TYPES, contentType) ? ALLOWED_TYPES[contentType] : undefined;
+    if (!extensions || !extensions.includes(extension)) {
       await this.security.write({
         type: 'abuse.upload.rejected',
         outcome: 'denied',

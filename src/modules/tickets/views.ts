@@ -19,6 +19,7 @@ import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { validate, type ConditionSet } from './conditions.js';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { MaxJsonSize } from '../../common/validation/max-json-size.js';
 
 /**
  * Saved views (Ticket Management technical 2.5, 4; P2.11.1). A view is a
@@ -101,6 +102,7 @@ export class CreateViewDto {
   name!: string;
 
   @IsObject()
+  @MaxJsonSize()
   definition!: ViewDefinition;
 
   @IsOptional()

@@ -57,7 +57,8 @@ export function translateEvents(query: EventQuery, offset = 0): { sql: string; v
   if (!Array.isArray(query.conditions) || query.conditions.length > 20)
     problems.push('conditions must be a list of at most 20');
   for (const [index, condition] of (query.conditions ?? []).entries()) {
-    const kind = FIELDS[condition.field];
+    // Own keys only: a prototype key would be emitted as a column name.
+    const kind = Object.hasOwn(FIELDS, condition.field) ? FIELDS[condition.field] : undefined;
     if (!kind) {
       problems.push(`condition ${index}: unknown field ${String(condition.field)}`);
       continue;

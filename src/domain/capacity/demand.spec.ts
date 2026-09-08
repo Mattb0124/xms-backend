@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demandTotals, parseDemandCsv } from './demand.js';
+import { demandTotals, MAX_DEMAND_PROBLEMS, MAX_DEMAND_ROWS, parseDemandCsv } from './demand.js';
 
 describe('demandTotals', () => {
   it('weights pipeline by probability and takes project hours as committed', () => {
@@ -87,7 +87,7 @@ describe('parseDemandCsv', () => {
       '2:source must be pipeline or project, got "plan"',
       '2:an account key or a prospect name is required',
       '2:month must be YYYY-MM, got "2026-13"',
-      '2:hours must be a number, got "x"',
+      '2:hours must be a number between 0 and 100000, got "x"',
       '2:probability must be between 0 and 1 (or a percent), got "2"',
       '3:an account key or a prospect name is required',
     ]);
@@ -97,5 +97,37 @@ describe('parseDemandCsv', () => {
       'missing column month',
       'missing column hours',
     ]);
+  });
+});
+
+describe('the import bounds', () => {
+  const header = 'source,account,prospect,month,hours,probability,role\n';
+
+  it('refuses a file with more rows than the import accepts, before parsing any of them', () => {
+    const rows = Array.from({ length: MAX_DEMAND_ROWS + 1 }, () => 'project,BRK,,2026-01,8,,consultant').join('\n');
+    const parsed = parseDemandCsv(header + rows);
+    expect(parsed.rows).toEqual([]);
+    expect(parsed.problems).toEqual([{ line: 0, problem: `at most ${MAX_DEMAND_ROWS} rows per import` }]);
+  });
+
+  it('mirrors the single-row bounds on hours and the prospect name', () => {
+    const parsed = parseDemandCsv(
+      header +
+        `pipeline,,${'x'.repeat(161)},2026-01,8,0.5,consultant\n` +
+        'pipeline,,Acme,2026-01,100001,0.5,consultant\n',
+    );
+    expect(parsed.rows).toEqual([]);
+    expect(parsed.problems.map((row) => row.problem)).toEqual([
+      'prospect name must be at most 160 characters',
+      'hours must be a number between 0 and 100000, got "100001"',
+    ]);
+  });
+
+  it('caps the problem list it serialises into the response', () => {
+    const rows = Array.from({ length: 300 }, () => 'plan,,,,,,').join('\n');
+    const parsed = parseDemandCsv(header + rows);
+    expect(parsed.problems.length).toBe(MAX_DEMAND_PROBLEMS + 1);
+    expect(parsed.problems.at(-1)).toMatchObject({ line: 0 });
+    expect(String(parsed.problems.at(-1)?.problem)).toMatch(/^and \d+ more$/);
   });
 });

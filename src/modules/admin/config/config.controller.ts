@@ -21,9 +21,11 @@ import {
 } from '../../../common/auth/decorators.js';
 import type { Principal } from '../../../common/auth/principal.js';
 import { CONFIG_KINDS, ConfigService, type ConfigKind } from './config.service.js';
+import { MaxJsonSize } from '../../../common/validation/max-json-size.js';
 
 class CreateVersionDto {
   @IsObject()
+  @MaxJsonSize(256 * 1024)
   body!: Record<string, unknown>;
 }
 

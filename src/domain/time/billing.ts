@@ -5,6 +5,7 @@
  * functional open questions), and the summary produced at submit and kept
  * with the period.
  */
+import { toCsvRows } from '../reporting/csv.js';
 export type BillingState = 'open' | 'submitted' | 'approved' | 'locked' | 'exported';
 export type BillingAction = 'submit' | 'reopen' | 'approve' | 'lock' | 'mark_exported';
 
@@ -159,10 +160,5 @@ export function periodSummary(lines: readonly FinanceLine[]): PeriodSummary {
 
 /** CSV with CRLF rows, quoting where needed and spreadsheet formula neutralisation. */
 export function toCsv(columns: readonly string[], rows: readonly FinanceRow[]): string {
-  const escape = (value: unknown): string => {
-    const text = value === null || value === undefined ? '' : String(value);
-    const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
-    return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-  };
-  return [columns.join(','), ...rows.map((row) => row.map(escape).join(','))].join('\r\n');
+  return toCsvRows(columns, rows);
 }

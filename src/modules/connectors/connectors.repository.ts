@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { ValidationReport } from '../../domain/sync/maps.js';
-import { RepositoryBase, type Tx } from '../../db/repository.base.js';
+import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 
 export interface InstanceRow {
   id: string;
@@ -196,7 +196,7 @@ export class ConnectorsRepository extends RepositoryBase {
   async touchInstance(tx: Tx, id: string, assignments: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(assignments);
     if (keys.length === 0) return;
-    const sets = keys.map((key, index) => `"${key}" = $${index + 2}`).join(', ');
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 2}`).join(', ');
     await tx.query(`update acct.connector_instances set ${sets} where id = $1`, [
       id,
       ...keys.map((key) => assignments[key]),
@@ -261,7 +261,7 @@ export class ConnectorsRepository extends RepositoryBase {
     }
     const keys = Object.keys(values);
     if (keys.length === 0) return;
-    const sets = keys.map((key, index) => `"${key}" = $${index + 2}`).join(', ');
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 2}`).join(', ');
     await tx.query(`update ${this.table(kind)} set ${sets} where id = $1`, [id, ...keys.map((key) => values[key])]);
   }
 
@@ -325,7 +325,7 @@ export class ConnectorsRepository extends RepositoryBase {
       values.last_conflict = JSON.stringify(values.last_conflict);
     const keys = Object.keys(values);
     if (keys.length === 0) return;
-    const sets = keys.map((key, index) => `"${key}" = $${index + 2}`).join(', ');
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 2}`).join(', ');
     await tx.query(`update acct.sync_links set ${sets} where id = $1`, [id, ...keys.map((key) => values[key])]);
   }
 

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { isStrongSealingKey } from '../domain/integrations/webhooks.js';
 
 /**
  * Environment contract for the API and the worker. Fails fast at boot on a
@@ -149,6 +150,34 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['IP_HASH_SALT'],
           message: 'required in production',
+        });
+      }
+      if (env.CORS_ORIGINS.length === 0 || env.CORS_ORIGINS.some((origin) => origin.startsWith('http://'))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CORS_ORIGINS'],
+          message: 'required in production, and every origin must be https',
+        });
+      }
+      if (!env.CLERK_AGENTS_AUDIENCE) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['CLERK_AGENTS_AUDIENCE'],
+          message: 'required in production: without it the Axel token is refused everywhere',
+        });
+      }
+      if (!env.SNS_WEBHOOK_SECRET) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['SNS_WEBHOOK_SECRET'],
+          message: 'required in production',
+        });
+      }
+      if (env.WEBHOOK_SECRETS_KEY && !isStrongSealingKey(env.WEBHOOK_SECRETS_KEY)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEBHOOK_SECRETS_KEY'],
+          message: 'must be 32 raw bytes or their 44-character base64 in production',
         });
       }
       if (env.SES_SNS_TOPIC_ARNS.length === 0) {

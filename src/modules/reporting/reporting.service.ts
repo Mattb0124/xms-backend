@@ -25,6 +25,7 @@ import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
 import { TimeRepository } from '../time/time.repository.js';
 import { translateEvents, type EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
+import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
 
 /**
  * Dashboards, exports, audit search and the basic WSR pack (Dashboards &
@@ -255,19 +256,12 @@ export class ReportingService {
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
       let body: Buffer;
       if (format === 'csv') {
-        const escape = (value: unknown): string => {
-          const text = String(value ?? '');
-          // Neutralise spreadsheet formula injection and quote as needed.
-          const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
-          return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-        };
-        body = Buffer.from([columns.join(','), ...rows.map((row) => row.map(escape).join(','))].join('\r\n'), 'utf8');
+        body = Buffer.from(toCsvRows(columns, rows), 'utf8');
       } else {
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet('Tickets');
         sheet.addRow(columns);
-        for (const row of rows)
-          sheet.addRow(row.map((value) => (typeof value === 'string' && /^[=+\-@]/.test(value) ? `'${value}` : value)));
+        for (const row of rows) sheet.addRow(row.map(neutraliseCell));
         sheet.getRow(1).font = { bold: true };
         body = Buffer.from(await workbook.xlsx.writeBuffer());
       }
@@ -347,14 +341,10 @@ export class ReportingService {
       'outcome',
       'attrs',
     ];
-    const escape = (value: unknown): string => {
-      const text = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
-      const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
-      return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-    };
     const body = Buffer.from(
-      [columns.join(','), ...result.items.map((row) => columns.map((column) => escape(row[column])).join(','))].join(
-        '\r\n',
+      toCsvRows(
+        columns,
+        result.items.map((row) => columns.map((column) => row[column])),
       ),
       'utf8',
     );

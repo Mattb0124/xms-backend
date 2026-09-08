@@ -12,6 +12,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { MaxJsonSize } from '../../../common/validation/max-json-size.js';
 
 export class CreateAccountDto {
   @IsString()
@@ -75,6 +76,7 @@ export class UpdateAccountDto {
 
   @IsOptional()
   @IsObject()
+  @MaxJsonSize()
   branding?: Record<string, unknown>;
 
   @IsOptional()
@@ -109,10 +111,12 @@ export class UpdateAccountSettingsDto {
 
   @IsOptional()
   @IsObject()
+  @MaxJsonSize()
   ai_opt_ins?: Record<string, string>;
 
   @IsOptional()
   @IsObject()
+  @MaxJsonSize()
   email_branding?: Record<string, unknown>;
 
   @IsOptional()

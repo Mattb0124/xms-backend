@@ -18,6 +18,9 @@ import { loadEnv } from './config/env.js';
  * without a pipe), helmet sets the security headers, versioning is URI-based
  * (`/v1/...`). The worker has its own entrypoint in worker/main.ts.
  */
+/** The largest request body any route accepts; the demand import is the largest of them. */
+export const BODY_LIMIT = '1mb';
+
 async function bootstrap(): Promise<void> {
   const env = loadEnv();
   const logger = createLogger(env, 'xms-api');
@@ -33,6 +36,12 @@ async function bootstrap(): Promise<void> {
   if (env.TRUST_PROXY) {
     app.set('trust proxy', trustProxyValue(env.TRUST_PROXY));
   }
+
+  // Stated rather than inherited: without this the effective cap is
+  // Express's implicit 100 kB, which silently contradicts the 900 kB demand
+  // import DTO. One documented number, and the routes that need more say so.
+  app.useBodyParser('json', { limit: BODY_LIMIT });
+  app.useBodyParser('urlencoded', { limit: BODY_LIMIT, extended: true });
 
   app.use(helmet());
   app.use(requestContextMiddleware);

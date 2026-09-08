@@ -145,11 +145,17 @@ const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 describe('billing auto-lock', () => {
   it('leaves an approved period alone until its instant, then locks it once with the summary and the outbox event', async () => {
     expect(await periods.lockDue()).toBe('locked 0');
-    await withSuperuser((client) =>
-      client.query(`update acct.billing_periods set auto_lock_at = now() - interval '1 minute' where id = $1`, [
+    // acct.billing_periods carries sys.require_audit from 0026; this
+    // fixture is a clock change, not an operator intent, so it disables the
+    // triggers for its own statement rather than writing a false audit row.
+    await withSuperuser(async (client) => {
+      await client.query('begin');
+      await client.query('set local session_replication_role = replica');
+      await client.query(`update acct.billing_periods set auto_lock_at = now() - interval '1 minute' where id = $1`, [
         periodId,
-      ]),
-    );
+      ]);
+      await client.query('commit');
+    });
     expect(await periods.lockDue()).toBe('locked 1');
     expect(await periods.lockDue()).toBe('locked 0');
     const listed = await api().get(`/v1/accounts/${accountId}/billing-periods`).set(bearer(adminToken)).expect(200);

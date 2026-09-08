@@ -35,7 +35,7 @@
     "controller": "TimeController",
     "handler": "billingPeriods",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -145,7 +145,7 @@
     "controller": "TimeController",
     "handler": "budget",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -155,7 +155,7 @@
     "controller": "TimeController",
     "handler": "budgetEntries",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -165,7 +165,7 @@
     "controller": "ContractsController",
     "handler": "list",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -195,7 +195,7 @@
     "controller": "TimeController",
     "handler": "periods",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -215,7 +215,7 @@
     "controller": "TimeController",
     "handler": "position",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -235,7 +235,7 @@
     "controller": "TimeController",
     "handler": "rateCards",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -255,7 +255,7 @@
     "controller": "TimeController",
     "handler": "ofAccount",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -265,7 +265,7 @@
     "controller": "TimeController",
     "handler": "compTime",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },
@@ -1475,7 +1475,7 @@
     "controller": "EmailController",
     "handler": "raw",
     "realm": "internal",
-    "permission": "tickets:view",
+    "permission": "tickets:work",
     "public": null,
     "axel": false
   },

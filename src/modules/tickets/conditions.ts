@@ -80,6 +80,7 @@ export function translate(set: ConditionSet, context: { userId: string }, offset
     return `$${offset + values.length}`;
   };
   for (const condition of set.conditions) {
+    // validate() has already refused any field that is not an own key.
     const spec = FIELDS[condition.field];
     const column = `"${spec.column}"`;
     switch (condition.op) {
@@ -133,7 +134,9 @@ export function validate(set: ConditionSet): string[] {
   if (set.conditions.length > MAX_CONDITIONS) problems.push(`at most ${MAX_CONDITIONS} conditions`);
   if (set.match !== undefined && set.match !== 'all' && set.match !== 'any') problems.push('match must be all or any');
   set.conditions.forEach((condition, index) => {
-    const spec = FIELDS[condition.field];
+    // Own keys only: "constructor" and "toString" are not fields, and
+    // reaching Object.prototype here turns a bad request into a 500.
+    const spec = Object.hasOwn(FIELDS, condition.field) ? FIELDS[condition.field] : undefined;
     if (!spec) {
       problems.push(`condition ${index}: unknown field ${String(condition.field)}`);
       return;

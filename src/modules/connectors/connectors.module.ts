@@ -6,6 +6,7 @@ import {
   Module,
   NotFoundException,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -204,15 +205,11 @@ export class ConnectorsController {
     @Query('outcome') outcome?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
-    @Query('limit') limit?: string,
+    // Parsed rather than coerced: `?limit=abc` was NaN, bound as a Postgres
+    // limit and rejected, a 500 where a 400 belongs.
+    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
   ) {
-    return this.connectors.runs(principal, instanceId, {
-      direction,
-      outcome,
-      from,
-      to,
-      limit: limit ? Number(limit) : undefined,
-    });
+    return this.connectors.runs(principal, instanceId, { direction, outcome, from, to, limit });
   }
 
   @Get('connectors/:instanceId/dead-letters')

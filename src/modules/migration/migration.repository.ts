@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { RepositoryBase, type Tx } from '../../db/repository.base.js';
+import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 
 export interface BatchRow {
   id: string;
@@ -124,7 +124,7 @@ export class MigrationRepository extends RepositoryBase {
       if (key in values && values[key] !== null) values[key] = JSON.stringify(values[key]);
     const keys = Object.keys(values);
     if (keys.length === 0) return;
-    const sets = keys.map((key, index) => `"${key}" = $${index + 2}`).join(', ');
+    const sets = keys.map((key, index) => `${quoteIdent(key)} = $${index + 2}`).join(', ');
     await tx.query(`update acct.import_batches set ${sets} where id = $1`, [id, ...keys.map((key) => values[key])]);
   }
 

@@ -232,7 +232,10 @@ describe('CSAT on ticket close (CP-07)', () => {
     // logs, and is forwarded verbatim with the mail (finding 9).
     const prompt = mail.sent.at(-1);
     expect(prompt).toBeDefined();
-    const body = prompt!.raw.toString('utf8').replace(/=\r?\n/g, '');
+    const body = prompt!.raw
+      .toString('utf8')
+      .replace(/=\r?\n/g, '')
+      .replace(/=3D/gi, '=');
     const link = /https?:\/\/\S*\/portal\/surveys\/[0-9a-f-]+#token=[A-Za-z0-9_-]+/.exec(body);
     expect(link).not.toBeNull();
     expect(body).not.toMatch(/\/portal\/surveys\/[0-9a-f-]+\?token=/);

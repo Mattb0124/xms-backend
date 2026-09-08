@@ -155,6 +155,17 @@ export function newSecret(): { secret: string; kid: string } {
   return { secret: `whsec_${randomBytes(24).toString('base64url')}`, kid: randomBytes(6).toString('hex') };
 }
 
+/**
+ * A sealing key must carry 32 bytes of entropy: either 32 raw bytes or the
+ * 44-character base64 of them. Anything else is stretched by a single
+ * HMAC with a fixed public salt, which is brute-forceable offline against a
+ * stolen ciphertext, so production refuses it at boot (finding 23).
+ */
+export function isStrongSealingKey(key: string): boolean {
+  if (key.length === 44 && /^[A-Za-z0-9+/=]+$/.test(key)) return Buffer.from(key, 'base64').length === 32;
+  return Buffer.byteLength(key, 'utf8') === 32;
+}
+
 function keyBytes(key: string): Buffer {
   const raw = Buffer.from(key, key.length === 44 && /^[A-Za-z0-9+/=]+$/.test(key) ? 'base64' : 'utf8');
   if (raw.length === 32) return raw;

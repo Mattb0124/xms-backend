@@ -157,10 +157,9 @@ function step(action: string, token: string, version = periodVersion) {
 
 describe('billing period lifecycle (functional 5.7)', () => {
   it('lists the periods and refuses an export before the lock', async () => {
-    const listed = await api()
-      .get(`/v1/accounts/${accountId}/billing-periods`)
-      .set(bearer(consultantToken))
-      .expect(200);
+    // Billing is commercial: a consultant does not read it (finding 22).
+    await api().get(`/v1/accounts/${accountId}/billing-periods`).set(bearer(consultantToken)).expect(403);
+    const listed = await api().get(`/v1/accounts/${accountId}/billing-periods`).set(bearer(adminToken)).expect(200);
     expect(listed.body.map((row: { id: string; status: string }) => `${row.id}:${row.status}`)).toEqual([
       `${periodId}:open`,
     ]);

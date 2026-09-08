@@ -38,7 +38,7 @@ import {
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { actorOf, AuditService, type AuditEntry } from '../../common/audit/audit.service.js';
-import { RepositoryBase, type Tx } from '../../db/repository.base.js';
+import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 
 /**
@@ -155,7 +155,7 @@ export class RosterRepository extends RepositoryBase {
     return this.one<PersonRow>(
       tx,
       'person',
-      `insert into op.people (${keys.map((key) => `"${key}"`).join(', ')}) values (${keys.map((_, index) => `$${index + 1}`).join(', ')}) returning *`,
+      `insert into op.people (${keys.map(quoteIdent).join(', ')}) values (${keys.map((_, index) => `$${index + 1}`).join(', ')}) returning *`,
       keys.map((key) => values[key]),
     ).then(numeric);
   }

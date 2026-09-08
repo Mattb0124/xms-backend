@@ -35,6 +35,7 @@ import { AxelService } from './axel.service.js';
 import { FetchHarnessClient, HARNESS_CLIENT, NoHarnessClient, type HarnessClient } from './harness-client.js';
 import { SessionTokenService } from './session-token.service.js';
 import { SuggestionService } from './suggestion.service.js';
+import { MaxJsonSize } from '../../common/validation/max-json-size.js';
 
 class TurnDto {
   @IsIn(['desk_assistant'])
@@ -81,6 +82,7 @@ class ProposeDto {
   target_id!: string;
 
   @IsObject()
+  @MaxJsonSize()
   payload!: Record<string, unknown>;
 
   @IsOptional()
@@ -100,6 +102,7 @@ class DecisionDto {
 
   @IsOptional()
   @IsObject()
+  @MaxJsonSize()
   applied_payload?: Record<string, unknown>;
 
   @IsOptional()
@@ -159,6 +162,7 @@ class AiSettingsDto {
 
 class DefaultsDto {
   @IsObject()
+  @MaxJsonSize()
   body!: Record<string, unknown>;
 }
 

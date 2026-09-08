@@ -15,6 +15,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { MaxJsonSize } from '../../common/validation/max-json-size.js';
 
 const TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
 const LEVELS = ['high', 'medium', 'low'] as const;
@@ -124,6 +125,7 @@ export class PatchTicketDto {
 
   @IsOptional()
   @IsObject()
+  @MaxJsonSize(8 * 1024)
   external_refs?: Record<string, string>;
 }
 

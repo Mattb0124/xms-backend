@@ -407,7 +407,9 @@ export class CreateDemandDto {
 }
 
 export class ImportDemandDto {
-  @IsString() @MaxLength(2_000_000) content!: string;
+  // Within the global 1 MB body limit, and roughly MAX_DEMAND_ROWS rows of
+  // the template. The parser caps the rows again, so the two agree.
+  @IsString() @MaxLength(900_000) content!: string;
 }
 
 export class AllocationCellDto {

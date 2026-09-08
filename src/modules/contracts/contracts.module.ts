@@ -386,7 +386,7 @@ export class ContractsController {
   constructor(private readonly contracts: ContractsService) {}
 
   @Get()
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   list(@CurrentPrincipal() principal: Principal, @Param('accountId', ParseUUIDPipe) accountId: string) {
     return this.contracts.list(principal, accountId);
   }

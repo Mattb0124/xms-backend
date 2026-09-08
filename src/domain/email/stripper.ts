@@ -34,9 +34,15 @@ export interface StripResult {
   readonly removed: { quoted: boolean; signature: boolean; disclaimer: boolean };
 }
 
+/**
+ * Beyond this the body is quoted history or an attachment transcription,
+ * not a reply, and every pattern here is linear in the input.
+ */
+export const MAX_STRIP_CHARS = 512 * 1024;
+
 export function stripReply(body: string): StripResult {
   const { quote, signature, disclaimer } = patterns();
-  let text = body.replace(/\r\n/g, '\n');
+  let text = body.slice(0, MAX_STRIP_CHARS).replace(/\r\n/g, '\n');
   let quoted = false;
   let sig = false;
   let disc = false;
@@ -48,7 +54,10 @@ export function stripReply(body: string): StripResult {
     if (match && match.index !== undefined && (cut === -1 || match.index < cut)) cut = match.index;
   }
   // Lines starting with ">" from the first such line to the end.
-  const firstQuoteLine = text.search(/^\s*>/m);
+  // `\s` matches a newline, so `^\s*>` crosses line boundaries and
+  // backtracks from every line start on a body that is one long whitespace
+  // run: quadratic. A quote marker is always at the start of its own line.
+  const firstQuoteLine = text.search(/^[ \t]*>/m);
   if (firstQuoteLine !== -1 && (cut === -1 || firstQuoteLine < cut)) cut = firstQuoteLine;
   if (cut > 0) {
     text = text.slice(0, cut);

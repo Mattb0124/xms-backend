@@ -123,7 +123,7 @@ export class EmailController {
   }
 
   @Get('email/inbound/:id/raw')
-  @RequirePermission('tickets:view')
+  @RequirePermission('tickets:work')
   raw(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,

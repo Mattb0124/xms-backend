@@ -182,7 +182,10 @@ describe('rate cards (TB-05)', () => {
       .set(bearer(consultantToken))
       .send({ effective_from: '2026-03-01', entries: [{ role: 'consultant', bill_rate: 1 }] })
       .expect(403);
-    const listed = await api().get(`/v1/accounts/${accountId}/rate-cards`).set(bearer(consultantToken)).expect(200);
+    // Rate cards are commercial: reading them needs contracts:view, which
+    // a consultant does not hold (finding 22).
+    await api().get(`/v1/accounts/${accountId}/rate-cards`).set(bearer(consultantToken)).expect(403);
+    const listed = await api().get(`/v1/accounts/${accountId}/rate-cards`).set(bearer(adminToken)).expect(200);
     expect(listed.body).toHaveLength(1);
   });
 
@@ -268,7 +271,8 @@ describe('overage (TB-11)', () => {
 
 describe('budget view (TB-07, TB-08)', () => {
   it('carries position, forecast, thresholds and the unrated figure per contract', async () => {
-    const view = await api().get(`/v1/accounts/${accountId}/budget`).set(bearer(consultantToken)).expect(200);
+    await api().get(`/v1/accounts/${accountId}/budget`).set(bearer(consultantToken)).expect(403);
+    const view = await api().get(`/v1/accounts/${accountId}/budget`).set(bearer(adminToken)).expect(200);
     expect(view.body.as_of).toBe(today);
     expect(view.body.contracts).toHaveLength(1);
     const card = view.body.contracts[0];
@@ -284,7 +288,7 @@ describe('budget view (TB-07, TB-08)', () => {
       .get(
         `/v1/accounts/${accountId}/budget/entries?contract=${contractId}&person=${consultantId}&from=${monthStart}&to=${monthEnd}`,
       )
-      .set(bearer(consultantToken))
+      .set(bearer(adminToken))
       .expect(200);
     expect(entries.body.total_minutes).toBe(720);
     expect(entries.body.total_amount).toBe(225 + 600 + 75 + 1000 + 250);

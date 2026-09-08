@@ -184,10 +184,24 @@ describe('time on tickets', () => {
     expect(listed.body.total_minutes).toBe(45);
   });
 
-  it('computes the contract position on the server', async () => {
+  it('keeps the commercial reads off tickets:view and computes the contract position on the server', async () => {
+    // Contract position, rate cards, budget, account time and billing are
+    // commercial: a consultant works tickets and does not read them
+    // (security review finding 22).
+    for (const path of [
+      `/v1/accounts/${accountId}/contracts/${contractId}/position`,
+      `/v1/accounts/${accountId}/contracts`,
+      `/v1/accounts/${accountId}/rate-cards`,
+      `/v1/accounts/${accountId}/budget`,
+      `/v1/accounts/${accountId}/time`,
+      `/v1/accounts/${accountId}/billing-periods`,
+    ]) {
+      const refused = await api().get(path).set(bearer(consultantToken)).expect(403);
+      expect(refused.body).toMatchObject({ code: 'forbidden', permission: 'contracts:view' });
+    }
     const position = await api()
       .get(`/v1/accounts/${accountId}/contracts/${contractId}/position`)
-      .set(bearer(consultantToken))
+      .set(bearer(adminToken))
       .expect(200);
     expect(position.body).toMatchObject({
       contract: { id: contractId, model: 'retainer' },

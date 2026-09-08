@@ -42,7 +42,7 @@ import type { MailTransport } from '../../common/mail/mail-transport.js';
 import type { ObjectStore } from '../../common/storage/object-store.js';
 import { MAIL_TRANSPORT, OBJECT_STORE, StorageCoreModule } from '../../common/storage/storage.module.js';
 import { DbPools } from '../../db/pool.js';
-import { RepositoryBase, type Tx } from '../../db/repository.base.js';
+import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { nextRunAt, periodBefore, type Cadence, type PeriodKind } from '../../domain/reporting/schedule.js';
 import type { Job } from '../../worker/jobs.js';
@@ -126,7 +126,7 @@ export class SchedulesRepository extends RepositoryBase {
     return this.one(
       tx,
       'report_schedule',
-      `insert into acct.report_schedules (${keys.map((key) => `"${key}"`).join(', ')})
+      `insert into acct.report_schedules (${keys.map(quoteIdent).join(', ')})
        values (${keys.map((_, index) => `$${index + 1}`).join(', ')}) returning *, run_time::text as run_time`,
       keys.map((key) => values[key]),
     );

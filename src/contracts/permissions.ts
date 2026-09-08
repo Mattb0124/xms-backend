@@ -17,6 +17,7 @@ export const OPERATOR_PERMISSIONS = {
   'time:log': 'Log time on tickets and buckets',
   'time:adjust': 'Adjust or write off time entries',
   'time:lock-period': 'Lock billing periods',
+  'contracts:view': 'Read contracts, rate cards, budget, account time and billing periods',
   'contracts:manage': 'Manage contracts, periods and rate cards',
   'capacity:view': 'View the roster, skills and capacity',
   'capacity:manage': 'Manage roster, skills and allocations',
@@ -64,13 +65,17 @@ export const PERMISSION_IMPLICATIONS: Partial<Record<Permission, readonly Permis
   'time:adjust': ['time:log'],
   'time:lock-period': ['time:adjust'],
   'capacity:manage': ['capacity:view'],
-  'contracts:manage': ['tickets:view'],
+  'contracts:view': ['tickets:view'],
+  'contracts:manage': ['contracts:view'],
   'reports:manage': ['reports:view-portfolio'],
   'kb:publish': ['kb:author'],
   'ai:configure': ['ai:use'],
   'audit:export': ['audit:read'],
   'analytics:read-individual': ['analytics:read'],
-  'admin:users': ['admin:accounts', 'admin:api-clients'],
+  // Managing users is not managing accounts: the widening was not
+  // intended and account administration binds every live account
+  // (Security & Tenancy section 3, recorded as a deviation).
+  'admin:users': ['admin:api-clients'],
   'admin:api-clients': ['webhooks:manage', 'exports:read'],
   'portal:view-org-tickets': ['portal:submit'],
   'portal:comment': ['portal:submit'],
@@ -133,6 +138,7 @@ export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>
       'ai:configure',
       'audit:export',
       'analytics:read-individual',
+      'admin:accounts',
       'admin:users',
       'admin:config',
       'admin:connectors',
@@ -140,6 +146,9 @@ export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>
     ],
     Consultant: ['tickets:resolve', 'time:log', 'kb:author', 'ai:use'],
     Dispatcher: ['tickets:work', 'tickets:override-priority', 'reports:view-portfolio', 'capacity:view', 'ai:use'],
+    // Consultants and dispatchers work tickets; rate cards, budget, contract
+    // position and account time are commercial and stay behind
+    // contracts:view, which contracts:manage implies.
     'Account Owner': [
       'tickets:resolve',
       'tickets:override-priority',

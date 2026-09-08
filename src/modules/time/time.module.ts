@@ -70,6 +70,7 @@ import { ContractsRepository } from '../contracts/contracts.module.js';
 import { TicketsCoreModule } from '../tickets/tickets.module.js';
 import { TicketsRepository } from '../tickets/tickets.repository.js';
 import { TimeRepository, type BillingExportRow, type BillingPeriodRow, type TimeEntryRow } from './time.repository.js';
+import { neutraliseCell } from '../../domain/reporting/csv.js';
 
 /**
  * Time, Contracts & Budget (02-modules/time-and-budget, cut per Thirty-Day
@@ -747,8 +748,7 @@ export class TimeService {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Finance');
       sheet.addRow([...FINANCE_COLUMNS]);
-      for (const row of rows)
-        sheet.addRow(row.map((value) => (typeof value === 'string' && /^[=+\-@]/.test(value) ? `'${value}` : value)));
+      for (const row of rows) sheet.addRow(row.map(neutraliseCell));
       sheet.getRow(1).font = { bold: true };
       body = Buffer.from(await workbook.xlsx.writeBuffer());
     }
@@ -1161,7 +1161,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/time')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   ofAccount(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1172,13 +1172,13 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/budget')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   budget(@CurrentPrincipal() principal: Principal, @Param('accountId', ParseUUIDPipe) accountId: string) {
     return this.time.budget(principal, accountId);
   }
 
   @Get('accounts/:accountId/budget/entries')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   budgetEntries(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1200,7 +1200,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/rate-cards')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   rateCards(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1221,7 +1221,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/time/comp-time')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   compTime(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1232,7 +1232,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/contracts/:contractId/position')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   position(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1242,7 +1242,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/contracts/:contractId/periods')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   periods(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,
@@ -1314,7 +1314,7 @@ export class TimeController {
   }
 
   @Get('accounts/:accountId/billing-periods')
-  @RequirePermission('tickets:view')
+  @RequirePermission('contracts:view')
   billingPeriods(@CurrentPrincipal() principal: Principal, @Param('accountId', ParseUUIDPipe) accountId: string) {
     return this.time.billingPeriods(principal, accountId);
   }
