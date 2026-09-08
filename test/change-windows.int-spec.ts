@@ -163,6 +163,14 @@ async function setConfigurationItem(ticketId: string, itemId: string): Promise<v
   });
 }
 
+const outboxOf = (ticketId: string, eventType: string) =>
+  withSuperuser((client) =>
+    client.query<{ payload: Record<string, unknown> }>(
+      `select payload from sys.outbox where aggregate_id = $1 and event_type = $2`,
+      [ticketId, eventType],
+    ),
+  ).then((result) => result.rows);
+
 const auditOf = (ticketId: string, eventType: string) =>
   withSuperuser((client) =>
     client.query(`select new_value from acct.audit_events where entity_id = $1 and event_type = $2`, [
@@ -318,6 +326,35 @@ describe('implementing inside the window', () => {
     const audit = await auditOf(outside.id, 'ticket.change_window_overridden');
     expect(audit).toHaveLength(1);
     expect(audit[0].new_value).toMatchObject({ window: 'Azure Files cutover' });
+
+    // An override of a freeze is announced, not only recorded: the
+    // connector, the notification fan-out and any client alerting all read
+    // the outbox, and the audit table is not a thing they query.
+    const published = await outboxOf(outside.id, 'ticket.change_window_overridden');
+    expect(published).toHaveLength(1);
+    expect(published[0].payload).toMatchObject({
+      window: 'Azure Files cutover',
+      reason: 'P1 incident forced the change forward; the client approved by phone.',
+      window_id: futureWindowId,
+    });
+  });
+
+  it('publishes the acknowledgement of a freeze as well as auditing it', async () => {
+    const ticket = await approved('Scheduled across the year-end freeze', frozenWindowId);
+    const bare = await move(ticket, 'scheduled').expect(409);
+    expect(bare.body.code).toBe('change_freeze');
+    const acknowledged = await move(ticket, 'scheduled', {
+      change_window_reason: 'Regulatory deadline; the client accepted the risk in writing.',
+    }).expect(201);
+    expect(acknowledged.body.state).toBe('scheduled');
+
+    expect(await auditOf(ticket.id, 'ticket.change_window_acknowledged')).toHaveLength(1);
+    const published = await outboxOf(ticket.id, 'ticket.change_window_acknowledged');
+    expect(published).toHaveLength(1);
+    expect(published[0].payload).toMatchObject({
+      reason: 'Regulatory deadline; the client accepted the risk in writing.',
+      window_id: frozenWindowId,
+    });
   });
 });
 

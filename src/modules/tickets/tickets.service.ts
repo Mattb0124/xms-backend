@@ -819,9 +819,10 @@ export class TicketsService {
           newValue: dto.to,
         },
       ];
-      entries.push(...windowNotes);
+      entries.push(...windowNotes.entries);
       const outboxEvents: { type: string; payload: Record<string, unknown> }[] = [
         { type: 'ticket.transitioned', payload: { from: before.state, to: dto.to } },
+        ...windowNotes.events,
       ];
 
       // Clocks: latch first, then apply the state effects, then latch again after a resume.
@@ -1645,13 +1646,19 @@ export class TicketsService {
     reason: string | undefined,
     now: Date,
     conflicts: { key: string; group_name: string }[],
-  ): AuditEntry[] {
+  ): { entries: AuditEntry[]; events: { type: string; payload: Record<string, unknown> }[] } {
     const entries: AuditEntry[] = [];
+    const events: { type: string; payload: Record<string, unknown> }[] = [];
     const note = reason?.trim();
+    // Deploying inside a freeze is a thing other systems need to know
+    // about: the connector, the notification fan-out and any alerting the
+    // client has asked for all read the outbox, so the record is published
+    // as well as audited rather than only findable by querying the audit
+    // table directly (Integration Patterns section 2).
     const audit = (
       eventType: 'ticket.change_window_acknowledged' | 'ticket.change_window_overridden',
-      value: unknown,
-    ) =>
+      value: Record<string, unknown>,
+    ) => {
       entries.push({
         entityKind: 'ticket',
         entityId: before.id,
@@ -1661,6 +1668,8 @@ export class TicketsService {
         oldValue: before.ticket_group_id,
         newValue: value,
       });
+      events.push({ type: eventType, payload: { ...value, window_id: before.ticket_group_id } });
+    };
 
     if (requirements.includes('change_window') && windowRow && span) {
       const window = toChangeWindow(windowRow);
@@ -1674,7 +1683,7 @@ export class TicketsService {
       }
       if (freeze || conflicts.length > 0)
         audit('ticket.change_window_acknowledged', {
-          reason: note,
+          reason: note ?? null,
           freeze: freeze ?? null,
           conflicts: conflicts.map((row) => row.key),
         });
@@ -1698,14 +1707,14 @@ export class TicketsService {
           });
         }
         audit('ticket.change_window_overridden', {
-          reason: note,
+          reason: note ?? null,
           window: windowRow?.name ?? null,
           at: now.toISOString(),
           freeze: frozen ?? null,
         });
       }
     }
-    return entries;
+    return { entries, events };
   }
 
   /** Other changes holding the same configuration item in an overlapping window (TM-18). */
