@@ -47,6 +47,13 @@ import { MAIL_TRANSPORT, OBJECT_STORE, StorageCoreModule } from '../../common/st
 import { DbPools } from '../../db/pool.js';
 import { RepositoryBase, type Tx, quoteIdent } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
+import {
+  narrativeText,
+  packNarrative,
+  WSR_NARRATIVE_KEYS,
+  type NarrativeSection,
+  type WsrNarrativeKey,
+} from '../../domain/reporting/pdf.js';
 import { nextRunAt, periodBefore, type Cadence, type PeriodKind } from '../../domain/reporting/schedule.js';
 import type { Job } from '../../worker/jobs.js';
 import { CalendarsCoreModule, CalendarService } from '../calendars/calendars.module.js';
@@ -135,9 +142,65 @@ export interface PackRow {
   period_end: string;
   measures: unknown;
   notable: unknown;
+  narrative_source: string;
   narrative_versions: unknown[];
   pptx_key: string | null;
   pdf_key: string | null;
+}
+
+/**
+ * One entry of `acct.report_packs.narrative_versions`, which is append
+ * only: version one is the templated narrative, and every reviewer edit is
+ * one more entry naming who wrote it. `rendered` says whether the two
+ * stored renditions were built from this entry, which is what lets
+ * "Approve and send" ship an edit the reviewer never regenerated.
+ */
+export interface NarrativeVersion {
+  version: number;
+  text: string;
+  sections: NarrativeSection[];
+  author_kind: string;
+  author_id: string;
+  at: string;
+  rendered: boolean;
+}
+
+/**
+ * Where the words in a pack came from, as the review screen says it
+ * (functional 5.8; AI functionality 117). The stored vocabulary is the
+ * column's: `template`, `axel` and `edited`. `axel` cannot occur yet, the
+ * `wsr_narrative` capability having no builder, so a pack is templated
+ * until somebody rewrites it.
+ */
+export type NarrativeSourceView = 'templated' | 'ai' | 'edited';
+
+export function narrativeSourceView(stored: string | null | undefined): NarrativeSourceView {
+  return stored === 'edited' ? 'edited' : stored === 'axel' ? 'ai' : 'templated';
+}
+
+/** The versions of a pack's narrative, oldest first, from whatever the column holds. */
+export function narrativeVersions(pack: Pick<PackRow, 'narrative_versions'>): NarrativeVersion[] {
+  return (Array.isArray(pack.narrative_versions) ? pack.narrative_versions : [])
+    .filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+    .map((entry, index) => ({
+      version: typeof entry.version === 'number' ? entry.version : index + 1,
+      text: typeof entry.text === 'string' ? entry.text : '',
+      sections: packNarrative(entry.sections ? { sections: entry.sections } : entry.text).sections.map((section) => ({
+        ...section,
+      })),
+      author_kind: typeof entry.author_kind === 'string' ? entry.author_kind : 'template',
+      author_id: typeof entry.author_id === 'string' ? entry.author_id : 'template',
+      at: typeof entry.at === 'string' ? entry.at : new Date(0).toISOString(),
+      // A pack written before the editor existed has no flag and was
+      // rendered from the only narrative it has ever had.
+      rendered: entry.rendered !== false,
+    }));
+}
+
+/** The narrative a pack currently stands on: its newest version. */
+export function currentNarrative(pack: Pick<PackRow, 'narrative_versions'>): NarrativeVersion | undefined {
+  const versions = narrativeVersions(pack);
+  return versions[versions.length - 1];
 }
 
 /** Presigned links to the two renditions of a pack. */
@@ -246,9 +309,50 @@ export class SchedulesRepository extends RepositoryBase {
   packOfRun(tx: Tx, runId: string): Promise<PackRow | undefined> {
     return this.maybeOne<PackRow>(
       tx,
-      'select id, period_start, period_end, measures, notable, narrative_versions, pptx_key, pdf_key from acct.report_packs where run_id = $1',
+      `select id, period_start, period_end, measures, notable, narrative_source, narrative_versions, pptx_key, pdf_key
+         from acct.report_packs where run_id = $1`,
       [runId],
     );
+  }
+
+  /**
+   * The narrative history of a pack, written whole. The column is an
+   * append-only array in practice (an edit adds an entry, a re-render
+   * stamps the newest one rendered), and rewriting it in one statement
+   * keeps the version numbers and the rendered flags consistent with each
+   * other rather than patching jsonb in place.
+   */
+  async setNarrativeVersions(
+    tx: Tx,
+    packId: string,
+    versions: readonly NarrativeVersion[],
+    source?: string,
+  ): Promise<void> {
+    await tx.query(
+      `update acct.report_packs
+          set narrative_versions = $2::jsonb, narrative_source = coalesce($3, narrative_source)
+        where id = $1`,
+      [packId, JSON.stringify(versions), source ?? null],
+    );
+  }
+
+  /** The keys of the two renditions after a re-render; the same keys in practice, rewritten in place. */
+  async setPackRenditions(tx: Tx, packId: string, pptxKey: string, pdfKey: string): Promise<void> {
+    await tx.query('update acct.report_packs set pptx_key = $2, pdf_key = $3 where id = $1', [packId, pptxKey, pdfKey]);
+  }
+
+  /**
+   * Whether Axel is on for this account (`acct.ai_settings.enabled`; an
+   * account with no row is off), so the review screen can say why the
+   * narrative in front of the reviewer is the templated one.
+   */
+  async aiEnabled(tx: Tx, accountId: string): Promise<boolean> {
+    const row = await this.maybeOne<{ enabled: boolean }>(
+      tx,
+      'select enabled from acct.ai_settings where account_id = $1',
+      [accountId],
+    );
+    return row?.enabled ?? false;
   }
 
   accountKey(tx: Tx, accountId: string): Promise<{ key: string; name: string }> {
@@ -374,6 +478,27 @@ export class CancelRunDto {
 export class RunNowDto {
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) period_start?: string;
   @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/) period_end?: string;
+}
+
+/** One section of the narrative panel on the review screen (functional 5.8). */
+export class NarrativeSectionDto {
+  @IsIn([...WSR_NARRATIVE_KEYS]) key!: WsrNarrativeKey;
+  @IsString() @MaxLength(6000) text!: string;
+}
+
+/**
+ * The narrative a reviewer wrote, section by section. Only the prose is
+ * editable: the measures and the notable rows are frozen on the pack when
+ * it renders, and a review that could move a number would not be a review.
+ * A section left out says nothing about that part of the pack, which is
+ * how the panel clears one.
+ */
+export class PatchNarrativeDto {
+  @IsArray()
+  @ArrayMaxSize(WSR_NARRATIVE_KEYS.length)
+  @ValidateNested({ each: true })
+  @Type(() => NarrativeSectionDto)
+  sections!: NarrativeSectionDto[];
 }
 
 // Service -------------------------------------------------------------------------
@@ -670,13 +795,138 @@ export class SchedulesService {
 
   // Review before send (functional 5.8) ----------------------------------------
 
-  /** A held run with its frozen pack and a link to each rendition. */
+  /**
+   * A held run with its frozen pack, a link to each rendition and the
+   * narrative the review screen edits (functional 5.8). `narrative_source`
+   * says whose words these are, and `ai_enabled` says whether Axel was
+   * available to write them, so the screen can tell the reviewer that the
+   * templated narrative is in front of them because AI is off for this
+   * account rather than leaving them to guess. `narrative_rendered` is
+   * false while an edit is waiting to be regenerated.
+   */
   runDetail(principal: Principal, id: string) {
     return this.uow.run(principal, async (tx) => {
       const run = await this.repo.run(tx, id);
       const pack = await this.repo.packOfRun(tx, run.id);
-      return { ...run, pack: pack ?? null, files: await this.packLinks(tx, run, pack) };
+      const current = pack ? currentNarrative(pack) : undefined;
+      return {
+        ...run,
+        pack: pack ?? null,
+        files: await this.packLinks(tx, run, pack),
+        narrative: current ? { sections: current.sections } : null,
+        narrative_source: pack ? narrativeSourceView(pack.narrative_source) : null,
+        narrative_version: current?.version ?? null,
+        narrative_rendered: current?.rendered ?? null,
+        ai_enabled: await this.repo.aiEnabled(tx, run.account_id),
+      };
     });
+  }
+
+  /**
+   * The narrative a reviewer wrote, on a run that is still held
+   * (functional 5.8: the editable panel). It lands as one more version on
+   * the frozen pack, naming the editor, and the pack's source becomes
+   * `edited`; the numbers are untouched, because they are the thing the
+   * review is about. The renditions are not rebuilt here: the screen's
+   * "Regenerate with my edits" does that, and "Approve and send" does it
+   * for a reviewer who never asked, so an edit can never be lost between
+   * the panel and the client.
+   */
+  editNarrative(principal: Principal, ctx: RequestContext, id: string, dto: PatchNarrativeDto) {
+    const keys = dto.sections.map((section) => section.key);
+    if (new Set(keys).size !== keys.length) throw new BadRequestException({ code: 'duplicate_section' });
+    return this.uow.run(principal, async (tx) => {
+      const { run, pack } = await this.heldRun(tx, id);
+      const versions = narrativeVersions(pack);
+      const sections: NarrativeSection[] = dto.sections
+        .filter((section) => section.text.trim().length > 0)
+        .map((section) => ({ key: section.key, text: section.text }));
+      const next: NarrativeVersion = {
+        version: (versions[versions.length - 1]?.version ?? 0) + 1,
+        text: narrativeText({ sections }),
+        sections,
+        author_kind: 'user',
+        author_id: principal.userId,
+        at: new Date().toISOString(),
+        rendered: false,
+      };
+      await this.repo.setNarrativeVersions(tx, pack.id, [...versions, next], 'edited');
+      await this.transition(tx, run.account_id, run.id, 'report.run.narrative_edited', actorOf(principal), ctx, {
+        pack_id: pack.id,
+        version: next.version,
+        editor: principal.userId,
+        sections: sections.map((section) => section.key),
+        characters: next.text.length,
+      });
+      return {
+        run_id: run.id,
+        pack_id: pack.id,
+        status: run.status,
+        narrative: { sections },
+        narrative_source: 'edited' as NarrativeSourceView,
+        narrative_version: next.version,
+        narrative_rendered: false,
+      };
+    });
+  }
+
+  /**
+   * "Regenerate with my edits" (functional 5.8): both renditions again
+   * from the measures already frozen on the pack and the narrative it now
+   * carries. The run does not move; its status, its deadline and its
+   * reviewer are what they were, and only the two files and the links to
+   * them are new. The links are minted fresh because the old ones were
+   * signed against the objects as they were.
+   */
+  regenerate(principal: Principal, ctx: RequestContext, id: string) {
+    return this.uow.run(principal, async (tx) => {
+      const { run, pack, period } = await this.heldRun(tx, id);
+      const { links, version } = await this.rerender(tx, run, pack);
+      await this.transition(tx, run.account_id, run.id, 'report.run.regenerated', actorOf(principal), ctx, {
+        pack_id: pack.id,
+        period: [period.start, period.end],
+        version,
+        status: run.status,
+      });
+      return {
+        run_id: run.id,
+        pack_id: pack.id,
+        status: run.status,
+        period,
+        files: links,
+        narrative_source: narrativeSourceView(pack.narrative_source),
+        narrative_version: version,
+        narrative_rendered: true,
+      };
+    });
+  }
+
+  /**
+   * Rebuilds both renditions of a pack from its own frozen numbers and its
+   * newest narrative, stamps that version rendered and hands back fresh
+   * links. Nothing is recomputed from the fact tables: a figure the
+   * reviewer has already read must not move under them.
+   */
+  private async rerender(tx: Tx, run: RunRow, pack: PackRow): Promise<{ links: PackLinks; version: number }> {
+    const versions = narrativeVersions(pack);
+    const current = versions[versions.length - 1];
+    const keys = await this.reporting.rerenderPack(tx, {
+      accountId: run.account_id,
+      runId: run.id,
+      periodStart: pack.period_start,
+      periodEnd: pack.period_end,
+      measures: pack.measures,
+      notable: pack.notable,
+      narrative: packNarrative({ sections: current?.sections ?? [] }),
+    });
+    await this.repo.setPackRenditions(tx, pack.id, keys.pptxKey, keys.pdfKey);
+    await this.repo.setNarrativeVersions(
+      tx,
+      pack.id,
+      versions.map((entry, index) => (index === versions.length - 1 ? { ...entry, rendered: true } : entry)),
+    );
+    const links = await this.packLinks(tx, run, { ...pack, pptx_key: keys.pptxKey, pdf_key: keys.pdfKey });
+    return { links, version: current?.version ?? 1 };
   }
 
   /**
@@ -684,12 +934,19 @@ export class SchedulesService {
    * have been, from the pack that was rendered when it was held, so the
    * deck the reviewer read is the deck the client receives. A run past its
    * deadline (`awaiting_review`) is still approvable; nothing else is.
+   *
+   * Where the narrative was edited and never regenerated, the renditions
+   * are rebuilt first (functional 5.8 offers "Approve and send" beside
+   * "Regenerate with my edits", and the edit is what the reviewer means to
+   * send either way). "Send without changes" is the same route on a pack
+   * nobody edited, and rebuilds nothing.
    */
   approve(principal: Principal, ctx: RequestContext, id: string) {
     return this.uow.run(principal, async (tx) => {
       const { run, schedule, pack, period } = await this.heldRun(tx, id);
       await this.repo.markApproved(tx, run.id, principal.userId);
-      const links = await this.packLinks(tx, run, pack);
+      const stale = currentNarrative(pack)?.rendered === false;
+      const links = stale ? (await this.rerender(tx, run, pack)).links : await this.packLinks(tx, run, pack);
       const account = await this.repo.accountKey(tx, run.account_id);
       const delivery = await this.deliver(
         tx,
@@ -706,6 +963,8 @@ export class SchedulesService {
         period: [period.start, period.end],
         was: run.status,
         delivered: delivery.filter((row) => row.outcome !== 'skipped').length,
+        narrative_source: narrativeSourceView(pack.narrative_source),
+        rerendered: stale,
       });
       return {
         run_id: run.id,
@@ -998,6 +1257,27 @@ export class SchedulesController {
   @RequirePermission('reports:manage')
   run(@CurrentPrincipal() principal: Principal, @Param('id', ParseUUIDPipe) id: string) {
     return this.schedules.runDetail(principal, id);
+  }
+
+  @Patch('runs/:id/narrative')
+  @RequirePermission('reports:manage')
+  editNarrative(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: PatchNarrativeDto,
+  ) {
+    return this.schedules.editNarrative(principal, ctx, id, dto);
+  }
+
+  @Post('runs/:id/regenerate')
+  @RequirePermission('reports:manage')
+  regenerate(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.schedules.regenerate(principal, ctx, id);
   }
 
   @Post('runs/:id/approve')

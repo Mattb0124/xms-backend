@@ -3,6 +3,9 @@ import type { Measures } from './measures.js';
 import {
   EMPTY_SECTION_LINE,
   extractPdfText,
+  narrativeFor,
+  narrativeText,
+  packNarrative,
   pdfPageCount,
   renderPackPdf,
   wsrDocument,
@@ -58,6 +61,52 @@ describe('wsrDocument', () => {
     expect(document.sections[1].tiles).toContainEqual({ label: 'Resolution met', value: 'n/a' });
     expect(document.sections[1].tiles).toContainEqual({ label: 'Avg time to resolve', value: '8 h' });
     expect(document.sections[2].tables?.[1].rows[0][0]).toBe('BRK-1');
+  });
+
+  it('reads a plain narrative as the headline, which is what every pack built before the editor carries', () => {
+    const document = wsrDocument('Brookfield', period, measures, notable, 'A steady week.');
+    expect(document.sections[0].paragraphs).toEqual(['A steady week.']);
+    expect(document.sections[1].paragraphs).toEqual([]);
+    expect(packNarrative('A steady week.')).toEqual({ sections: [{ key: 'headline', text: 'A steady week.' }] });
+    expect(packNarrative('   ')).toEqual({ sections: [] });
+    expect(packNarrative(null)).toEqual({ sections: [] });
+  });
+
+  it('puts a sectioned narrative under the section it speaks to, leaving the numbers alone', () => {
+    const document = wsrDocument('Brookfield', period, measures, notable, {
+      sections: [
+        { key: 'headline', text: 'A steady week.' },
+        { key: 'service_levels', text: 'One target was missed on the payroll interface.' },
+        { key: 'backlog', text: 'The oldest request is a month old and waiting on the client.' },
+        { key: 'consumption', text: 'Consumption is running ahead of plan.' },
+      ],
+    });
+    expect(document.sections[0].paragraphs).toEqual(['A steady week.']);
+    expect(document.sections[1].paragraphs).toEqual(['One target was missed on the payroll interface.']);
+    expect(document.sections[2].paragraphs).toEqual(['The oldest request is a month old and waiting on the client.']);
+    // The computed consumption line stays first; the prose follows it.
+    expect(document.sections[3].paragraphs).toEqual([
+      '20 contract hours consumed this period; 25 hours logged in total.',
+      'Consumption is running ahead of plan.',
+    ]);
+    // The tiles and the tables are unchanged by anything a reviewer writes.
+    expect(document.sections[1].tiles).toContainEqual({ label: 'Open requests', value: '7' });
+    expect(document.sections[2].tables?.[1].rows[0][0]).toBe('BRK-1');
+  });
+
+  it('drops a blank section and one whose shape it does not recognise', () => {
+    expect(
+      packNarrative({ sections: [{ key: 'headline', text: '  ' }, { key: 'backlog', text: 'Kept.' }, { key: 7 }] }),
+    ).toEqual({ sections: [{ key: 'backlog', text: 'Kept.' }] });
+    expect(narrativeFor(packNarrative({ sections: [{ key: 'backlog', text: 'Kept.' }] }), 'headline')).toBe('');
+    expect(
+      narrativeText({
+        sections: [
+          { key: 'headline', text: 'One.' },
+          { key: 'backlog', text: 'Two.' },
+        ],
+      }),
+    ).toBe('One.\n\nTwo.');
   });
 });
 

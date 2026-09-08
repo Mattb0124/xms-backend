@@ -154,6 +154,8 @@ export const AUDIT_EVENT_TYPES = [
   'capacity.demand.imported',
   'csat.survey.sent',
   'report.run.held_for_review',
+  'report.run.narrative_edited',
+  'report.run.regenerated',
   'report.run.approved',
   'report.run.cancelled',
   'report.run.review_expired',

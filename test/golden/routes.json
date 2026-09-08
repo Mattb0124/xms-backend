@@ -2030,6 +2030,26 @@
     "axel": false
   },
   {
+    "method": "PATCH",
+    "path": "/v1/reporting/runs/:id/narrative",
+    "controller": "SchedulesController",
+    "handler": "editNarrative",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/reporting/runs/:id/regenerate",
+    "controller": "SchedulesController",
+    "handler": "regenerate",
+    "realm": "internal",
+    "permission": "reports:manage",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/reporting/schedules",
     "controller": "SchedulesController",

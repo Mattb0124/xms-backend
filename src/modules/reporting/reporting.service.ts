@@ -26,7 +26,13 @@ import { TimeRepository } from '../time/time.repository.js';
 import { translateEvents, type EventQuery } from './audit-search.js';
 import { ReportingRepository } from './reporting.repository.js';
 import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
-import { renderPackPdf, wsrDocument } from '../../domain/reporting/pdf.js';
+import {
+  narrativeFor,
+  packNarrative,
+  renderPackPdf,
+  wsrDocument,
+  type PackNarrative,
+} from '../../domain/reporting/pdf.js';
 
 /**
  * Dashboards, exports, audit search and the basic WSR pack (Dashboards &
@@ -472,7 +478,7 @@ export class ReportingService {
     period: Period,
     measures: Measures,
     notable: ReturnType<typeof notableTickets>,
-    narrative: string,
+    narrative: string | PackNarrative,
   ): Promise<{ pptxKey: string; pdfKey: string }> {
     const prefix = `accounts/${accountId}/reports/${runId}/wsr-${iso(period.start)}`;
     const pptxKey = `${prefix}.pptx`;
@@ -482,6 +488,45 @@ export class ReportingService {
     const pdf = await renderPackPdf(wsrDocument(accountName, period, measures, notable, narrative));
     await this.store.putObject(pdfKey, pdf, PDF_CONTENT_TYPE);
     return { pptxKey, pdfKey };
+  }
+
+  /**
+   * Both renditions of a held run again, from the numbers already frozen
+   * on its pack and the narrative it now carries (functional 5.8:
+   * "Regenerate with my edits"). Nothing is recomputed: a re-render after
+   * an edit must not move a figure the reviewer has already read, so the
+   * measures and the notable rows come off the stored pack rather than out
+   * of the fact tables. The keys are the run's own, so the two renditions
+   * are replaced in place and a link minted afterwards serves the new
+   * text; the caller mints fresh links because the old ones were signed
+   * against the object as it was.
+   */
+  async rerenderPack(
+    tx: Tx,
+    input: {
+      accountId: string;
+      runId: string;
+      periodStart: string;
+      periodEnd: string;
+      measures: unknown;
+      notable: unknown;
+      narrative: PackNarrative;
+    },
+  ): Promise<{ pptxKey: string; pdfKey: string }> {
+    const account = await this.accounts.byId(tx, input.accountId);
+    const period: Period = {
+      start: new Date(`${input.periodStart}T00:00:00Z`),
+      end: new Date(new Date(`${input.periodEnd}T00:00:00Z`).getTime() + 86_400_000),
+    };
+    return this.renderAndStore(
+      input.accountId,
+      input.runId,
+      account.name,
+      period,
+      input.measures as Measures,
+      (input.notable ?? []) as ReturnType<typeof notableTickets>,
+      input.narrative,
+    );
   }
 
   async generateWsr(
@@ -752,8 +797,9 @@ async function renderWsr(
   period: Period,
   measures: Measures,
   notable: ReturnType<typeof notableTickets>,
-  narrative: string,
+  narrative: string | PackNarrative,
 ): Promise<Buffer> {
+  const prose = packNarrative(narrative);
   // pptxgenjs ships CommonJS; under nodenext the default import may be the module namespace.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Pptx = ((PptxGenJS as unknown as { default?: unknown }).default ?? PptxGenJS) as unknown as new () => any;
@@ -784,7 +830,23 @@ async function renderWsr(
 
   const headline = deck.addSlide();
   headline.addText('Headline', { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: navy });
-  headline.addText(narrative, { x: 0.6, y: 1.2, w: 12, h: 3.5, fontSize: 16, color: '0F172A', valign: 'top' });
+  headline.addText(narrativeFor(prose, 'headline'), {
+    x: 0.6,
+    y: 1.2,
+    w: 12,
+    h: 3.5,
+    fontSize: 16,
+    color: '0F172A',
+    valign: 'top',
+  });
+
+  // The prose a reviewer wrote for a section sits under that section's own
+  // slide, so the deck and the document say the same thing in the same place.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const note = (slide: any, key: string, y: number): void => {
+    const text = narrativeFor(prose, key);
+    if (text) slide.addText(text, { x: 0.6, y, w: 12, h: 1, fontSize: 13, color: '475569', valign: 'top' });
+  };
 
   const sla = deck.addSlide();
   sla.addText('Service levels', { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: navy });
@@ -809,6 +871,8 @@ async function renderWsr(
     sla.addText(value, { x: x + 0.2, y: y + 0.2, w: 3.4, h: 0.9, fontSize: 32, bold: true, color: navy });
     sla.addText(label, { x: x + 0.2, y: y + 1.1, w: 3.4, h: 0.5, fontSize: 14, color: '475569' });
   });
+
+  note(sla, 'service_levels', 6.1);
 
   const backlog = deck.addSlide();
   backlog.addText('Backlog and notable requests', {
@@ -849,12 +913,15 @@ async function renderWsr(
     { x: 5, y: 1.2, w: 7.8, colW: [1.3, 3.5, 1.3, 0.9, 0.8], fontSize: 11 },
   );
 
+  note(backlog, 'backlog', 6.3);
+
   const consumption = deck.addSlide();
   consumption.addText('Consumption', { x: 0.6, y: 0.4, w: 12, h: 0.6, fontSize: 24, bold: true, color: navy });
   consumption.addText(
     `${Math.round(measures.consumption_minutes / 60)} contract hours consumed this week; ${Math.round(measures.time_logged_minutes / 60)} hours logged in total.`,
     { x: 0.6, y: 1.3, w: 12, h: 1, fontSize: 18, color: '0F172A' },
   );
+  note(consumption, 'consumption', 2.5);
 
   const output = await deck.write({ outputType: 'nodebuffer' });
   return Buffer.from(output as Buffer);

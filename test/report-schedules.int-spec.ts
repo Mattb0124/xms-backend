@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
+import { extractPdfText } from '../src/domain/reporting/pdf.js';
 import { SchedulesService } from '../src/modules/reporting/schedules.module.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
@@ -438,5 +439,197 @@ describe('review before send (DR-05, functional 5.8)', () => {
       client.query('select status from acct.report_runs where id = $1', [held.run_id]),
     );
     expect(row.rows[0].status).toBe('ready_for_review');
+  });
+});
+
+/**
+ * The narrative editor on a held run (functional 5.8: the review screen
+ * shows the narrative in an editable panel with "Regenerate with my edits",
+ * "Approve and send" and "Send without changes"). The assertions are on the
+ * stored PDF rather than on the row, because what a client receives is the
+ * only thing that settles whose words were sent.
+ */
+describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
+  async function hold(period: { period_start: string; period_end: string }) {
+    const current = (
+      await api().get(`/v1/reporting/schedules?account=${accountId}`).set(bearer(adminToken)).expect(200)
+    ).body[0];
+    await api()
+      .patch(`/v1/reporting/schedules/${scheduleId}`)
+      .set(bearer(adminToken))
+      .send({ version: current.version, review_required: true })
+      .expect(200);
+    const run = await api()
+      .post(`/v1/reporting/schedules/${scheduleId}/run-now`)
+      .set(bearer(adminToken))
+      .send(period)
+      .expect(201);
+    expect(run.body.status).toBe('ready_for_review');
+    return run.body as { run_id: string; pack_id: string };
+  }
+
+  const auditOf = async (runId: string) =>
+    (
+      await withSuperuser((client) =>
+        client.query<{ event_type: string }>(
+          `select event_type from acct.audit_events where entity_kind = 'report_run' and entity_id = $1 order by created_at, id`,
+          [runId],
+        ),
+      )
+    ).rows.map((row) => row.event_type);
+
+  /** The words in the rendition a client would open, read back out of the stored PDF. */
+  const storedPdfText = async (link: string): Promise<string> => {
+    const file = await request(app.getHttpServer())
+      .get(link.replace(/^https?:\/\/[^/]+/, ''))
+      .buffer(true)
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    return extractPdfText(file.body as Buffer);
+  };
+
+  const detailOf = (runId: string) => api().get(`/v1/reporting/runs/${runId}`).set(bearer(adminToken)).expect(200);
+
+  it('reads the templated narrative, takes an edit, regenerates it and approves the words the reviewer wrote', async () => {
+    const held = await hold({ period_start: '2026-10-06', period_end: '2026-10-12' });
+    const before = await detailOf(held.run_id);
+    // The screen is told where the words came from and why: nothing has
+    // rewritten them, and Axel was never available to.
+    expect(before.body).toMatchObject({
+      narrative_source: 'templated',
+      narrative_version: 1,
+      narrative_rendered: true,
+      ai_enabled: false,
+    });
+    expect(before.body.narrative.sections.map((section: { key: string }) => section.key)).toEqual(['headline']);
+    expect(await storedPdfText(before.body.files.pdf)).toContain('week of');
+
+    const headline = 'Quiet week: the payroll link is stable.';
+    const consumption = 'Consumption is tracking to plan.';
+    const edited = await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send({
+        sections: [
+          { key: 'headline', text: headline },
+          { key: 'consumption', text: consumption },
+        ],
+      })
+      .expect(200);
+    expect(edited.body).toMatchObject({
+      status: 'ready_for_review',
+      narrative_source: 'edited',
+      narrative_version: 2,
+      narrative_rendered: false,
+    });
+    // The edit is one more version naming its author, not a rewrite of the first.
+    const versions = await withSuperuser((client) =>
+      client.query<{ narrative_source: string; narrative_versions: { author_id: string; version: number }[] }>(
+        'select narrative_source, narrative_versions from acct.report_packs where id = $1',
+        [held.pack_id],
+      ),
+    );
+    expect(versions.rows[0].narrative_source).toBe('edited');
+    expect(versions.rows[0].narrative_versions.map((entry) => entry.author_id)).toEqual(['template', adminId]);
+    // Nothing has been rebuilt yet: the stored rendition still reads as it did.
+    expect(await storedPdfText(before.body.files.pdf)).not.toContain(headline);
+
+    const regenerated = await api()
+      .post(`/v1/reporting/runs/${held.run_id}/regenerate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(regenerated.body).toMatchObject({
+      status: 'ready_for_review',
+      narrative_source: 'edited',
+      narrative_version: 2,
+      narrative_rendered: true,
+    });
+    expect(regenerated.body.files.pdf).toContain('/v1/storage/download?');
+    const rewritten = await storedPdfText(regenerated.body.files.pdf);
+    expect(rewritten).toContain(headline);
+    expect(rewritten).toContain(consumption);
+    expect(rewritten).not.toContain('week of');
+    // The numbers are frozen: a re-render moves the words and nothing else.
+    for (const heading of ['Service levels', 'Backlog and notable requests', 'Consumption'])
+      expect(rewritten).toContain(heading);
+
+    // The run itself has not moved: same status, same deadline, no reviewer.
+    const row = await withSuperuser((client) =>
+      client.query('select status, reviewer_id, review_due_at from acct.report_runs where id = $1', [held.run_id]),
+    );
+    expect(row.rows[0]).toMatchObject({ status: 'ready_for_review', reviewer_id: null });
+    expect(row.rows[0].review_due_at).not.toBeNull();
+    expect(await auditOf(held.run_id)).toEqual([
+      'report.run.held_for_review',
+      'report.run.narrative_edited',
+      'report.run.regenerated',
+    ]);
+
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    expect(approved.body.status).toBe('sent');
+    expect(await storedPdfText((await detailOf(held.run_id)).body.files.pdf)).toContain(headline);
+  });
+
+  it('approve rebuilds an edit the reviewer never regenerated, so the words they wrote are the words that ship', async () => {
+    const held = await hold({ period_start: '2026-10-13', period_end: '2026-10-19' });
+    const headline = 'Approved straight from the panel.';
+    await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send({ sections: [{ key: 'headline', text: headline }] })
+      .expect(200);
+    const approved = await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    expect(approved.body.status).toBe('sent');
+    const detail = await detailOf(held.run_id);
+    expect(detail.body).toMatchObject({ narrative_source: 'edited', narrative_rendered: true });
+    expect(await storedPdfText(detail.body.files.pdf)).toContain(headline);
+  });
+
+  it('refuses an edit on a run that is not under review, and one from a reader without reports:manage', async () => {
+    const held = await hold({ period_start: '2026-10-20', period_end: '2026-10-26' });
+    const body = { sections: [{ key: 'headline', text: 'Not mine to write.' }] };
+
+    await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(consultantToken))
+      .send(body)
+      .expect(403);
+    await api().post(`/v1/reporting/runs/${held.run_id}/regenerate`).set(bearer(consultantToken)).expect(403);
+
+    // A section the pack does not have, and the same section twice.
+    await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send({ sections: [{ key: 'made_up', text: 'x' }] })
+      .expect(400);
+    const duplicated = await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send({
+        sections: [
+          { key: 'headline', text: 'One.' },
+          { key: 'headline', text: 'Two.' },
+        ],
+      })
+      .expect(400);
+    expect(duplicated.body.code).toBe('duplicate_section');
+
+    // Once it is sent, the words are the client's copy and neither route touches them.
+    await api().post(`/v1/reporting/runs/${held.run_id}/approve`).set(bearer(adminToken)).expect(201);
+    const refused = await api()
+      .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+      .set(bearer(adminToken))
+      .send(body)
+      .expect(409);
+    expect(refused.body).toMatchObject({ code: 'not_under_review', status: 'sent' });
+    const noRebuild = await api()
+      .post(`/v1/reporting/runs/${held.run_id}/regenerate`)
+      .set(bearer(adminToken))
+      .expect(409);
+    expect(noRebuild.body).toMatchObject({ code: 'not_under_review', status: 'sent' });
   });
 });

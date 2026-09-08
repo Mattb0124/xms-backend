@@ -35,6 +35,63 @@ export interface PackSection {
   readonly tables?: readonly PackTable[];
 }
 
+/**
+ * The prose of a pack, one entry per section of the document
+ * (Dashboards & Report Packs functional 5.8: the review screen shows the
+ * narrative in an editable panel). The numbers are frozen on the pack and
+ * are never edited; this is the only part a reviewer rewrites, so it is
+ * described apart from the sections that carry the tiles and the tables
+ * and is keyed to them rather than to their titles, which are copy.
+ */
+export interface NarrativeSection {
+  readonly key: string;
+  readonly text: string;
+}
+
+export interface PackNarrative {
+  readonly sections: readonly NarrativeSection[];
+}
+
+/** The sections of a weekly status report a narrative may speak to, in document order. */
+export const WSR_NARRATIVE_KEYS = ['headline', 'service_levels', 'backlog', 'consumption'] as const;
+
+export type WsrNarrativeKey = (typeof WSR_NARRATIVE_KEYS)[number];
+
+/**
+ * A narrative from whatever was stored: the templated single paragraph of
+ * a pack built before the editor existed reads as the headline, and an
+ * already sectioned one is taken as written with its unknown keys and
+ * blank texts dropped.
+ */
+export function packNarrative(stored: unknown): PackNarrative {
+  if (typeof stored === 'string')
+    return stored.trim() ? { sections: [{ key: 'headline', text: stored }] } : sectionsOf([]);
+  const raw = (stored as { sections?: unknown })?.sections;
+  if (!Array.isArray(raw)) return sectionsOf([]);
+  return sectionsOf(
+    raw
+      .filter((entry): entry is NarrativeSection => typeof entry?.key === 'string' && typeof entry?.text === 'string')
+      .map((entry) => ({ key: entry.key, text: entry.text })),
+  );
+}
+
+function sectionsOf(sections: readonly NarrativeSection[]): PackNarrative {
+  return { sections: sections.filter((section) => section.text.trim().length > 0) };
+}
+
+/** The prose for one section, or the empty string where the narrative says nothing about it. */
+export function narrativeFor(narrative: PackNarrative, key: string): string {
+  return narrative.sections.find((section) => section.key === key)?.text ?? '';
+}
+
+/** Every section's prose as one block, which is what a plain-text reader of the pack sees. */
+export function narrativeText(narrative: PackNarrative): string {
+  return narrative.sections
+    .map((section) => section.text.trim())
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 export interface PackDocument {
   readonly title: string;
   readonly accountName: string;
@@ -79,9 +136,10 @@ export function wsrDocument(
   period: Period,
   measures: Measures,
   notable: readonly { key: string; title: string; state: string; priority: string; age_days: number }[],
-  narrative: string,
+  narrative: string | PackNarrative,
   generatedAt = new Date(),
 ): PackDocument {
+  const prose = packNarrative(narrative);
   const ages = Object.entries(measures.backlog_by_age)
     .filter(([, count]) => count > 0)
     .map(([bucket, count]) => [
@@ -95,9 +153,10 @@ export function wsrDocument(
     periodEnd: day(new Date(period.end.getTime() - 1)),
     generatedAt: generatedAt.toISOString(),
     sections: [
-      { title: 'Headline', paragraphs: narrative ? [narrative] : [] },
+      { title: 'Headline', paragraphs: [narrativeFor(prose, 'headline')].filter(Boolean) },
       {
         title: 'Service levels',
+        paragraphs: [narrativeFor(prose, 'service_levels')].filter(Boolean),
         tiles: [
           { label: 'Open requests', value: String(measures.open_tickets) },
           { label: 'Past target', value: String(measures.breached_now) },
@@ -112,6 +171,7 @@ export function wsrDocument(
       },
       {
         title: 'Backlog and notable requests',
+        paragraphs: [narrativeFor(prose, 'backlog')].filter(Boolean),
         tables: [
           ...(ages.length > 0 ? [{ caption: 'Backlog by age', columns: ['Age', 'Open'], rows: ages }] : []),
           ...(notable.length > 0
@@ -135,7 +195,8 @@ export function wsrDocument(
         title: 'Consumption',
         paragraphs: [
           `${hours(measures.consumption_minutes)} contract hours consumed this period; ${hours(measures.time_logged_minutes)} hours logged in total.`,
-        ],
+          narrativeFor(prose, 'consumption'),
+        ].filter(Boolean),
       },
     ],
   };

@@ -190,13 +190,18 @@ export class ReportingRepository extends RepositoryBase {
         input.periodEnd,
         JSON.stringify(input.measures),
         JSON.stringify(input.notable),
+        // Version one is the templated narrative, sectioned the way the
+        // review screen edits it, and it is rendered by definition: the two
+        // renditions this row is about to name were built from it.
         JSON.stringify([
           {
             version: 1,
             text: input.narrative,
+            sections: [{ key: 'headline', text: input.narrative }],
             author_kind: 'template',
             author_id: 'template',
             at: new Date().toISOString(),
+            rendered: true,
           },
         ]),
         input.pptxKey,
