@@ -271,11 +271,37 @@ describe('GET /v1/me/waiting', () => {
     // the unclaimed run on Austral and the sent run count for nobody.
     const admin = await waiting(adminToken);
     expect(admin.report_reviews.count).toBe(2);
-    // The runs live on the account record's Report packs tab.
-    expect(admin.report_reviews.link).toBe(`/admin/accounts/${accountId}?tab=reports`);
+    // Both are on Brookfield, so the row opens the newest one on the review
+    // screen rather than a screen the reviewer has to search. The two rows
+    // share a `created_at`, so the later period is the newest.
+    const newest = await withSuperuser((client) =>
+      client.query<{ id: string }>(
+        `select id from acct.report_runs
+          where account_id = $1 and status = 'awaiting_review'
+          order by created_at desc, period_start desc limit 1`,
+        [accountId],
+      ),
+    );
+    expect(admin.report_reviews.link).toBe(`/reports/runs/${newest.rows[0].id}`);
     const cara = await waiting(consultantToken);
     expect(cara.report_reviews.count).toBe(0);
     expect(cara.report_reviews.link).toBe('/reports');
+  });
+
+  it('falls back to the account Report packs tab when runs wait on more than one account', async () => {
+    // A run on Austral naming the administrator: two accounts are waiting
+    // now, so no single run is the one to open and the row names the
+    // account the newest belongs to instead.
+    await withSuperuser((client) =>
+      client.query(
+        `insert into acct.report_runs (account_id, pack_type, period_start, period_end, status, reviewer_id, requested_by)
+         values ($1, 'wsr', current_date - 7, current_date - 1, 'ready_for_review', $2, $2)`,
+        [otherAccountId, adminId],
+      ),
+    );
+    const admin = await waiting(adminToken);
+    expect(admin.report_reviews.count).toBe(3);
+    expect(admin.report_reviews.link).toBe(`/admin/accounts/${otherAccountId}?tab=reports`);
   });
 
   it('counts my unread notifications, and the low satisfaction scores among them separately', async () => {

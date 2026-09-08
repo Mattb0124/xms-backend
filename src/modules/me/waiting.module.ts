@@ -22,7 +22,8 @@ import { TimeCoreModule, TimeService } from '../time/time.module.js';
  * (`frontend/lib/routes.ts`), written in that application's own URL grammar
  * (`frontend/lib/tickets/queue-views.ts` for the Queue, `?tab=` for the
  * account records). The rail used to answer a URL space of its own
- * invention (`/queue`, `/timesheet`, `/reports/runs`), which the browser
+ * invention (`/queue`, `/timesheet`, `/reports/runs` with no run named,
+ * where the application serves `/reports/runs/[id]`), which the browser
  * had to translate before it could follow anything; nothing here invents an
  * address any more, and a row whose action has no screen carries no link
  * rather than a broken one.
@@ -65,6 +66,16 @@ export interface WaitingItem {
 interface CountWithAccount {
   readonly count: number;
   readonly account_id: string | null;
+}
+
+/**
+ * A count that can open the record itself: the newest run waiting, the
+ * account it belongs to, and how many accounts are waiting in all, which is
+ * what decides whether one record is the answer or a list is.
+ */
+interface CountWithNewestRun extends CountWithAccount {
+  readonly run_id: string | null;
+  readonly accounts: number;
 }
 
 export interface WaitingOnMe {
@@ -115,20 +126,26 @@ export class WaitingRepository extends RepositoryBase {
    * and the unclaimed ones on an account I own. `acct.report_schedules` has
    * no owner column, so account ownership is what "schedules I own" means
    * here; the day a schedule gains an owner this clause follows it.
+   *
+   * The newest waiting run comes back with the count, because the review
+   * screen opens a run by id. Two runs written in the same statement carry
+   * the same `created_at`, so the period breaks the tie and the answer is
+   * the same one every time.
    */
-  reportReviews(tx: Tx, userId: string): Promise<CountWithAccount> {
-    return this.countWithAccount(
+  reportReviews(tx: Tx, userId: string): Promise<CountWithNewestRun> {
+    return this.countWithNewestRun(
       tx,
-      `select count(*)::int as count,
-              (select r2.account_id from acct.report_runs r2
-                where r2.status = any ($2::text[])
-                  and (r2.reviewer_id = $1
-                       or (r2.reviewer_id is null and r2.account_id in (select id from op.accounts where owner_user_id = $1)))
-                order by r2.created_at desc limit 1) as account_id
-         from acct.report_runs r
-        where r.status = any ($2::text[])
-          and (r.reviewer_id = $1
-               or (r.reviewer_id is null and r.account_id in (select id from op.accounts where owner_user_id = $1)))`,
+      `with waiting as (
+         select r.id, r.account_id, r.created_at, r.period_start from acct.report_runs r
+          where r.status = any ($2::text[])
+            and (r.reviewer_id = $1
+                 or (r.reviewer_id is null and r.account_id in (select id from op.accounts where owner_user_id = $1)))
+       )
+       select count(*)::int as count,
+              count(distinct account_id)::int as accounts,
+              (select w.id from waiting w order by w.created_at desc, w.period_start desc limit 1) as run_id,
+              (select w.account_id from waiting w order by w.created_at desc, w.period_start desc limit 1) as account_id
+         from waiting`,
       [userId, [...REVIEWABLE_RUN_STATES]],
     );
   }
@@ -170,6 +187,30 @@ export class WaitingRepository extends RepositoryBase {
     const rows = await this.many<CountWithAccount>(tx, text, values);
     return { count: rows[0]?.count ?? 0, account_id: rows[0]?.account_id ?? null };
   }
+
+  private async countWithNewestRun(tx: Tx, text: string, values: unknown[]): Promise<CountWithNewestRun> {
+    const rows = await this.many<CountWithNewestRun>(tx, text, values);
+    return {
+      count: rows[0]?.count ?? 0,
+      account_id: rows[0]?.account_id ?? null,
+      run_id: rows[0]?.run_id ?? null,
+      accounts: rows[0]?.accounts ?? 0,
+    };
+  }
+}
+
+/**
+ * Where the Report packs row opens, in the web application's own URL
+ * grammar (`frontend/lib/routes.ts` registers `/reports/runs/[id]`).
+ * One run waiting on one account is a record, so the row opens it; runs on
+ * several accounts are a list, so the row opens the Report packs tab of the
+ * account the newest one belongs to; nothing waiting opens the packs
+ * screen.
+ */
+export function linkForReportReviews(counts: CountWithNewestRun): string {
+  if (!counts.run_id || !counts.account_id) return '/reports';
+  if (counts.accounts > 1) return `/admin/accounts/${counts.account_id}?tab=reports`;
+  return `/reports/runs/${counts.run_id}`;
 }
 
 @Injectable()
@@ -227,12 +268,13 @@ export class WaitingService {
           key: 'report_reviews',
           label: 'Report packs to review',
           count: counts.report_reviews.count,
-          // Runs live on the account record's Report packs tab. The newest
-          // waiting run names the account to open; with none waiting the
-          // row points at the report packs screen.
-          link: counts.report_reviews.account_id
-            ? `/admin/accounts/${counts.report_reviews.account_id}?tab=reports`
-            : '/reports',
+          // The review screen opens a run by id, so the row opens the
+          // newest run waiting rather than a screen the reviewer must
+          // search. Runs waiting on more than one account have no single
+          // run to open, so those fall back to the Report packs tab of the
+          // newest one's account; with none waiting the row points at the
+          // report packs screen.
+          link: linkForReportReviews(counts.report_reviews),
         },
         {
           key: 'unread_notifications',
