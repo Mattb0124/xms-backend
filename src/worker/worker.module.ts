@@ -19,10 +19,12 @@ import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
 import { TicketsCoreModule } from '../modules/tickets/tickets.module.js';
+import { EngagementsCoreModule } from '../modules/contracts/engagements.module.js';
 import { JobRunner } from './jobs.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
 import { SlaJobs } from './sla-jobs.js';
 import { PeriodJobs } from './period-jobs.js';
+import { RenewalJobs } from './renewal-jobs.js';
 import { RosterJobs } from './roster-jobs.js';
 
 /**
@@ -50,6 +52,7 @@ import { RosterJobs } from './roster-jobs.js';
     IntegrityCoreModule,
     ConnectorsCoreModule,
     CalendarsCoreModule,
+    EngagementsCoreModule,
   ],
   providers: [
     {
@@ -60,6 +63,7 @@ import { RosterJobs } from './roster-jobs.js';
     JobRunner,
     SlaJobs,
     PeriodJobs,
+    RenewalJobs,
     RosterJobs,
   ],
 })
@@ -75,6 +79,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly digests: DigestService,
     private readonly sync: SyncWorker,
     private readonly periods: PeriodJobs,
+    private readonly renewals: RenewalJobs,
     private readonly roster: RosterJobs,
     private readonly archive: ArchiveService,
     private readonly schedules: SchedulesService,
@@ -120,6 +125,7 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.sync.applyJob());
     this.runner.schedule(this.sync.healthJob());
     this.runner.schedule(this.periods.autoLock());
+    this.runner.schedule(this.renewals.renewalAlerts());
     this.runner.schedule(this.roster.certificationExpiry());
     this.runner.schedule(this.archive.archiveJob());
     this.runner.schedule(this.schedules.scheduleJob());

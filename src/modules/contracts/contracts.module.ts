@@ -28,6 +28,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  IsUUID,
 } from 'class-validator';
 import { OVERAGE_RULES, ROLLOVER_RULES, type OverageRule, type RolloverRule } from '../../domain/time/budget.js';
 import { AFTER_HOURS_HANDLINGS, type AfterHoursHandling } from '../../domain/calendar/after-hours.js';
@@ -46,6 +47,8 @@ import { UnitOfWork } from '../../db/unit-of-work.js';
 export interface ContractRow {
   id: string;
   account_id: string;
+  /** The commercial envelope the contract sits inside (technical 2.1); null until one is set. */
+  engagement_id: string | null;
   key: string;
   name: string;
   model: 'retainer' | 'prepaid_block' | 'time_and_materials' | 'fixed_fee';
@@ -97,6 +100,7 @@ export class ContractsRepository extends RepositoryBase {
     tx: Tx,
     input: {
       accountId: string;
+      engagement_id?: string | null;
       name: string;
       model: string;
       currency?: string;
@@ -121,9 +125,9 @@ export class ContractsRepository extends RepositoryBase {
       tx,
       'contract',
       `insert into acct.contracts (account_id, key, name, model, currency, period_cadence, period_starts_on, period_ends_on, period_hours, status, after_hours_handling, after_hours_multiplier,
-                                   threshold_percents, threshold_notify_client, overage_rule, overage_multiplier, rollover_rule, rollover_cap_hours, forecast_window_days, technology_codes)
+                                   threshold_percents, threshold_notify_client, overage_rule, overage_multiplier, rollover_rule, rollover_cap_hours, forecast_window_days, technology_codes, engagement_id)
        values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, coalesce($4, 'USD'), coalesce($5, 'monthly'), $6, $7, $8, coalesce($9, 'active'), coalesce($10, 'none'), $11,
-               coalesce($12::integer[], '{50,75,90,100}'), coalesce($13, false), coalesce($14, 'allow_flag'), $15, coalesce($16, 'none'), $17, coalesce($18, 10), coalesce($19::text[], '{}'))
+               coalesce($12::integer[], '{50,75,90,100}'), coalesce($13, false), coalesce($14, 'allow_flag'), $15, coalesce($16, 'none'), $17, coalesce($18, 10), coalesce($19::text[], '{}'), $20)
        returning *`,
       [
         input.accountId,
@@ -145,7 +149,15 @@ export class ContractsRepository extends RepositoryBase {
         input.rollover_cap_hours ?? null,
         input.forecast_window_days ?? null,
         input.technology_codes ?? null,
+        input.engagement_id ?? null,
       ],
+    );
+  }
+
+  /** The engagement ids of this account, so a link can be checked before it is made. */
+  engagementIds(tx: Tx, accountId: string): Promise<string[]> {
+    return this.many<{ id: string }>(tx, 'select id from acct.engagements where account_id = $1', [accountId]).then(
+      (rows) => rows.map((row) => row.id),
     );
   }
 
@@ -165,6 +177,11 @@ export class ContractsRepository extends RepositoryBase {
 
 /** The commercial rules an operator sets on a contract (Time, Contracts & Budget 2.2; TB-09, TB-11). */
 export class ContractRulesDto {
+  /** The engagement this contract belongs to (technical 2.1); it must be on the same account. */
+  @IsOptional()
+  @IsUUID('4')
+  engagement_id?: string | null;
+
   @IsOptional()
   @IsIn(AFTER_HOURS_HANDLINGS)
   after_hours_handling?: AfterHoursHandling;
@@ -261,6 +278,7 @@ export class PatchContractDto extends ContractRulesDto {
 }
 
 const RULE_FIELDS = [
+  'engagement_id',
   'after_hours_handling',
   'after_hours_multiplier',
   'threshold_percents',
@@ -302,6 +320,17 @@ export class ContractsService {
     return this.uow.run(principal, (tx) => this.contracts.forAccount(tx, accountId));
   }
 
+  /**
+   * A contract belongs to an engagement of its own account. Row-level
+   * security already hides another account's engagement, so the check reads
+   * as "not found" rather than "forbidden" (Security section 4).
+   */
+  private async assertEngagement(tx: Tx, accountId: string, engagementId: string | null): Promise<void> {
+    if (engagementId === null) return;
+    const known = await this.contracts.engagementIds(tx, accountId);
+    if (!known.includes(engagementId)) throw new NotFoundException({ code: 'not_found', entity: 'engagement' });
+  }
+
   create(principal: Principal, ctx: RequestContext, accountId: string, dto: CreateContractDto): Promise<ContractRow> {
     assertRules({
       after_hours_handling: dto.after_hours_handling ?? 'none',
@@ -312,6 +341,7 @@ export class ContractsService {
       rollover_cap_hours: dto.rollover_cap_hours ?? null,
     });
     return this.uow.run(principal, async (tx) => {
+      await this.assertEngagement(tx, accountId, dto.engagement_id ?? null);
       const contract = await this.contracts.insert(tx, { accountId, ...dto });
       const startsOn = dto.period_starts_on ?? new Date().toISOString().slice(0, 8) + '01';
       const endsOn =
@@ -338,7 +368,10 @@ export class ContractsService {
       const before = await this.contracts.byId(tx, id);
       if (before.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'contract' });
       const numeric = (value: string | null) => (value === null ? null : Number(value));
+      const engagementId = dto.engagement_id === undefined ? before.engagement_id : dto.engagement_id;
+      await this.assertEngagement(tx, accountId, engagementId);
       const next = {
+        engagement_id: engagementId,
         after_hours_handling: dto.after_hours_handling ?? before.after_hours_handling,
         after_hours_multiplier:
           dto.after_hours_multiplier === undefined

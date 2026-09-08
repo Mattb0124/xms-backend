@@ -18,6 +18,7 @@ import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { AiModule } from './modules/ai/ai.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
+import { EngagementsModule } from './modules/contracts/engagements.module.js';
 import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
 import { IntegrityModule } from './modules/integrity/integrity.module.js';
@@ -45,6 +46,7 @@ import { TicketsModule } from './modules/tickets/tickets.module.js';
     TelemetryModule,
     AdminModule,
     ContractsModule,
+    EngagementsModule,
     TicketsModule,
     PortalModule,
     TimeModule,
