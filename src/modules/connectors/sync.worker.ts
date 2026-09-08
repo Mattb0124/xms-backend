@@ -812,7 +812,10 @@ export class SyncWorker {
       Object.assign(body, translation.body);
       sent = translation.sent;
       if (translation.unmapped.length > 0) detail.unmapped = translation.unmapped;
-      if (dropped.length > 0) {
+      // A contested change records its outcome whichever side won: the
+      // operator's question is "both sides moved, what happened", and the
+      // answer is the kept and dropped lists with the policy that decided.
+      if (externalChanged || dropped.length > 0) {
         conflict = {
           external_sys_updated_on: record.sys_updated_on,
           external_changed: externalChanged,
@@ -820,6 +823,8 @@ export class SyncWorker {
           dropped,
         };
         detail.conflict = conflict;
+      }
+      if (dropped.length > 0) {
         await this.repo.touchLink(tx, link.id, {
           state: 'conflict',
           last_conflict: {

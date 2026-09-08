@@ -671,10 +671,11 @@ describe('dead letters, the kill switch and health (SN-07, SN-09)', () => {
   }, 60_000);
 });
 
-describe('the outbound queue (SN-03)', () => {
-  let caseB: Record<string, unknown>;
-  let ticketBId = '';
+/** The linked pair the outbound tests work on: the client case and its XMS ticket. */
+let caseB: Record<string, unknown>;
+let ticketBId = '';
 
+describe('the outbound queue (SN-03)', () => {
   it('arms the switch, promotes the instance to bidirectional and links a fresh case', async () => {
     await api()
       .post(`/v1/connectors/${instanceId}/kill-switch`)
@@ -902,5 +903,151 @@ describe('the outbound queue (SN-03)', () => {
       client.query(`select status from acct.sync_outbound where instance_id = $1 and status <> 'sent'`, [instanceId]),
     );
     expect(settled.rows).toEqual([]);
+  });
+});
+
+describe('the outbound conflict policy (SN-04)', () => {
+  /** Makes the case look changed on the client side since the update the link last knew about. */
+  async function clientChanged(value: string, stamp: string, lastKnown = '2026-01-01 00:00:00'): Promise<void> {
+    const record = standIn.records.get(TABLE)!.get(String(caseB.sys_id))!;
+    record.short_description = value;
+    record.sys_updated_on = stamp;
+    await withSuperuser((client) =>
+      client.query(`update acct.sync_links set last_inbound_sys_updated_on = $2 where ticket_id = $1`, [
+        ticketBId,
+        lastKnown,
+      ]),
+    );
+  }
+
+  /** Per-link overrides are the documented way to move one field's system of record. */
+  async function policyFor(field: string, policy: string): Promise<void> {
+    await withSuperuser((client) =>
+      client.query(`update acct.sync_links set field_sor_overrides = $2 where ticket_id = $1`, [
+        ticketBId,
+        JSON.stringify({ [field]: policy }),
+      ]),
+    );
+  }
+
+  async function pushShortDescription(value: string): Promise<void> {
+    const current = await api().get(`/v1/tickets/${ticketBId}`).set(bearer(adminToken)).expect(200);
+    await api()
+      .patch(`/v1/tickets/${ticketBId}`)
+      .set(bearer(adminToken))
+      .send({ version: current.body.version, short_description: value })
+      .expect(200);
+    await drainOutbox();
+  }
+
+  function subject(): string {
+    return String(standIn.records.get(TABLE)!.get(String(caseB.sys_id))!.short_description);
+  }
+
+  async function lastOutbound(): Promise<{ status: string; conflict: Record<string, unknown> | null }> {
+    const rows = await withSuperuser((client) =>
+      client.query(`select status, conflict from acct.sync_outbound order by created_at desc, id desc limit 1`),
+    );
+    return rows.rows[0];
+  }
+
+  it('keeps the XMS value on a field XMS owns and records both sides on the row', async () => {
+    await policyFor('short_description', 'xms');
+    await clientChanged('Renamed on the client side', '2027-03-01 00:00:00');
+    await pushShortDescription('Owned by XMS after intake');
+    expect(await sync.deliverPending()).toBe('delivered 1, skipped 0, retried 0, failed 0');
+    expect(subject()).toBe('Owned by XMS after intake');
+    const row = await lastOutbound();
+    expect(row.status).toBe('sent');
+    expect(row.conflict).toMatchObject({
+      external_changed: true,
+      kept: ['short_description'],
+      dropped: [],
+      external_sys_updated_on: '2027-03-01 00:00:00',
+    });
+    const audit = await withSuperuser((client) =>
+      client.query(`select count(*)::int as n from acct.audit_events where event_type = 'sync.conflict'`),
+    );
+    expect(audit.rows[0].n).toBeGreaterThanOrEqual(1);
+  });
+
+  it('leaves a field the instance owns alone, records the conflict and marks the link', async () => {
+    await policyFor('short_description', 'external');
+    await clientChanged('The client owns this line', '2027-03-02 00:00:00');
+    await pushShortDescription('XMS tried to rename it');
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 1, retried 0, failed 0');
+    expect(subject()).toBe('The client owns this line');
+    const row = await lastOutbound();
+    expect(row.status).toBe('skipped');
+    expect(row.conflict).toMatchObject({
+      kept: [],
+      dropped: [{ field: 'short_description', policy: 'external', reason: 'external_owned' }],
+    });
+    const link = await withSuperuser((client) =>
+      client.query(`select state, last_conflict from acct.sync_links where ticket_id = $1`, [ticketBId]),
+    );
+    expect(link.rows[0].state).toBe('conflict');
+    expect(link.rows[0].last_conflict).toMatchObject({ direction: 'out', fields: ['short_description'] });
+    const runs = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=skipped_policy`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(runs.body[0].detail.reason).toBe('policy');
+  });
+
+  it('lets the newer side win under newest, in both directions', async () => {
+    await policyFor('short_description', 'newest');
+    // The client's change is older than the XMS edit that follows it.
+    await clientChanged('Client edit from June', '2026-06-01 00:00:00');
+    await pushShortDescription('XMS edit, made now');
+    expect(await sync.deliverPending()).toBe('delivered 1, skipped 0, retried 0, failed 0');
+    expect(subject()).toBe('XMS edit, made now');
+    expect((await lastOutbound()).conflict).toMatchObject({ kept: ['short_description'] });
+    // The client's change is later than the XMS edit, so it stands.
+    await clientChanged('Client edit from the future', '2027-06-01 00:00:00');
+    await pushShortDescription('XMS edit that arrives second');
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 1, retried 0, failed 0');
+    expect(subject()).toBe('Client edit from the future');
+    expect((await lastOutbound()).conflict).toMatchObject({
+      dropped: [{ field: 'short_description', policy: 'newest', reason: 'older' }],
+    });
+  });
+
+  it('never sends a field whose policy is none, contested or not', async () => {
+    await policyFor('short_description', 'none');
+    await clientChanged('Untouched by XMS', '2027-07-01 00:00:00');
+    await pushShortDescription('XMS would have sent this');
+    expect(await sync.deliverPending()).toBe('delivered 0, skipped 1, retried 0, failed 0');
+    expect(subject()).toBe('Untouched by XMS');
+    expect((await lastOutbound()).conflict).toMatchObject({
+      dropped: [{ field: 'short_description', policy: 'none', reason: 'none' }],
+    });
+  });
+
+  it('sends without a contest when the client has not touched the case', async () => {
+    await policyFor('short_description', 'external_at_create_then_xms');
+    // No client change: the link's last known update is the current stamp.
+    const record = standIn.records.get(TABLE)!.get(String(caseB.sys_id))!;
+    await withSuperuser((client) =>
+      client.query(
+        `update acct.sync_links set field_sor_overrides = $2, last_inbound_sys_updated_on = $3, state = 'linked' where ticket_id = $1`,
+        [
+          ticketBId,
+          JSON.stringify({ short_description: 'external_at_create_then_xms' }),
+          String(record.sys_updated_on),
+        ],
+      ),
+    );
+    await pushShortDescription('The consultant owns the subject after intake');
+    expect(await sync.deliverPending()).toBe('delivered 1, skipped 0, retried 0, failed 0');
+    expect(subject()).toBe('The consultant owns the subject after intake');
+    const row = await lastOutbound();
+    expect(row.status).toBe('sent');
+    expect(row.conflict).toBeNull();
+    const runs = await api()
+      .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=success`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(runs.body[0].detail.fields).toEqual(['short_description']);
   });
 });
