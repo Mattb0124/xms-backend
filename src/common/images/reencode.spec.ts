@@ -4,6 +4,8 @@ import {
   ImageNotDecodableError,
   isReEncodedImage,
   MAX_IMAGE_EDGE,
+  MAX_INPUT_EDGE,
+  MAX_INPUT_PIXELS,
   reEncodeImage,
   RE_ENCODED_IMAGE_TYPES,
 } from './reencode.js';
@@ -110,5 +112,67 @@ describe('re-encoding an image', () => {
     await expect(reEncodeImage(png.subarray(0, 30), 'image/png', 'cut.png')).rejects.toBeInstanceOf(
       ImageNotDecodableError,
     );
+  });
+});
+
+/**
+ * The decode budget. `resize` caps the output; these assertions are about
+ * what is refused before anything is decompressed, which is the difference
+ * between a file the store will not hold and a worker that runs out of
+ * memory holding it.
+ *
+ * The buffers are built here byte by byte rather than rendered, because
+ * sharp will not produce a header that lies: a flat-colour PNG claiming
+ * 100000 by 100000 pixels is a few dozen bytes on the wire and about
+ * 30 GB decoded, which is exactly the shape of the attack.
+ */
+const CRC_TABLE = Array.from({ length: 256 }, (_unused, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  return value >>> 0;
+});
+
+function crc32(bytes: Buffer): number {
+  let value = 0xffffffff;
+  for (const byte of bytes) value = CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+/**
+ * A real PNG whose IHDR is rewritten to declare a different size, CRC and
+ * all. The pixel data behind it is a 64 by 40 swatch, so the file stays
+ * tiny while its header claims a picture nothing should try to decode.
+ */
+function pngClaiming(base: Buffer, width: number, height: number): Buffer {
+  const bytes = Buffer.from(base);
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  bytes.writeUInt32BE(crc32(bytes.subarray(12, 29)), 29);
+  return bytes;
+}
+
+describe('the decode budget', () => {
+  it('refuses a header claiming 100000 by 100000 before it decodes anything', async () => {
+    const bomb = pngClaiming(png, 100_000, 100_000);
+    expect(bomb.length).toBeLessThan(4096);
+    // The header is readable, so the refusal is the budget's and not the decoder's.
+    expect((await sharp(bomb, { limitInputPixels: false }).metadata()).width).toBe(100_000);
+
+    const refusal = await reEncodeImage(bomb, 'image/png', 'bomb.png').catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ImageNotDecodableError);
+    expect((refusal as ImageNotDecodableError).code).toBe('image_too_large');
+    expect((refusal as ImageNotDecodableError).reason).toContain('100000 by 100000');
+  });
+
+  it('refuses one oversized edge even where the product is inside the budget', async () => {
+    const wide = pngClaiming(png, MAX_INPUT_EDGE + 1, 100);
+    expect((MAX_INPUT_EDGE + 1) * 100).toBeLessThan(MAX_INPUT_PIXELS);
+    const refusal = await reEncodeImage(wide, 'image/png', 'wide.png').catch((error: unknown) => error);
+    expect((refusal as ImageNotDecodableError).code).toBe('image_too_large');
+  });
+
+  it('leaves an ordinary screenshot alone', async () => {
+    const encoded = await reEncodeImage(png, 'image/png', 'screenshot.png');
+    expect(encoded.detail.width).toBe(64);
   });
 });

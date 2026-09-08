@@ -383,6 +383,11 @@ export class EmailService {
     ctx: RequestContext,
     commentId: string | null,
   ): Promise<void> {
+    // The account's own per-file ceiling, applied here because nothing
+    // upstream of an inbound message enforces one: SES caps the whole
+    // message, not each part, and the re-encode below decodes whatever it
+    // is handed.
+    const maxBytes = await this.attachmentService.maxBytes(tx, ticket.account_id);
     for (const attachment of parsed.attachments) {
       const contentType = (attachment.contentType || 'application/octet-stream').toLowerCase();
       const fileName = (attachment.filename || `attachment-${randomUUID().slice(0, 8)}`).replace(
@@ -390,7 +395,10 @@ export class EmailService {
         '_',
       );
       const extension = fileName.toLowerCase().split('.').pop() ?? '';
-      if (!ALLOWED_TYPES[contentType]?.includes(extension)) {
+      // An own-key lookup: `constructor` and `toString` are legal MIME
+      // strings and would otherwise return an inherited function.
+      const extensions = Object.hasOwn(ALLOWED_TYPES, contentType) ? ALLOWED_TYPES[contentType] : undefined;
+      if (!extensions?.includes(extension)) {
         await this.security.write(
           {
             type: 'abuse.upload.rejected',
@@ -400,6 +408,21 @@ export class EmailService {
             actorId: 'email',
             requestId: ctx.requestId,
             attrs: { reason: 'type', contentType, extension, via: 'email' },
+          },
+          tx,
+        );
+        continue;
+      }
+      if (attachment.content.length > maxBytes) {
+        await this.security.write(
+          {
+            type: 'abuse.upload.rejected',
+            outcome: 'denied',
+            accountId: ticket.account_id,
+            actorKind: 'system',
+            actorId: 'email',
+            requestId: ctx.requestId,
+            attrs: { reason: 'size', size: attachment.content.length, max: maxBytes, via: 'email' },
           },
           tx,
         );
@@ -415,6 +438,7 @@ export class EmailService {
       let storedName = fileName;
       let reEncode: Record<string, unknown> | null = null;
       let undecodable: string | null = null;
+      let undecodableCode: 'image_not_decodable' | 'image_too_large' = 'image_not_decodable';
       if (isReEncodedImage(contentType)) {
         try {
           const encoded = await reEncodeImage(attachment.content, contentType, fileName);
@@ -425,6 +449,7 @@ export class EmailService {
         } catch (error) {
           undecodable =
             error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+          if (error instanceof ImageNotDecodableError) undecodableCode = error.code;
         }
       }
       const key = `accounts/${ticket.account_id}/tickets/${ticket.id}/${randomUUID()}-${storedName.slice(0, 120)}`;
@@ -451,7 +476,7 @@ export class EmailService {
           tx,
           row,
           'quarantined',
-          { reason: 'image_not_decodable', detail: undecodable, declared_content_type: contentType },
+          { reason: undecodableCode, detail: undecodable, declared_content_type: contentType },
           ctx,
         );
         continue;

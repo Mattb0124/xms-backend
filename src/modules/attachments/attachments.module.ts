@@ -384,11 +384,12 @@ export class AttachmentsService {
     } catch (error) {
       const detail =
         error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+      const reason = error instanceof ImageNotDecodableError ? error.code : 'image_not_decodable';
       const quarantined = await this.applyScan(
         tx,
         row,
         'quarantined',
-        { reason: 'image_not_decodable', detail, declared_content_type: row.content_type },
+        { reason, detail, declared_content_type: row.content_type },
         ctx,
       );
       return { row: quarantined, quarantined: true };
@@ -434,6 +435,7 @@ export class AttachmentsService {
     let storedName = input.fileName;
     let reEncode: Record<string, unknown> | null = null;
     let undecodable: string | null = null;
+    let undecodableCode: 'image_not_decodable' | 'image_too_large' = 'image_not_decodable';
     if (isReEncodedImage(storedType)) {
       try {
         const encoded = await reEncodeImage(input.body, storedType, input.fileName);
@@ -444,6 +446,7 @@ export class AttachmentsService {
       } catch (error) {
         undecodable =
           error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+        if (error instanceof ImageNotDecodableError) undecodableCode = error.code;
       }
     }
     const safeName = storedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
@@ -467,7 +470,7 @@ export class AttachmentsService {
         tx,
         row,
         'quarantined',
-        { reason: 'image_not_decodable', detail: undecodable, declared_content_type: input.contentType },
+        { reason: undecodableCode, detail: undecodable, declared_content_type: input.contentType },
         ctx,
       );
     const verdict = await this.scanner.scan(body);
@@ -615,7 +618,8 @@ export class AttachmentsService {
     });
   }
 
-  private async maxBytes(tx: Tx, accountId: string): Promise<number> {
+  /** The account's per-file ceiling. Public because the email path applies the same one. */
+  async maxBytes(tx: Tx, accountId: string): Promise<number> {
     const row = await tx.query<{ attachment_max_bytes: string }>(
       'select attachment_max_bytes from acct.account_settings where account_id = $1',
       [accountId],

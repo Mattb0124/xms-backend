@@ -29,14 +29,43 @@ import sharp from 'sharp';
  *   bomb cannot be re-encoded into the object store. A smaller image is
  *   never enlarged.
  *
+ * `resize` caps what is written, not what is decoded, so the decode has its
+ * own budget in front of it. The header is read first and an image claiming
+ * more than `MAX_INPUT_PIXELS` pixels, or an edge over `MAX_INPUT_EDGE`, is
+ * refused before a single row is decompressed; `limitInputPixels` is then
+ * passed explicitly on every `sharp` construction rather than inheriting
+ * the library's 268-megapixel default, so a header that lies is stopped by
+ * the decoder as well. Without both, a flat-colour PNG of a few hundred
+ * kilobytes declaring 100000 by 100000 pixels is a memory-exhaustion vector
+ * reachable by anyone who can email an account's intake alias.
+ *
  * An image that cannot be decoded is not an image. The caller quarantines
  * it with the reason this throws rather than storing bytes nothing here
  * could read.
  */
 export const RE_ENCODED_IMAGE_TYPES: readonly string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
+/**
+ * One thread per decode. With the budget below a worst-case decode is about
+ * 160 MB of raw pixels, and libvips fanning that across every core
+ * multiplies the peak by the core count for no useful throughput on files
+ * this small.
+ */
+sharp.concurrency(1);
+
 /** The longest edge of a stored image, in pixels. */
 export const MAX_IMAGE_EDGE = 4000;
+
+/**
+ * The decode budget. Forty megapixels is a 8000 by 5000 photograph, far
+ * more than any screenshot or phone camera a client sends, and about
+ * 160 MB of raw pixels rather than the gigabyte the library's default
+ * ceiling allows.
+ */
+export const MAX_INPUT_PIXELS = 40_000_000;
+
+/** No single edge past this, whatever the product of the two. */
+export const MAX_INPUT_EDGE = 20_000;
 
 export interface ReEncodedImage {
   readonly body: Buffer;
@@ -58,9 +87,13 @@ export interface ReEncodedImage {
 }
 
 export class ImageNotDecodableError extends Error {
-  constructor(readonly reason: string) {
+  constructor(
+    readonly reason: string,
+    /** What the caller quarantines it as; both reasons are handled the same way. */
+    readonly code: 'image_not_decodable' | 'image_too_large' = 'image_not_decodable',
+  ) {
     super(reason);
-    this.name = 'ImageNotDecodableError';
+    this.name = code === 'image_too_large' ? 'ImageTooLargeError' : 'ImageNotDecodableError';
   }
 }
 
@@ -75,23 +108,32 @@ export async function reEncodeImage(body: Buffer, contentType: string, fileName:
   let width: number | undefined;
   let height: number | undefined;
   let out: Buffer;
+  let after: sharp.Metadata;
   try {
-    const source = sharp(body, { failOn: 'error' });
-    const meta = await source.metadata();
+    // The header is read without decompressing anything, so the dimensions
+    // are known before any memory is spent on the pixels. The library's own
+    // ceiling is lifted for this read alone, so that an image over the
+    // budget is refused in our words with its size named, rather than as a
+    // generic decode failure; nothing is decompressed either way.
+    const meta = await sharp(body, { failOn: 'error', limitInputPixels: false }).metadata();
     width = meta.width;
     height = meta.height;
-    const pipeline = sharp(body, { failOn: 'error' })
+    assertWithinBudget(width, height);
+    const pipeline = sharp(body, { failOn: 'error', limitInputPixels: MAX_INPUT_PIXELS })
       .rotate()
       .resize({ width: MAX_IMAGE_EDGE, height: MAX_IMAGE_EDGE, fit: 'inside', withoutEnlargement: true });
     out = toJpeg
       ? await pipeline.jpeg({ quality: 82, progressive: false }).toBuffer()
       : await pipeline.png({ compressionLevel: 9 }).toBuffer();
+    // Reading the output back is part of the re-encode, not a step after
+    // it: a failure here is a file to quarantine, not a 500.
+    after = await sharp(out, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
   } catch (error) {
+    if (error instanceof ImageNotDecodableError) throw error;
     throw new ImageNotDecodableError(
       `the file is declared ${from} but could not be decoded as an image: ${(error as Error).message}`,
     );
   }
-  const after = await sharp(out).metadata();
   const outType = toJpeg ? 'image/jpeg' : 'image/png';
   return {
     body: out,
@@ -110,6 +152,21 @@ export async function reEncodeImage(body: Buffer, contentType: string, fileName:
       metadata_stripped: true,
     },
   };
+}
+
+/**
+ * The decode budget, refused from the header rather than survived. An image
+ * whose header does not say its size is refused too: an unknown dimension is
+ * not a small one.
+ */
+function assertWithinBudget(width: number | undefined, height: number | undefined): void {
+  if (width === undefined || height === undefined)
+    throw new ImageNotDecodableError('the image header carries no dimensions', 'image_too_large');
+  if (width > MAX_INPUT_EDGE || height > MAX_INPUT_EDGE || width * height > MAX_INPUT_PIXELS)
+    throw new ImageNotDecodableError(
+      `the image is ${width} by ${height} pixels, over the ${MAX_INPUT_PIXELS} pixel decode budget`,
+      'image_too_large',
+    );
 }
 
 /** The stored name says what the stored bytes are, whatever the sender called them. */
