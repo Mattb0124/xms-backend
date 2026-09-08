@@ -185,11 +185,12 @@ describe('time on tickets', () => {
   });
 
   it('keeps the commercial reads off tickets:view and computes the contract position on the server', async () => {
-    // Contract position, rate cards, budget, account time and billing are
+    // Contracts, rate cards, budget, account time and billing are
     // commercial: a consultant works tickets and does not read them
-    // (security review finding 22).
+    // (security review finding 22). The position is the one exception, and
+    // only because it prices nothing: it is the burn bar the wireframe puts
+    // on the ticket record, so it answers a consultant below.
     for (const path of [
-      `/v1/accounts/${accountId}/contracts/${contractId}/position`,
       `/v1/accounts/${accountId}/contracts`,
       `/v1/accounts/${accountId}/rate-cards`,
       `/v1/accounts/${accountId}/budget`,
@@ -199,6 +200,10 @@ describe('time on tickets', () => {
       const refused = await api().get(path).set(bearer(consultantToken)).expect(403);
       expect(refused.body).toMatchObject({ code: 'forbidden', permission: 'contracts:view' });
     }
+    await api()
+      .get(`/v1/accounts/${accountId}/contracts/${contractId}/position`)
+      .set(bearer(consultantToken))
+      .expect(200);
     const position = await api()
       .get(`/v1/accounts/${accountId}/contracts/${contractId}/position`)
       .set(bearer(adminToken))

@@ -1231,8 +1231,13 @@ export class TimeController {
     return this.time.compTime(principal, accountId, dateOr(from, -30), dateOr(to, 0));
   }
 
+  // Minutes and percentages only: ContractPosition (domain/time/burn.ts)
+  // carries no rate, no amount and no currency. The wireframe puts the burn
+  // bar on the ticket record's Contract rail for every consultant, so this
+  // one read sits behind tickets:view while every other commercial read on
+  // this controller stays behind contracts:view.
   @Get('accounts/:accountId/contracts/:contractId/position')
-  @RequirePermission('contracts:view')
+  @RequirePermission('tickets:view')
   position(
     @CurrentPrincipal() principal: Principal,
     @Param('accountId', ParseUUIDPipe) accountId: string,

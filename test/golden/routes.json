@@ -215,7 +215,7 @@
     "controller": "TimeController",
     "handler": "position",
     "realm": "internal",
-    "permission": "contracts:view",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },

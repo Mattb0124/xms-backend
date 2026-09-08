@@ -296,6 +296,33 @@ describe('budget view (TB-07, TB-08)', () => {
   });
 });
 
+describe('contract position on the ticket record', () => {
+  it('a consultant reads the burn bar and is still refused the rate cards and the budget view', async () => {
+    const position = await api()
+      .get(`/v1/accounts/${accountId}/contracts/${contractId}/position`)
+      .set(bearer(consultantToken))
+      .expect(200);
+    expect(position.body).toMatchObject({
+      contract: { id: contractId, name: 'Retainer', model: 'retainer' },
+      available_minutes: 600,
+      consumed_minutes: 720,
+      status: 'over',
+    });
+    expect(position.body.percent_consumed).toBe(120);
+    // Minutes and percentages only: nothing priced reaches a consultant.
+    const serialised = JSON.stringify(position.body);
+    for (const forbidden of ['rate', 'amount', 'currency', 'bill_rate']) {
+      expect(serialised, `position leaked ${forbidden}`).not.toContain(forbidden);
+    }
+    await api().get(`/v1/accounts/${accountId}/rate-cards`).set(bearer(consultantToken)).expect(403);
+    await api().get(`/v1/accounts/${accountId}/budget`).set(bearer(consultantToken)).expect(403);
+    await api()
+      .get(`/v1/accounts/${accountId}/budget/entries?from=${monthStart}&to=${monthEnd}`)
+      .set(bearer(consultantToken))
+      .expect(403);
+  });
+});
+
 describe('rollover (technical section 2)', () => {
   it('a new period carries the unused contracted minutes under carry_month', async () => {
     const other = await api()
