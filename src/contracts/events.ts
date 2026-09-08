@@ -137,6 +137,7 @@ export const AUDIT_EVENT_TYPES = [
   'connector.outbound.retried',
   'connector.dead_letter.replayed',
   'connector.dead_letter.discarded',
+  'connector.conflict.resolved',
   'sync.applied',
   'sync.pushed',
   'sync.conflict',

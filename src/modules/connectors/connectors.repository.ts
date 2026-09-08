@@ -305,6 +305,10 @@ export class ConnectorsRepository extends RepositoryBase {
     ]);
   }
 
+  linkById(tx: Tx, id: string): Promise<LinkRow> {
+    return this.one(tx, 'sync_link', 'select * from acct.sync_links where id = $1', [id]);
+  }
+
   linkByTicket(tx: Tx, instanceId: string, ticketId: string): Promise<LinkRow | undefined> {
     return this.maybeOne(tx, 'select * from acct.sync_links where instance_id = $1 and ticket_id = $2', [
       instanceId,

@@ -2770,6 +2770,16 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/tickets/:id/sync/:linkId/conflict",
+    "controller": "TicketSyncController",
+    "handler": "resolveConflict",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/tickets/:key",
     "controller": "TicketsController",

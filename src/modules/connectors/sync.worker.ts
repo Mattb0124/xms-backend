@@ -409,7 +409,16 @@ export class SyncWorker {
       if (skipped.length > 0) {
         await this.repo.touchLink(tx, currentLink.id, {
           state: 'conflict',
-          last_conflict: { fields: skipped, at: new Date().toISOString(), sys_updated_on: record.sys_updated_on },
+          last_conflict: {
+            direction: 'in',
+            fields: skipped,
+            // What the client said, kept beside the field names so the Sync
+            // card can show both sides and a consultant can accept the
+            // external value later without another poll.
+            values: Object.fromEntries(skipped.map((field) => [field, patch[field as XmsField] ?? null])),
+            at: new Date().toISOString(),
+            sys_updated_on: record.sys_updated_on,
+          },
         });
         await this.repo.insertRun(tx, {
           accountId: instance.account_id,
@@ -990,6 +999,8 @@ export class SyncWorker {
           last_conflict: {
             direction: 'out',
             fields: dropped.map((one) => one.field),
+            // The value that won on the client side, for the same reason.
+            values: Object.fromEntries(dropped.map((one) => [one.field, external[one.field as XmsField] ?? null])),
             at: new Date().toISOString(),
             sys_updated_on: record.sys_updated_on,
           },

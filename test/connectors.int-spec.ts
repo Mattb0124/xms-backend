@@ -528,7 +528,12 @@ describe('ingest-only mode, poll and apply (SN-01, SN-02, SN-09)', () => {
       client.query(`select state, last_conflict from acct.sync_links where ticket_id = $1`, [ticketAId]),
     );
     expect(link.rows[0].state).toBe('conflict');
-    expect(link.rows[0].last_conflict.fields).toEqual(['short_description']);
+    expect(link.rows[0].last_conflict).toMatchObject({
+      direction: 'in',
+      fields: ['short_description'],
+      // The client's value is kept, so it can be accepted by hand later.
+      values: { short_description: 'Renamed by the client' },
+    });
     const comments = await withSuperuser((client) =>
       client.query(`select body from acct.comments where ticket_id = $1 order by created_at`, [ticketAId]),
     );
@@ -1039,7 +1044,11 @@ describe('the outbound conflict policy (SN-04)', () => {
       client.query(`select state, last_conflict from acct.sync_links where ticket_id = $1`, [ticketBId]),
     );
     expect(link.rows[0].state).toBe('conflict');
-    expect(link.rows[0].last_conflict).toMatchObject({ direction: 'out', fields: ['short_description'] });
+    expect(link.rows[0].last_conflict).toMatchObject({
+      direction: 'out',
+      fields: ['short_description'],
+      values: { short_description: 'The client owns this line' },
+    });
     const runs = await api()
       .get(`/v1/connectors/${instanceId}/runs?direction=out&outcome=skipped_policy`)
       .set(bearer(adminToken))

@@ -5,6 +5,7 @@ import { GLOBAL_ACCOUNT_ID } from '../../common/auth/principal.repository.js';
 import { actorOf, AuditService, type AuditEntry } from '../../common/audit/audit.service.js';
 import { SecurityEventsService } from '../../common/events/security-events.service.js';
 import {
+  LEVELS,
   validateFieldMap,
   validateStateMap,
   type FieldMap,
@@ -18,6 +19,8 @@ import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { ConfigService, TICKET_TYPES } from '../admin/config/config.service.js';
 import type { StateMachineBody } from '../../domain/tickets/state-machine.js';
+import type { PatchTicketDto } from '../tickets/tickets.dto.js';
+import { TicketsService } from '../tickets/tickets.service.js';
 import { ConnectorsRepository, type InstanceRow, type MapRow } from './connectors.repository.js';
 import { SECRETS_PROVIDER, type SecretsProvider } from './secrets.js';
 import { SnowClientFactory } from './snow-client.factory.js';
@@ -30,6 +33,41 @@ export interface CreateInstanceInput {
   table_name?: string;
   profile?: 'csm' | 'itsm';
   poll_interval_seconds?: number;
+}
+
+/**
+ * The ticket fields a hand resolution can write back. They are the ones the
+ * inbound apply already knows how to put on a ticket; anything else a map
+ * may name (the requester, the client reference, the client notes) reaches
+ * the ticket by another path or not at all, so accepting it here would be
+ * writing a column this code does not own.
+ */
+export const RESOLVABLE_CONFLICT_FIELDS = [
+  'short_description',
+  'description',
+  'category',
+  'impact',
+  'urgency',
+] as const;
+
+export type ResolvableConflictField = (typeof RESOLVABLE_CONFLICT_FIELDS)[number];
+
+/** The two answers render 07 offers on a conflicted field. */
+export type ConflictChoice = 'accept_external' | 'keep_ours';
+
+/** What was decided about one field, kept on the link's conflict record. */
+export interface ConflictDecision {
+  field: string;
+  choice: ConflictChoice;
+  at: string;
+  by: string;
+  by_name: string;
+}
+
+export interface ResolveConflictInput {
+  version: number;
+  field: string;
+  choice: ConflictChoice;
 }
 
 export interface UpdateInstanceInput {
@@ -58,6 +96,7 @@ export class ConnectorsService {
   constructor(
     private readonly uow: UnitOfWork,
     private readonly repo: ConnectorsRepository,
+    private readonly tickets: TicketsService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly security: SecurityEventsService,
@@ -571,6 +610,105 @@ export class ConnectorsService {
     });
   }
 
+  /**
+   * Settles one field of the conflict recorded on a ticket's sync link,
+   * which is render 07's "Accept" and "Keep ours". ServiceNow Sync
+   * functional 5.3 says policy decides a conflict and names no permission
+   * for overriding one by hand, so this stands on `admin:connectors`: the
+   * permission that already owns the field maps and the per-link system of
+   * record, which is where the policy that lost is set.
+   *
+   * Accepting writes the external value through the ticket service, so the
+   * audit trail, the outbox and the version check are the ones every other
+   * edit of a ticket gets rather than a second write path. Keeping ours
+   * writes nothing to the ticket. Either way the decision goes onto the
+   * conflict record, so the card can say the field was settled and by whom,
+   * and the link leaves the conflict state once every field it named has an
+   * answer.
+   */
+  async resolveConflict(
+    principal: Principal,
+    ctx: RequestContext,
+    ticketId: string,
+    linkId: string,
+    input: ResolveConflictInput,
+  ) {
+    return this.uow.run(principal, async (tx) => {
+      const link = await this.repo.linkById(tx, linkId);
+      if (link.ticket_id !== ticketId) throw new NotFoundException({ code: 'not_found', entity: 'sync_link' });
+      const conflict: Record<string, unknown> = link.last_conflict ?? {};
+      const fields = Array.isArray(conflict.fields) ? (conflict.fields as string[]) : [];
+      if (fields.length === 0) throw new NotFoundException({ code: 'not_found', entity: 'sync_conflict' });
+      if (!fields.includes(input.field))
+        throw new BadRequestException({ code: 'unknown_conflict_field', field: input.field, fields });
+      const settled = Array.isArray(conflict.resolved) ? (conflict.resolved as ConflictDecision[]) : [];
+      if (settled.some((decision) => decision.field === input.field))
+        throw new ConflictException({ code: 'conflict_already_settled', field: input.field });
+
+      let ticketVersion = input.version;
+      if (input.choice === 'accept_external') {
+        if (!(RESOLVABLE_CONFLICT_FIELDS as readonly string[]).includes(input.field))
+          throw new BadRequestException({
+            code: 'field_not_resolvable',
+            field: input.field,
+            resolvable: [...RESOLVABLE_CONFLICT_FIELDS],
+          });
+        const values = (conflict.values ?? {}) as Record<string, unknown>;
+        const external = values[input.field];
+        // A conflict recorded before the external value was kept, or on a
+        // field the client carries nothing for, cannot be accepted: there
+        // is no value to write, and guessing one is worse than refusing.
+        if (external === undefined || external === null)
+          throw new ConflictException({ code: 'external_value_unknown', field: input.field });
+        const patched = await this.tickets.patch(
+          principal,
+          ctx,
+          ticketId,
+          {
+            version: input.version,
+            [input.field]: conflictValue(input.field as ResolvableConflictField, external),
+          } as unknown as PatchTicketDto,
+          tx,
+        );
+        ticketVersion = patched.version;
+      }
+
+      const decision: ConflictDecision = {
+        field: input.field,
+        choice: input.choice,
+        at: new Date().toISOString(),
+        by: principal.userId,
+        by_name: principal.displayName,
+      };
+      const resolved = [...settled, decision];
+      const outstanding = fields.filter((field) => !resolved.some((one) => one.field === field));
+      await this.repo.touchLink(tx, link.id, {
+        last_conflict: { ...conflict, resolved },
+        ...(outstanding.length === 0 && link.state === 'conflict' ? { state: 'linked' } : {}),
+      });
+      await this.audit.account(tx, link.account_id, actorOf(principal), ctx, [
+        {
+          entityKind: 'ticket',
+          entityId: link.ticket_id,
+          ticketId: link.ticket_id,
+          eventType: 'connector.conflict.resolved',
+          field: input.field,
+          newValue: { link_id: link.id, instance_id: link.instance_id, choice: input.choice },
+        },
+      ]);
+      return {
+        link_id: link.id,
+        field: input.field,
+        choice: input.choice,
+        resolved_at: decision.at,
+        link_state: outstanding.length === 0 && link.state === 'conflict' ? 'linked' : link.state,
+        settled_fields: resolved.map((one) => one.field),
+        outstanding_fields: outstanding,
+        ticket_version: ticketVersion,
+      };
+    });
+  }
+
   /** The state keys per ticket type for the account, for state map validation and apply. */
   async machineStates(tx: Tx, accountId: string): Promise<Record<string, string[]>> {
     const result: Record<string, string[]> = {};
@@ -580,6 +718,23 @@ export class ConnectorsService {
     }
     return result;
   }
+}
+
+/**
+ * The external value as the ticket column will take it: the clamps the
+ * inbound apply already uses, and the impact and urgency vocabulary, so a
+ * value the client sent that the column cannot hold is a refusal here
+ * rather than a constraint violation at write time.
+ */
+function conflictValue(field: ResolvableConflictField, value: unknown): string {
+  const text = String(value);
+  if (field === 'impact' || field === 'urgency') {
+    if (!(LEVELS as readonly string[]).includes(text))
+      throw new BadRequestException({ code: 'invalid_external_value', field, allowed: [...LEVELS] });
+    return text;
+  }
+  const limit = field === 'short_description' ? 300 : field === 'category' ? 50 : 50_000;
+  return text.length > limit ? text.slice(0, limit) : text;
 }
 
 export function publicView(

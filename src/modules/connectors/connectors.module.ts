@@ -123,6 +123,17 @@ class SamplesDto {
   @IsOptional() @IsUUID('4') map_id?: string;
 }
 
+/**
+ * Render 07's "Accept" and "Keep ours" on a conflicted field. The version
+ * is the ticket's, because accepting goes through the ticket update path
+ * and takes its optimistic check.
+ */
+class ResolveConflictDto {
+  @IsInt() @Min(1) version!: number;
+  @IsString() @MinLength(1) @MaxLength(60) field!: string;
+  @IsIn(['accept_external', 'keep_ours']) choice!: 'accept_external' | 'keep_ours';
+}
+
 /** The queue filter the outbound list accepts; anything else is a 400 rather than an empty list. */
 const OUTBOUND_STATUSES = ['pending', 'sent', 'failed', 'dead_lettered', 'skipped'];
 
@@ -339,6 +350,18 @@ export class TicketSyncController {
   @RequirePermission('tickets:view')
   sync(@CurrentPrincipal() principal: Principal, @Param('id', ParseUUIDPipe) id: string) {
     return this.connectors.ticketSync(principal, id);
+  }
+
+  @Post(':id/sync/:linkId/conflict')
+  @RequirePermission('admin:connectors')
+  resolveConflict(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('linkId', ParseUUIDPipe) linkId: string,
+    @Body() dto: ResolveConflictDto,
+  ) {
+    return this.connectors.resolveConflict(principal, ctx, id, linkId, dto);
   }
 }
 
