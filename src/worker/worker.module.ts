@@ -13,6 +13,7 @@ import { EmailService } from '../modules/email/email.service.js';
 import { ReportingCoreModule, SnapshotJob } from '../modules/reporting/reporting.module.js';
 import { ReportSchedulesCoreModule, SchedulesService } from '../modules/reporting/schedules.module.js';
 import { CsatCoreModule, CsatService } from '../modules/portal/csat.module.js';
+import { WebhooksCoreModule, WebhookDeliveryService } from '../modules/integrations/webhooks.module.js';
 import { DbModule } from '../db/db.module.js';
 import { DbPools } from '../db/pool.js';
 import { HealthModule } from '../health/health.module.js';
@@ -42,6 +43,7 @@ import { RosterJobs } from './roster-jobs.js';
     ReportingCoreModule,
     ReportSchedulesCoreModule,
     CsatCoreModule,
+    WebhooksCoreModule,
     AiCoreModule,
     IntegrityCoreModule,
     ConnectorsCoreModule,
@@ -75,6 +77,7 @@ export class WorkerModule implements OnModuleInit {
     private readonly archive: ArchiveService,
     private readonly schedules: SchedulesService,
     private readonly csat: CsatService,
+    private readonly webhooks: WebhookDeliveryService,
   ) {}
 
   onModuleInit(): void {
@@ -87,6 +90,11 @@ export class WorkerModule implements OnModuleInit {
       'portal.csat',
       (type) => type === 'ticket.transitioned',
       (row) => this.csat.onOutbox(row),
+    );
+    this.dispatcher.subscribe(
+      'connector.webhook',
+      (type) => this.webhooks.handles(type),
+      (row) => this.webhooks.onOutbox(row),
     );
     this.dispatcher.subscribe(
       'axel.intake',
@@ -108,5 +116,6 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.archive.archiveJob());
     this.runner.schedule(this.schedules.scheduleJob());
     this.runner.schedule(this.csat.reminderJob());
+    this.runner.schedule(this.webhooks.retryJob());
   }
 }

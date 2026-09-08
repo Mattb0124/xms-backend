@@ -551,6 +551,46 @@
   },
   {
     "method": "GET",
+    "path": "/v1/admin/api-clients",
+    "controller": "ApiClientsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:api-clients",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/api-clients",
+    "controller": "ApiClientsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:api-clients",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/api-clients/:id/revoke",
+    "controller": "ApiClientsController",
+    "handler": "revoke",
+    "realm": "internal",
+    "permission": "admin:api-clients",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/api-clients/scopes",
+    "controller": "ApiClientsController",
+    "handler": "scopes",
+    "realm": "internal",
+    "permission": "admin:api-clients",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/admin/config/:kind",
     "controller": "AdminConfigController",
     "handler": "describe",
@@ -2416,6 +2456,66 @@
     "handler": "update",
     "realm": "internal",
     "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/webhooks",
+    "controller": "WebhooksController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/webhooks",
+    "controller": "WebhooksController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/webhooks/:id",
+    "controller": "WebhooksController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/webhooks/:id/deliveries",
+    "controller": "WebhooksController",
+    "handler": "deliveries",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/webhooks/:id/rotate-secret",
+    "controller": "WebhooksController",
+    "handler": "rotate",
+    "realm": "internal",
+    "permission": "webhooks:manage",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/webhooks/event-types",
+    "controller": "WebhooksController",
+    "handler": "eventTypes",
+    "realm": "internal",
+    "permission": "webhooks:manage",
     "public": null,
     "axel": false
   },

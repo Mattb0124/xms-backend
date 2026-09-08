@@ -40,6 +40,10 @@ const envSchema = z
     DATABASE_URL_MIGRATOR: z.string().url().optional(),
     /** Where the web app lives, for links in outbound mail (survey prompts, report packs). */
     WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
+    /** Seals webhook signing secrets at rest; without it no subscription can be created (fail closed). */
+    WEBHOOK_SECRETS_KEY: z.string().min(16).optional(),
+    /** Tests and local stacks may deliver to private addresses; production never does. */
+    WEBHOOK_ALLOW_PRIVATE: z.enum(['true', 'false']).default('false'),
     // Identity (Security & Tenancy section 2). The XMS Clerk application;
     // authorised parties are the web hosts; the agents audience names the
     // long-lived template accepted only on Axel routes.
@@ -107,6 +111,13 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ['STORAGE_KIND'],
           message: 'production requires the S3 store and S3_BUCKET',
+        });
+      }
+      if (env.WEBHOOK_ALLOW_PRIVATE === 'true') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['WEBHOOK_ALLOW_PRIVATE'],
+          message: 'must not be set in production',
         });
       }
       if (env.MAIL_TRANSPORT !== 'ses') {
