@@ -109,7 +109,11 @@ export interface BucketRow {
   account_id: string;
   key: string;
   label: string;
+  /** The shared taxonomy (TB-12), so the same kind of work groups across accounts. */
+  code: string;
   billable_class: string;
+  /** The contract this bucket's time belongs to; null falls back to the account's active one. */
+  contract_id: string | null;
   status: string;
   version: number;
 }
@@ -639,14 +643,26 @@ export class TimeRepository extends RepositoryBase {
 
   insertBucket(
     tx: Tx,
-    input: { accountId: string; key: string; label: string; billableClass: string },
+    input: {
+      accountId: string;
+      key: string;
+      label: string;
+      code: string;
+      billableClass: string;
+      contractId: string | null;
+    },
   ): Promise<BucketRow> {
     return this.one<BucketRow>(
       tx,
       'bucket',
-      `insert into acct.non_ticket_buckets (account_id, key, label, billable_class) values ($1, $2, $3, $4) returning *`,
-      [input.accountId, input.key, input.label, input.billableClass],
+      `insert into acct.non_ticket_buckets (account_id, key, label, code, billable_class, contract_id)
+       values ($1, $2, $3, $4, $5, $6) returning *`,
+      [input.accountId, input.key, input.label, input.code, input.billableClass, input.contractId],
     );
+  }
+
+  updateBucket(tx: Tx, id: string, version: number, assignments: Record<string, unknown>): Promise<BucketRow> {
+    return this.updateVersioned<BucketRow>(tx, 'bucket', 'acct.non_ticket_buckets', id, version, assignments);
   }
 
   /** Display names for user ids on billing periods; unknown ids are absent and 'system' names itself. */

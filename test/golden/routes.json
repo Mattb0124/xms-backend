@@ -130,8 +130,18 @@
     "axel": false
   },
   {
+    "method": "PATCH",
+    "path": "/v1/accounts/:accountId/buckets/:bucketId",
+    "controller": "TimeController",
+    "handler": "patchBucket",
+    "realm": "internal",
+    "permission": "contracts:manage",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
-    "path": "/v1/accounts/:accountId/buckets/:bucketId/time",
+    "path": "/v1/accounts/:accountId/buckets/:bucketId/time-entries",
     "controller": "TimeController",
     "handler": "logOnBucket",
     "realm": "internal",

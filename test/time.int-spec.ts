@@ -243,7 +243,7 @@ describe('buckets and locked periods', () => {
       .send({ key: 'governance', label: 'Governance', billable_class: 'non_billable' })
       .expect(201);
     const entry = await api()
-      .post(`/v1/accounts/${accountId}/buckets/${bucket.body.id}/time`)
+      .post(`/v1/accounts/${accountId}/buckets/${bucket.body.id}/time-entries`)
       .set(bearer(consultantToken))
       .send({ performed_on: today, minutes: 30, activity_type: 'governance' })
       .expect(201);

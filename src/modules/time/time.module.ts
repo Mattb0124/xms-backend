@@ -10,6 +10,7 @@ import {
   NotFoundException,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -209,6 +210,14 @@ export class AdjustTimeDto {
   reason!: string;
 }
 
+/**
+ * The non-ticket taxonomy (TB-12; technical 2.7). Governance, QBR
+ * preparation, account management and escalation handling are the buckets
+ * the workbook names; `custom` is anything an operator adds for an account,
+ * so reporting can still group the same kind of work across accounts.
+ */
+export const BUCKET_CODES = ['governance', 'qbr_prep', 'account_mgmt', 'escalation', 'custom'] as const;
+
 export class CreateBucketDto {
   @IsString()
   @Matches(/^[a-z][a-z0-9_]{1,40}$/)
@@ -219,9 +228,51 @@ export class CreateBucketDto {
   @MaxLength(80)
   label!: string;
 
+  /** The shared taxonomy of TB-12; anything an account invents is `custom`. */
+  @IsOptional()
+  @IsIn(BUCKET_CODES)
+  code?: (typeof BUCKET_CODES)[number];
+
+  /**
+   * Optional: non-ticket work is internal unless the account says otherwise
+   * (functional 5.9 logs onboarding weeks as Internal), so a bucket that
+   * names no class takes the first class the account has that does not
+   * consume the contract.
+   */
+  @IsOptional()
   @IsString()
   @Matches(/^[a-z][a-z0-9_]*$/)
-  billable_class!: string;
+  billable_class?: string;
+
+  /** The contract this bucket's time belongs to; omitted falls back to the active one. */
+  @IsOptional()
+  @IsUUID('4')
+  contract_id?: string;
+}
+
+export class PatchBucketDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  label?: string;
+
+  @IsOptional()
+  @IsIn(BUCKET_CODES)
+  code?: (typeof BUCKET_CODES)[number];
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^[a-z][a-z0-9_]*$/)
+  billable_class?: string;
+
+  @IsOptional()
+  @IsIn(['active', 'retired'])
+  status?: 'active' | 'retired';
 }
 
 export class CreatePeriodDto {
@@ -289,23 +340,48 @@ export class TimeService {
     });
   }
 
+  /**
+   * Non-ticket time (TB-12): work that belongs to an account but to no
+   * ticket, so utilisation reads honestly. The entry carries the bucket's
+   * billable class unless the caller names one, and whether it burns the
+   * contract follows that class exactly as a ticket entry does: an internal
+   * or non-billable class does not consume the period, a billable one does,
+   * which is what lets the client portal show the buckets by name under
+   * Detailed consumption.
+   */
   async logOnBucket(
     principal: Principal,
     ctx: RequestContext,
+    accountId: string,
     bucketId: string,
     dto: LogTimeDto,
   ): Promise<TimeEntryRow> {
+    const correlationId = ctx.requestId ?? randomUUID();
     return this.uow.run(principal, async (tx) => {
       const bucket = await this.time.bucketById(tx, bucketId);
+      // The account in the path is the account the caller meant; a bucket of
+      // another account is not found rather than forbidden.
+      if (bucket.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'bucket' });
       if (bucket.status !== 'active') throw new ConflictException({ code: 'bucket_retired' });
-      const contract = await this.singleContract(tx, bucket.account_id);
-      return this.insertEntry(
+      const contractId = bucket.contract_id ?? (await this.singleContract(tx, bucket.account_id)).id;
+      const entry = await this.insertEntry(
         tx,
         principal,
         ctx,
-        { accountId: bucket.account_id, contractId: contract.id, bucketId: bucket.id },
+        { accountId: bucket.account_id, contractId, bucketId: bucket.id },
         { ...dto, billable_class: dto.billable_class ?? bucket.billable_class },
       );
+      // Capacity's read model and the reporting snapshots consume time.logged
+      // whatever the entry hangs off, so a bucket entry emits it too.
+      await this.outbox.write(tx, {
+        accountId: bucket.account_id,
+        aggregate: 'non_ticket_bucket',
+        aggregateId: bucket.id,
+        eventType: 'time.logged',
+        correlationId,
+        payload: { entry_id: entry.id, minutes: entry.minutes, bucket_code: bucket.code },
+      });
+      return entry;
     });
   }
 
@@ -499,18 +575,57 @@ export class TimeService {
   createBucket(principal: Principal, ctx: RequestContext, accountId: string, dto: CreateBucketDto) {
     return this.uow.run(principal, async (tx) => {
       const classes = await this.classes(tx, accountId);
-      if (!classes.some((spec) => spec.key === dto.billable_class))
+      const billableClass = dto.billable_class ?? internalClassOf(classes);
+      if (!classes.some((spec) => spec.key === billableClass))
         throw new BadRequestException({ code: 'unknown_billable_class' });
+      if (dto.contract_id) {
+        const contract = await this.contracts.byId(tx, dto.contract_id);
+        if (contract.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'contract' });
+      }
       const bucket = await this.time.insertBucket(tx, {
         accountId,
         key: dto.key,
         label: dto.label,
-        billableClass: dto.billable_class,
+        code: dto.code ?? 'custom',
+        billableClass,
+        contractId: dto.contract_id ?? null,
       });
       await this.audit.account(tx, accountId, actorOf(principal), ctx, [
-        { entityKind: 'non_ticket_bucket', entityId: bucket.id, eventType: 'created', newValue: dto },
+        {
+          entityKind: 'non_ticket_bucket',
+          entityId: bucket.id,
+          eventType: 'created',
+          newValue: { ...dto, billable_class: billableClass, code: bucket.code },
+        },
       ]);
       return bucket;
+    });
+  }
+
+  /** Rename a bucket, move it to another class, or retire it (TB-12). */
+  patchBucket(principal: Principal, ctx: RequestContext, accountId: string, bucketId: string, dto: PatchBucketDto) {
+    return this.uow.run(principal, async (tx) => {
+      const before = await this.time.bucketById(tx, bucketId);
+      if (before.account_id !== accountId) throw new NotFoundException({ code: 'not_found', entity: 'bucket' });
+      if (dto.billable_class) {
+        const classes = await this.classes(tx, accountId);
+        if (!classes.some((spec) => spec.key === dto.billable_class))
+          throw new BadRequestException({ code: 'unknown_billable_class' });
+      }
+      const assignments: Record<string, unknown> = {};
+      for (const field of ['label', 'code', 'billable_class', 'status'] as const)
+        if (dto[field] !== undefined) assignments[field] = dto[field];
+      const after = await this.time.updateBucket(tx, bucketId, dto.version, assignments);
+      await this.audit.account(tx, accountId, actorOf(principal), ctx, [
+        {
+          entityKind: 'non_ticket_bucket',
+          entityId: bucketId,
+          eventType: 'updated',
+          oldValue: { label: before.label, billable_class: before.billable_class, status: before.status },
+          newValue: { label: after.label, billable_class: after.billable_class, status: after.status },
+        },
+      ]);
+      return after;
     });
   }
 
@@ -1285,15 +1400,29 @@ export class TimeController {
     return this.time.createBucket(principal, ctx, accountId, dto);
   }
 
-  @Post('accounts/:accountId/buckets/:bucketId/time')
+  @Patch('accounts/:accountId/buckets/:bucketId')
+  @RequirePermission('contracts:manage')
+  patchBucket(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
+    @Param('bucketId', ParseUUIDPipe) bucketId: string,
+    @Body() dto: PatchBucketDto,
+  ) {
+    return this.time.patchBucket(principal, ctx, accountId, bucketId, dto);
+  }
+
+  /** Technical 4 names this route `/time-entries` (TB-12). */
+  @Post('accounts/:accountId/buckets/:bucketId/time-entries')
   @RequirePermission('time:log')
   logOnBucket(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,
+    @Param('accountId', ParseUUIDPipe) accountId: string,
     @Param('bucketId', ParseUUIDPipe) bucketId: string,
     @Body() dto: LogTimeDto,
   ) {
-    return this.time.logOnBucket(principal, ctx, bucketId, dto);
+    return this.time.logOnBucket(principal, ctx, accountId, bucketId, dto);
   }
 
   @Post('accounts/:accountId/billing-periods')
@@ -1393,6 +1522,17 @@ export class TimeController {
     response.setHeader('x-checksum', result.checksum);
     response.send(result.body);
   }
+}
+
+/**
+ * The class a bucket takes when none is named: the first the account has
+ * that does not consume the contract, which is the "classed Internal"
+ * default functional 5.9 asks for. An account whose catalogue has only
+ * consuming classes falls back to the first of those, and the create route
+ * then refuses nothing it should not.
+ */
+function internalClassOf(classes: readonly BillableClassSpec[]): string {
+  return (classes.find((spec) => !spec.consumes_contract) ?? classes[0])?.key ?? 'non_billable';
 }
 
 function dateOr(value: string | undefined, offsetDays: number): string {
