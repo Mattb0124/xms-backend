@@ -147,8 +147,17 @@ export class ConnectorsService {
       }
       if (input.mode && input.mode !== 'off' && !before.active_field_map_id)
         throw new ConflictException({ code: 'no_active_field_map' });
-      if (input.mode === 'bidirectional')
-        throw new ConflictException({ code: 'mode_unavailable', detail: 'bidirectional mode ships with Phase 3' });
+      // Writing into a client instance needs more than reading from it: a
+      // state map (XMS states have to reach the client's model) and a
+      // credential the instance has actually accepted (technical 3.5).
+      if (input.mode === 'bidirectional') {
+        if (!before.active_state_map_id) throw new ConflictException({ code: 'no_active_state_map' });
+        if (before.credential_state !== 'valid')
+          throw new ConflictException({
+            code: 'credential_not_valid',
+            credential_state: before.credential_state,
+          });
+      }
       if (Object.keys(assignments).length === 0) return publicView(before);
       const after = await this.repo.updateInstance(tx, id, input.version, assignments);
       const entries: AuditEntry[] = Object.keys(assignments).map((field) => ({
@@ -499,11 +508,60 @@ export class ConnectorsService {
     });
   }
 
+  /** The outbound queue of one instance, for the operator's drill-down. */
+  outbound(principal: Principal, id: string, status?: string) {
+    return this.uow.run(principal, async (tx) => {
+      await this.repo.instance(tx, id);
+      return this.repo.outboundList(tx, id, status);
+    });
+  }
+
+  /** Puts one settled outbound row back in the queue, as an audit event. */
+  retryOutbound(principal: Principal, ctx: RequestContext, id: string, outboundId: string) {
+    return this.uow.run(principal, async (tx) => {
+      const instance = await this.repo.instance(tx, id);
+      const row = await this.repo.outbound(tx, outboundId);
+      if (row.instance_id !== id) throw new NotFoundException({ code: 'not_found', entity: 'sync_outbound' });
+      if (row.status === 'pending') return { id: outboundId, outcome: 'already_pending' };
+      await this.repo.reopenOutbound(tx, outboundId);
+      await this.audit.account(tx, instance.account_id, actorOf(principal), ctx, [
+        {
+          entityKind: 'ticket',
+          entityId: row.ticket_id,
+          ticketId: row.ticket_id,
+          eventType: 'connector.outbound.retried',
+          oldValue: row.status,
+          newValue: { instance_id: id, outbound_id: outboundId, event: row.event },
+        },
+      ]);
+      return { id: outboundId, outcome: 'requeued' };
+    });
+  }
+
+  /**
+   * The ticket Sync card: the linked record per instance with what has and
+   * has not reached it (functional 5.3), and the recent runs.
+   */
   ticketSync(principal: Principal, ticketId: string) {
-    return this.uow.run(principal, async (tx) => ({
-      links: await this.repo.linksOfTicket(tx, ticketId),
-      runs: await this.repo.runsOfTicket(tx, ticketId),
-    }));
+    return this.uow.run(principal, async (tx) => {
+      const links = await this.repo.linksOfTicket(tx, ticketId);
+      const outbound = await this.repo.outboundOfTicket(tx, ticketId);
+      return {
+        links: links.map((link) => {
+          const queue = outbound.find((row) => row.instance_id === link.instance_id);
+          return {
+            ...link,
+            outbound: {
+              last_pushed_at: queue?.last_sent_at ?? null,
+              pending: queue?.pending ?? 0,
+              failed: queue?.failed ?? 0,
+              last_error: queue?.last_error ?? null,
+            },
+          };
+        }),
+        runs: await this.repo.runsOfTicket(tx, ticketId),
+      };
+    });
   }
 
   /** The state keys per ticket type for the account, for state map validation and apply. */

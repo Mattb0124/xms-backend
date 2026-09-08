@@ -391,7 +391,7 @@ describe('ingest-only mode, poll and apply (SN-01, SN-02, SN-09)', () => {
   let caseA: Record<string, unknown>;
   let ticketAId = '';
 
-  it('moves to ingest_only with a security event and refuses bidirectional in this cut', async () => {
+  it('moves to ingest_only with a security event, and drops back from bidirectional in one call (SN-09)', async () => {
     await refreshVersion();
     const updated = await api()
       .patch(`/v1/connectors/${instanceId}`)
@@ -404,12 +404,22 @@ describe('ingest-only mode, poll and apply (SN-01, SN-02, SN-09)', () => {
       client.query(`select attrs from sys.security_events where event_type = 'admin.connector.mode_changed'`),
     );
     expect(security.rows.at(-1)?.attrs).toMatchObject({ from: 'off', to: 'ingest_only' });
-    const refused = await api()
+    // Both maps are active and the credential has been accepted, so
+    // bidirectional is available; dropping back to ingest_only is the
+    // documented fallback and loses nothing.
+    const promoted = await api()
       .patch(`/v1/connectors/${instanceId}`)
       .set(bearer(adminToken))
       .send({ version: instanceVersion, mode: 'bidirectional' })
-      .expect(409);
-    expect(refused.body.code).toBe('mode_unavailable');
+      .expect(200);
+    expect(promoted.body.mode).toBe('bidirectional');
+    const back = await api()
+      .patch(`/v1/connectors/${instanceId}`)
+      .set(bearer(adminToken))
+      .send({ version: promoted.body.version, mode: 'ingest_only' })
+      .expect(200);
+    expect(back.body.mode).toBe('ingest_only');
+    instanceVersion = back.body.version;
   });
 
   it('polls behind the watermark, writes inbox rows once, and advances only after the page is stored', async () => {
@@ -682,16 +692,14 @@ describe('the outbound queue (SN-03)', () => {
       .set(bearer(adminToken))
       .send({ action: 'arm' })
       .expect(201);
-    // The administrator route refuses bidirectional until the mode gate
-    // lands with the outbound screens; the queue is testable before it, so
-    // the promotion here stands in for that call and declares the audit the
-    // guard trigger asks for.
-    await withSuperuser(async (client) => {
-      await client.query('begin');
-      await client.query(`set local xms.audited = 'true'`);
-      await client.query(`update acct.connector_instances set mode = 'bidirectional' where id = $1`, [instanceId]);
-      await client.query('commit');
-    });
+    await refreshVersion();
+    const promoted = await api()
+      .patch(`/v1/connectors/${instanceId}`)
+      .set(bearer(adminToken))
+      .send({ version: instanceVersion, mode: 'bidirectional' })
+      .expect(200);
+    expect(promoted.body.mode).toBe('bidirectional');
+    instanceVersion = promoted.body.version;
     caseB = seedCase({ short_description: 'Outbound subject', sys_updated_on: '2027-02-01 00:00:00' });
     expect(await forcePoll()).toContain('1 new');
     expect(await sync.applyPending()).toBe('applied 1, failed 0');
@@ -1049,5 +1057,140 @@ describe('the outbound conflict policy (SN-04)', () => {
       .set(bearer(adminToken))
       .expect(200);
     expect(runs.body[0].detail.fields).toEqual(['short_description']);
+  });
+});
+
+describe('the outbound queue routes and the Sync card (SN-07, SN-09)', () => {
+  let secondId = '';
+  let secondVersion = 1;
+
+  it('lists the queue, filters by status and refuses an unknown one', async () => {
+    const all = await api().get(`/v1/connectors/${instanceId}/outbound`).set(bearer(adminToken)).expect(200);
+    expect(all.body.length).toBeGreaterThan(0);
+    expect(all.body[0]).toMatchObject({ instance_id: instanceId, ticket_key: expect.stringMatching(/^CS\d{7}$/) });
+    const sent = await api()
+      .get(`/v1/connectors/${instanceId}/outbound?status=sent`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(sent.body.every((row: { status: string }) => row.status === 'sent')).toBe(true);
+    expect(sent.body.length).toBeLessThan(all.body.length);
+    const bad = await api()
+      .get(`/v1/connectors/${instanceId}/outbound?status=nowhere`)
+      .set(bearer(adminToken))
+      .expect(400);
+    expect(bad.body.code).toBe('bad_status');
+    const token = await devToken({ sub: 'dev_consultant', email: 'consultant@example.test' });
+    await api().get(`/v1/connectors/${instanceId}/outbound`).set(bearer(token)).expect(403);
+  });
+
+  it('requeues one settled row as an audit event and says so when it is already queued', async () => {
+    const skipped = await api()
+      .get(`/v1/connectors/${instanceId}/outbound?status=skipped`)
+      .set(bearer(adminToken))
+      .expect(200);
+    const target = skipped.body[0];
+    expect(target).toBeTruthy();
+    const requeued = await api()
+      .post(`/v1/connectors/${instanceId}/outbound/${target.id}/retry`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(requeued.body).toEqual({ id: target.id, outcome: 'requeued' });
+    const again = await api()
+      .post(`/v1/connectors/${instanceId}/outbound/${target.id}/retry`)
+      .set(bearer(adminToken))
+      .expect(201);
+    expect(again.body.outcome).toBe('already_pending');
+    const audit = await withSuperuser((client) =>
+      client.query(`select new_value from acct.audit_events where event_type = 'connector.outbound.retried'`),
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].new_value).toMatchObject({ instance_id: instanceId, outbound_id: target.id });
+  });
+
+  it('shows the outbound state on the ticket Sync card', async () => {
+    const card = await api().get(`/v1/tickets/${ticketBId}/sync`).set(bearer(adminToken)).expect(200);
+    expect(card.body.links).toHaveLength(1);
+    expect(card.body.links[0]).toMatchObject({ instance_name: 'Brookfield CSM', mode: 'bidirectional' });
+    expect(card.body.links[0].outbound).toMatchObject({ pending: 1, failed: 0 });
+    expect(card.body.links[0].outbound.last_pushed_at).not.toBeNull();
+  });
+
+  it('refuses bidirectional until both maps are active and the credential has been accepted', async () => {
+    const created = await api()
+      .post(`/v1/accounts/${accountId}/connectors/servicenow`)
+      .set(bearer(adminToken))
+      .send({
+        name: 'Brookfield CSM sandbox',
+        base_url: standIn.url,
+        auth_kind: 'basic',
+        credential: { username: 'xms.integration', password: 'stand-in' },
+        profile: 'csm',
+      })
+      .expect(201);
+    secondId = created.body.id;
+    secondVersion = created.body.version;
+    const noFieldMap = await api()
+      .patch(`/v1/connectors/${secondId}`)
+      .set(bearer(adminToken))
+      .send({ version: secondVersion, mode: 'bidirectional' })
+      .expect(409);
+    expect(noFieldMap.body.code).toBe('no_active_field_map');
+
+    const fieldMap = await api()
+      .post(`/v1/connectors/${secondId}/field-maps`)
+      .set(bearer(adminToken))
+      .send({ entries: FIELD_MAP })
+      .expect(201);
+    await api()
+      .post(`/v1/connectors/${secondId}/field-maps/${fieldMap.body.id}/validate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    await api()
+      .post(`/v1/connectors/${secondId}/field-maps/${fieldMap.body.id}/activate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    secondVersion += 1;
+    const noStateMap = await api()
+      .patch(`/v1/connectors/${secondId}`)
+      .set(bearer(adminToken))
+      .send({ version: secondVersion, mode: 'bidirectional' })
+      .expect(409);
+    expect(noStateMap.body.code).toBe('no_active_state_map');
+
+    const stateMap = await api()
+      .post(`/v1/connectors/${secondId}/state-maps`)
+      .set(bearer(adminToken))
+      .send({ entries: STATE_MAP })
+      .expect(201);
+    await api()
+      .post(`/v1/connectors/${secondId}/state-maps/${stateMap.body.id}/validate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    await api()
+      .post(`/v1/connectors/${secondId}/state-maps/${stateMap.body.id}/activate`)
+      .set(bearer(adminToken))
+      .expect(201);
+    secondVersion += 1;
+    const untested = await api()
+      .patch(`/v1/connectors/${secondId}`)
+      .set(bearer(adminToken))
+      .send({ version: secondVersion, mode: 'bidirectional' })
+      .expect(409);
+    expect(untested.body).toMatchObject({ code: 'credential_not_valid', credential_state: 'unknown' });
+
+    await api().post(`/v1/connectors/${secondId}/test-connection`).set(bearer(adminToken)).expect(201);
+    const promoted = await api()
+      .patch(`/v1/connectors/${secondId}`)
+      .set(bearer(adminToken))
+      .send({ version: secondVersion, mode: 'bidirectional' })
+      .expect(200);
+    expect(promoted.body.mode).toBe('bidirectional');
+    // Ingest-only remains reachable without any of that.
+    const ingest = await api()
+      .patch(`/v1/connectors/${secondId}`)
+      .set(bearer(adminToken))
+      .send({ version: promoted.body.version, mode: 'ingest_only' })
+      .expect(200);
+    expect(ingest.body.mode).toBe('ingest_only');
   });
 });

@@ -127,6 +127,7 @@ export const AUDIT_EVENT_TYPES = [
   'connector.kill_switch',
   'connector.map.activated',
   'connector.watermark_rewound',
+  'connector.outbound.retried',
   'connector.dead_letter.replayed',
   'connector.dead_letter.discarded',
   'sync.applied',

@@ -113,6 +113,9 @@ class SamplesDto {
   @IsOptional() @IsUUID('4') map_id?: string;
 }
 
+/** The queue filter the outbound list accepts; anything else is a 400 rather than an empty list. */
+const OUTBOUND_STATUSES = ['pending', 'sent', 'failed', 'dead_lettered', 'skipped'];
+
 function kindOf(value: string): 'field' | 'state' {
   if (value === 'field-maps') return 'field';
   if (value === 'state-maps') return 'state';
@@ -239,6 +242,27 @@ export class ConnectorsController {
     @Body() dto: DeadLetterActionDto,
   ) {
     return this.connectors.resolveDeadLetters(principal, ctx, instanceId, dto.ids, 'discard', dto.reason ?? null);
+  }
+
+  @Get('connectors/:instanceId/outbound')
+  outbound(
+    @CurrentPrincipal() principal: Principal,
+    @Param('instanceId', ParseUUIDPipe) instanceId: string,
+    @Query('status') status?: string,
+  ) {
+    if (status !== undefined && !OUTBOUND_STATUSES.includes(status))
+      throw new BadRequestException({ code: 'bad_status', allowed: OUTBOUND_STATUSES });
+    return this.connectors.outbound(principal, instanceId, status);
+  }
+
+  @Post('connectors/:instanceId/outbound/:id/retry')
+  retryOutbound(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('instanceId', ParseUUIDPipe) instanceId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.connectors.retryOutbound(principal, ctx, instanceId, id);
   }
 
   // Map routes last: `:kind` is generic and must not shadow the named routes above.

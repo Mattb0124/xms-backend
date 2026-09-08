@@ -1341,6 +1341,26 @@
   },
   {
     "method": "GET",
+    "path": "/v1/connectors/:instanceId/outbound",
+    "controller": "ConnectorsController",
+    "handler": "outbound",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/connectors/:instanceId/outbound/:id/retry",
+    "controller": "ConnectorsController",
+    "handler": "retryOutbound",
+    "realm": "internal",
+    "permission": "admin:connectors",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/connectors/:instanceId/runs",
     "controller": "ConnectorsController",
     "handler": "runs",
