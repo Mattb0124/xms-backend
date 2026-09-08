@@ -10,6 +10,7 @@ import { requestContextMiddleware } from '../src/common/request-context.middlewa
 import { resetEnvForTests } from '../src/config/env.js';
 import { PeriodJobs } from '../src/worker/period-jobs.js';
 import { RosterJobs } from '../src/worker/roster-jobs.js';
+import { UnitOfWork } from '../src/db/unit-of-work.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
@@ -173,6 +174,40 @@ describe('billing auto-lock', () => {
       .set(bearer(adminToken))
       .expect(200);
     expect(exported.headers['x-row-count']).toBe('1');
+  });
+});
+
+describe('worker binding', () => {
+  it('a sweep sees one account per transaction and never another account rows', async () => {
+    const second = await api()
+      .post('/v1/admin/accounts')
+      .set(bearer(adminToken))
+      .send({ key: 'AUS', name: 'Austral Mining' })
+      .expect(201);
+    const otherId: string = second.body.id;
+    await api().post(`/v1/admin/accounts/${otherId}/activate`).set(bearer(adminToken)).expect(201);
+    await api()
+      .post(`/v1/accounts/${otherId}/contracts`)
+      .set(bearer(adminToken))
+      .send({ name: 'Retainer', model: 'retainer' })
+      .expect(201);
+    for (const id of [accountId, otherId]) {
+      await api()
+        .post('/v1/tickets')
+        .set(bearer(adminToken))
+        .send({ account_id: id, type: 'incident', short_description: `Ticket for ${id}` })
+        .expect(201);
+    }
+
+    const uow = worker.get(UnitOfWork);
+    const seen = await uow.perAccount([accountId, otherId], async (tx, bound) => {
+      const setting = await tx.query<{ ids: string }>('select sys.account_ids()::text as ids');
+      const tickets = await tx.query<{ account_id: string }>('select distinct account_id from acct.tickets');
+      return { bound, setting: setting.rows[0].ids, accounts: tickets.rows.map((row) => row.account_id) };
+    });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ bound: accountId, setting: `{${accountId}}`, accounts: [accountId] });
+    expect(seen[1]).toMatchObject({ bound: otherId, setting: `{${otherId}}`, accounts: [otherId] });
   });
 });
 

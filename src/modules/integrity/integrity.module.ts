@@ -269,34 +269,56 @@ export class DigestService {
     return this.firstDay(stream);
   }
 
-  /** The canonical rows of a stream and day (the archive writes exactly these). */
+  /**
+   * The canonical rows of a stream and day (the archive writes exactly
+   * these). `acct.audit_events` and `rpt.usage_events` both carry forced
+   * row-level security, so both are read under a binding covering every
+   * account; an unbound read attests only the rows with no account, which
+   * is a small minority of the usage stream. `sys.security_events` and
+   * `op.audit_events` are not account scoped and need no binding.
+   */
   async rowsOf(stream: Stream, day: string): Promise<string[]> {
     const from = `${day}T00:00:00Z`;
     const to = `${nextDay(day)}T00:00:00Z`;
-    if (stream === 'audit') {
-      const accounts = (await this.pools.get('worker').query<{ id: string }>('select id from op.accounts')).rows.map(
-        (row) => row.id,
+    if (stream === 'security') {
+      return canonical(
+        this.pools.get('worker'),
+        `select row_to_json(e)::text as row from sys.security_events e where occurred_at >= $1 and occurred_at < $2 order by occurred_at, id`,
+        [from, to],
       );
-      return this.uow.worker(accounts, async (tx) => {
-        const account = await canonical(
-          tx,
-          `select row_to_json(e)::text as row from acct.audit_events e where created_at >= $1 and created_at < $2 order by created_at, id`,
-          [from, to],
-        );
-        const operator = await canonical(
-          tx,
-          `select row_to_json(e)::text as row from op.audit_events e where created_at >= $1 and created_at < $2 order by created_at, id`,
-          [from, to],
-        );
-        return [...account, ...operator];
-      });
     }
-    const table = stream === 'security' ? 'sys.security_events' : 'rpt.usage_events';
-    return canonical(
-      this.pools.get('worker'),
-      `select row_to_json(e)::text as row from ${table} e where occurred_at >= $1 and occurred_at < $2 order by occurred_at, id`,
-      [from, to],
+    return this.everyAccount(async (tx) => {
+      if (stream === 'usage') {
+        return canonical(
+          tx,
+          `select row_to_json(e)::text as row from rpt.usage_events e where occurred_at >= $1 and occurred_at < $2 order by occurred_at, id`,
+          [from, to],
+        );
+      }
+      const account = await canonical(
+        tx,
+        `select row_to_json(e)::text as row from acct.audit_events e where created_at >= $1 and created_at < $2 order by created_at, id`,
+        [from, to],
+      );
+      const operator = await canonical(
+        tx,
+        `select row_to_json(e)::text as row from op.audit_events e where created_at >= $1 and created_at < $2 order by created_at, id`,
+        [from, to],
+      );
+      return [...account, ...operator];
+    });
+  }
+
+  /**
+   * The digest attests a whole stream, so it is the one reader that
+   * legitimately binds every account at once. Declared here in one place
+   * rather than repeated at each query.
+   */
+  private async everyAccount<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+    const accounts = (await this.pools.get('worker').query<{ id: string }>('select id from op.accounts')).rows.map(
+      (row) => row.id,
     );
+    return this.uow.worker(accounts, fn);
   }
 
   private async lastDigest(stream: Stream): Promise<DigestRow | undefined> {
@@ -316,17 +338,21 @@ export class DigestService {
   }
 
   private async firstDay(stream: Stream): Promise<string | undefined> {
-    const worker = this.pools.get('worker');
-    if (stream === 'audit') {
-      const result = await worker.query<{ d: string | null }>(
-        `select least((select min(created_at) from op.audit_events), (select min(created_at) from acct.audit_events))::date::text as d`,
-      );
-      // acct.audit_events is filtered by RLS on this pool; op.audit_events is not. Use whichever is visible.
+    if (stream === 'security') {
+      const result = await this.pools
+        .get('worker')
+        .query<{ d: string | null }>(`select min(occurred_at)::date::text as d from sys.security_events`);
       return result.rows[0]?.d ?? undefined;
     }
-    const table = stream === 'security' ? 'sys.security_events' : 'rpt.usage_events';
-    const result = await worker.query<{ d: string | null }>(`select min(occurred_at)::date::text as d from ${table}`);
-    return result.rows[0]?.d ?? undefined;
+    // Both remaining streams read a table with forced row-level security.
+    return this.everyAccount(async (tx) => {
+      const sql =
+        stream === 'audit'
+          ? `select least((select min(created_at) from op.audit_events), (select min(created_at) from acct.audit_events))::date::text as d`
+          : `select min(occurred_at)::date::text as d from rpt.usage_events`;
+      const result = await tx.query<{ d: string | null }>(sql);
+      return result.rows[0]?.d ?? undefined;
+    });
   }
 }
 

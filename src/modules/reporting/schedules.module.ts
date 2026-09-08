@@ -462,7 +462,7 @@ export class SchedulesService {
     if (accounts.length === 0) return 'ran 0';
     let ran = 0;
     let failed = 0;
-    await this.uow.worker(accounts, async (tx) => {
+    await this.uow.perAccount(accounts, async (tx) => {
       const due = await this.repo.claimDue(tx, now, batch);
       for (const schedule of due) {
         const timeZone = await this.timeZoneOf(tx, schedule.account_id);

@@ -34,6 +34,7 @@ import {
 import { actorKindOf, type Principal } from '../../common/auth/principal.js';
 import { isUsageEventType, type UsageEventType } from '../../contracts/events.js';
 import { DbPools } from '../../db/pool.js';
+import { UnitOfWork } from '../../db/unit-of-work.js';
 
 /**
  * The usage stream (Audit & Analytics 4.2, 5.2, 5.3; P1.5.6). Two producers:
@@ -71,7 +72,10 @@ export class UsageEventsService implements OnModuleDestroy {
   private dropped = 0;
   private timer: NodeJS.Timeout | undefined;
 
-  constructor(private readonly pools: DbPools) {
+  constructor(
+    private readonly pools: DbPools,
+    private readonly uow: UnitOfWork,
+  ) {
     this.timer = setInterval(() => void this.flush(), 1000);
     this.timer.unref();
   }
@@ -120,22 +124,13 @@ export class UsageEventsService implements OnModuleDestroy {
         const accountIds = [
           ...new Set(batch.map((event) => event.accountId).filter((id): id is string => Boolean(id))),
         ];
-        const client = await this.pools.get('app').connect();
-        try {
-          await client.query('begin');
-          await client.query("select set_config('xms.account_ids', $1, true)", [`{${accountIds.join(',')}}`]);
-          await client.query(
+        await this.uow.telemetry(accountIds, (tx) =>
+          tx.query(
             `insert into rpt.usage_events (occurred_at, event_type, account_id, actor_kind, actor_id, principal_kind, session_id, request_id, entity_kind, entity_id, outcome, attrs, ip_hash, user_agent_family)
              values ${rows.join(', ')}`,
             values,
-          );
-          await client.query('commit');
-        } catch (error) {
-          await client.query('rollback').catch(() => undefined);
-          throw error;
-        } finally {
-          client.release();
-        }
+          ),
+        );
       }
       if (dropped > 0) {
         await this.pools

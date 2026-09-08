@@ -194,6 +194,15 @@ export class WebhooksRepository extends RepositoryBase {
       ]);
   }
 
+  /** The accounts a client is granted; the binding a revocation needs to reach its subscriptions. */
+  async grantedAccounts(tx: Tx, clientId: string): Promise<string[]> {
+    const result = await tx.query<{ account_id: string }>(
+      'select account_id from op.api_client_grants where api_client_id = $1',
+      [clientId],
+    );
+    return result.rows.map((row) => row.account_id);
+  }
+
   async revokeClient(tx: Tx, id: string): Promise<void> {
     await tx.query(`update op.api_clients set status = 'revoked' where id = $1`, [id]);
     await tx.query(
@@ -257,10 +266,13 @@ export class WebhooksRepository extends RepositoryBase {
     return result.rows[0]?.consecutive_failures ?? 0;
   }
 
+  /** Active subscriptions of an active client: a revoked credential stops receiving immediately. */
   activeForEvent(tx: Tx, accountId: string, type: PublicEventType): Promise<SubscriptionRow[]> {
     return this.many(
       tx,
-      `select * from acct.webhook_subscriptions where account_id = $1 and status = 'active' and $2 = any (event_types)`,
+      `select s.* from acct.webhook_subscriptions s
+         join op.api_clients c on c.id = s.api_client_id
+        where s.account_id = $1 and s.status = 'active' and c.status = 'active' and $2 = any (s.event_types)`,
       [accountId, type],
     );
   }
@@ -451,8 +463,15 @@ export class ApiClientsService {
     });
   }
 
-  revoke(principal: Principal, ctx: RequestContext, id: string) {
-    return this.uow.operator(async (tx) => {
+  /**
+   * Revocation touches `acct.webhook_subscriptions`, which is account
+   * scoped: under the operator binding the policy matches no row and the
+   * pause silently does nothing. The transaction therefore binds the
+   * accounts the client was granted.
+   */
+  async revoke(principal: Principal, ctx: RequestContext, id: string) {
+    const accountIds = await this.uow.operator((tx) => this.repo.grantedAccounts(tx, id));
+    return this.uow.runWithAccounts(principal, accountIds, async (tx) => {
       const client = await this.repo.client(tx, id);
       if (client.status === 'revoked') throw new ConflictException({ code: 'already_revoked' });
       await this.repo.revokeClient(tx, id);
@@ -755,7 +774,7 @@ export class WebhookDeliveryService {
     ).rows.map((row) => row.id);
     if (accounts.length === 0) return 'retried 0';
     let retried = 0;
-    await this.uow.worker(accounts, async (tx) => {
+    await this.uow.perAccount(accounts, async (tx) => {
       for (const due of await this.repo.dueRetries(tx, now, batch)) {
         const subscription = await this.repo.subscription(tx, due.subscription_id).catch(() => undefined);
         await this.repo.markRetried(tx, due.id);

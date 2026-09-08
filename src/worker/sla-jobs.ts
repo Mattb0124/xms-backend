@@ -54,7 +54,7 @@ export class SlaJobs {
     const accountIds = await this.liveAccountIds();
     if (accountIds.length === 0) return 'latched 0';
     let latched = 0;
-    await this.uow.worker(accountIds, async (tx) => {
+    await this.uow.perAccount(accountIds, async (tx) => {
       const rows = await tx.query<ClockRow>(
         `select * from acct.sla_clocks where ${SWEEP_PREDICATE} order by due_at limit $1 for update skip locked`,
         [batch],
@@ -103,7 +103,7 @@ export class SlaJobs {
     const accountIds = await this.liveAccountIds();
     if (accountIds.length === 0) return 'notified 0';
     let notified = 0;
-    await this.uow.worker(accountIds, async (tx) => {
+    await this.uow.perAccount(accountIds, async (tx) => {
       const rows = await tx.query<ClockRow>(
         `select * from acct.sla_clocks where ${AT_RISK_PREDICATE} order by due_at limit $1 for update skip locked`,
         [batch],

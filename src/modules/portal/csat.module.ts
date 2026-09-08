@@ -505,7 +505,7 @@ export class CsatService {
     if (accounts.length === 0) return 'reminded 0, expired 0';
     let reminded = 0;
     let expired = 0;
-    await this.uow.worker(accounts, async (tx) => {
+    await this.uow.perAccount(accounts, async (tx) => {
       for (const survey of await this.repo.due(tx, now, batch)) {
         if (survey.expires_at && new Date(survey.expires_at) <= now) {
           await this.repo.setStatus(tx, survey.id, 'expired');

@@ -65,4 +65,40 @@ export class UnitOfWork {
   worker<T>(accountIds: readonly string[], fn: Work<T>): Promise<T> {
     return withSession(this.pools, 'worker', { binding: { kind: 'operator', accountIds: [...accountIds] } }, fn);
   }
+
+  /**
+   * A portfolio sweep: one worker transaction per account, bound to that
+   * account alone (Security & Tenancy 2.3). A batch bound to every live
+   * account leaves correctness to the inner predicates, which the data
+   * model rejects by name, and it lets one audit row satisfy
+   * `sys.require_audit` for hundreds of updates across every account.
+   * Every account is attempted; the first failure is rethrown once the
+   * sweep has finished so one bad account does not stop the rest.
+   */
+  async perAccount<T>(
+    accountIds: readonly string[],
+    fn: (tx: pg.PoolClient, accountId: string) => Promise<T>,
+  ): Promise<T[]> {
+    const results: T[] = [];
+    let failure: unknown;
+    for (const accountId of accountIds) {
+      try {
+        results.push(await this.worker([accountId], (tx) => fn(tx, accountId)));
+      } catch (error) {
+        if (failure === undefined) failure = error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+    return results;
+  }
+
+  /**
+   * The usage buffer flush. One batch legitimately carries rows for every
+   * account it observed, so the widening is declared here rather than in a
+   * hand-rolled session: this way the flush still goes through withSession
+   * and so through assertUuid and the guaranteed reset on release.
+   */
+  telemetry<T>(accountIds: readonly string[], fn: Work<T>): Promise<T> {
+    return withSession(this.pools, 'app', { binding: { kind: 'operator', accountIds: [...accountIds] } }, fn);
+  }
 }

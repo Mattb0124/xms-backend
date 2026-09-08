@@ -294,4 +294,51 @@ describe('webhooks (INT-05)', () => {
     const again = await api().post(`/v1/admin/api-clients/${clientId}/revoke`).set(bearer(adminToken)).expect(409);
     expect(again.body.code).toBe('already_revoked');
   });
+
+  it('revoking a client pauses its live subscriptions and stops delivering to them', async () => {
+    const created = await api()
+      .post('/v1/admin/api-clients')
+      .set(bearer(adminToken))
+      .send({ name: 'Second', scopes: ['tickets:view', 'webhooks:manage'], account_ids: [accountId] })
+      .expect(201);
+    const secondKey: string = created.body.key;
+    const secondId: string = created.body.id;
+    const subscription = await api()
+      .post('/v1/webhooks')
+      .set(bearer(secondKey))
+      .send({
+        account_id: accountId,
+        endpoint_url: `http://127.0.0.1:${port}/hooks`,
+        event_types: ['ticket.created'],
+      })
+      .expect(201);
+    await api().post(`/v1/admin/api-clients/${secondId}/revoke`).set(bearer(adminToken)).expect(201);
+
+    // The pause is a write to an account-scoped table: under an unbound
+    // connection it matches no row and silently does nothing.
+    const paused = await withSuperuser((client) =>
+      client.query<{ status: string; paused_reason: string | null }>(
+        'select status, paused_reason from acct.webhook_subscriptions where id = $1',
+        [subscription.body.id],
+      ),
+    );
+    expect(paused.rows[0]).toMatchObject({ status: 'paused', paused_reason: 'client_revoked' });
+
+    // And nothing further reaches the endpoint the revoked credential chose.
+    received.length = 0;
+    await withSuperuser((client) => client.query('delete from sys.outbox'));
+    await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({ account_id: accountId, type: 'incident', short_description: 'After revocation' })
+      .expect(201);
+    await drainOutbox();
+    expect(received).toHaveLength(0);
+    const deliveries = await withSuperuser((client) =>
+      client.query<{ n: number }>('select count(*)::int as n from acct.webhook_deliveries where subscription_id = $1', [
+        subscription.body.id,
+      ]),
+    );
+    expect(deliveries.rows[0].n).toBe(0);
+  });
 });

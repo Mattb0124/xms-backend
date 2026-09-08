@@ -173,6 +173,37 @@ describe('digest chain', () => {
   });
 });
 
+describe('the usage stream', () => {
+  it('digests every usage row of the day, not only the rows with no account', async () => {
+    const account = await withSuperuser((client) =>
+      client.query<{ id: string }>(`select id from op.accounts where key = 'BRK'`),
+    );
+    const accountId = account.rows[0].id;
+    await withSuperuser((client) =>
+      client.query(
+        `insert into rpt.usage_events (occurred_at, event_type, account_id, actor_kind, actor_id, outcome, attrs)
+         values ($1::date + interval '8 hours', 'screen.view', $2, 'user', 'u1', 'success', '{}'),
+                ($1::date + interval '9 hours', 'action.completed', $2, 'user', 'u1', 'success', '{}'),
+                ($1::date + interval '10 hours', 'api.request', null, 'anonymous', 'anonymous', 'denied', '{}')`,
+        [twoDaysAgo, accountId],
+      ),
+    );
+    const total = await withSuperuser((client) =>
+      client.query<{ n: number }>(
+        `select count(*)::int as n from rpt.usage_events where occurred_at >= $1::date and occurred_at < $1::date + interval '1 day'`,
+        [twoDaysAgo],
+      ),
+    );
+    expect(total.rows[0].n).toBe(3);
+    const rows = await digests.rowsOf('usage', twoDaysAgo);
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((row) => row.includes(accountId))).toHaveLength(2);
+    const written = await digests.write('usage', twoDaysAgo, 'test');
+    expect(written.row_count).toBe(total.rows[0].n);
+    expect((await digests.verify('usage', twoDaysAgo, 'test')).matched).toBe(true);
+  });
+});
+
 describe('admin routes', () => {
   it('exposes status and the digest list to audit readers and verification to exporters', async () => {
     const status = await api().get('/v1/admin/integrity/status').set(bearer(adminToken)).expect(200);

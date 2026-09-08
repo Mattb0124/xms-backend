@@ -34,7 +34,7 @@ export class PeriodJobs {
     const accountIds = await this.liveAccountIds();
     if (accountIds.length === 0) return 'locked 0';
     let locked = 0;
-    await this.uow.worker(accountIds, async (tx) => {
+    await this.uow.perAccount(accountIds, async (tx) => {
       const due = await tx.query<BillingPeriodRow>(
         `select * from acct.billing_periods
           where status = 'approved' and auto_lock_at is not null and auto_lock_at <= now()

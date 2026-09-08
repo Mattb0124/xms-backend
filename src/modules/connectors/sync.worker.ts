@@ -68,7 +68,7 @@ export class SyncWorker {
     const accounts = await this.liveAccounts();
     if (accounts.length === 0) return 'polled 0';
     const summary: string[] = [];
-    await this.uow.worker(accounts, async (tx) => {
+    await this.uow.perAccount(accounts, async (tx) => {
       const due = await this.repo.claimDue(tx);
       for (const instance of due) summary.push(await this.pollOne(tx, instance));
     });
@@ -149,7 +149,7 @@ export class SyncWorker {
   async applyPending(): Promise<string> {
     const accounts = await this.liveAccounts();
     if (accounts.length === 0) return 'applied 0';
-    const instances = await this.uow.worker(accounts, (tx) => this.repo.allInstances(tx));
+    const instances = (await this.uow.perAccount(accounts, (tx) => this.repo.allInstances(tx))).flat();
     let applied = 0;
     let failed = 0;
     for (const instance of instances) {
@@ -499,7 +499,7 @@ export class SyncWorker {
     const accounts = await this.liveAccounts();
     if (accounts.length === 0) return 'health 0';
     let tripped = 0;
-    await this.uow.worker(accounts, async (tx) => {
+    await this.uow.perAccount(accounts, async (tx) => {
       for (const instance of await this.repo.allInstances(tx)) {
         if (instance.kill_switch === 'tripped') {
           if (instance.health !== 'tripped') await this.repo.touchInstance(tx, instance.id, { health: 'tripped' });

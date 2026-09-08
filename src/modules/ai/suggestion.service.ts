@@ -362,7 +362,8 @@ export class SuggestionService {
       await this.pools.get('worker').query<{ id: string }>(`select id from op.accounts where status <> 'system'`)
     ).rows.map((row) => row.id);
     if (accounts.length === 0) return 'expired 0';
-    return this.uow.worker(accounts, async (tx) => {
+    let expired = 0;
+    await this.uow.perAccount(accounts, async (tx) => {
       const candidates = await this.repo.expiredCandidates(tx, now);
       for (const candidate of candidates) {
         await this.repo.insertDecision(tx, {
@@ -381,8 +382,9 @@ export class SuggestionService {
           },
         ]);
       }
-      return `expired ${candidates.length}`;
+      expired += candidates.length;
     });
+    return `expired ${expired}`;
   }
 
   // Accuracy ----------------------------------------------------------------
