@@ -11,6 +11,7 @@ import { resetEnvForTests } from '../src/config/env.js';
 import { extractPdfText } from '../src/domain/reporting/pdf.js';
 import { SchedulesService } from '../src/modules/reporting/schedules.module.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
+import { MAX_NARRATIVE_VERSIONS } from '../src/modules/reporting/schedules.module.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
 /**
@@ -537,6 +538,38 @@ describe('the narrative editor on a held run (DR-05, functional 5.8)', () => {
   };
 
   const detailOf = (runId: string) => api().get(`/v1/reporting/runs/${runId}`).set(bearer(adminToken)).expect(200);
+
+  it('keeps the first narrative version and the newest ones, and no more', async () => {
+    // The column is append-only by design and nothing bounded it, so a
+    // held run could be edited until its jsonb column was unreadable. What
+    // falls out of the middle is still in the audit stream, which records
+    // every edit with its author.
+    const held = await hold({ period_start: '2026-11-03', period_end: '2026-11-09' });
+    const edits = MAX_NARRATIVE_VERSIONS + 5;
+    for (let index = 0; index < edits; index += 1) {
+      await api()
+        .patch(`/v1/reporting/runs/${held.run_id}/narrative`)
+        .set(bearer(adminToken))
+        .send({ sections: [{ key: 'headline', text: `Edit number ${index + 1} of the headline.` }] })
+        .expect(200);
+    }
+    const stored = await withSuperuser((client) =>
+      client.query<{ narrative_versions: { version: number; text: string }[] }>(
+        'select narrative_versions from acct.report_packs where id = $1',
+        [held.pack_id],
+      ),
+    );
+    const kept = stored.rows[0].narrative_versions;
+    expect(kept).toHaveLength(MAX_NARRATIVE_VERSIONS);
+    // Version 1 is what the template wrote, and it survives every edit.
+    expect(kept[0].version).toBe(1);
+    // The newest is the last edit made, and its number kept counting.
+    expect(kept[kept.length - 1].version).toBe(edits + 1);
+    expect(kept[kept.length - 1].text).toContain(`Edit number ${edits} `);
+    // Every audit row is still there, so nothing was lost, only trimmed.
+    const audited = (await auditOf(held.run_id)).filter((type) => type === 'report.run.narrative_edited');
+    expect(audited).toHaveLength(edits);
+  });
 
   it('reads the templated narrative, takes an edit, regenerates it and approves the words the reviewer wrote', async () => {
     const held = await hold({ period_start: '2026-10-06', period_end: '2026-10-12' });

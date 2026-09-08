@@ -206,6 +206,27 @@ export function narrativeVersions(pack: Pick<PackRow, 'narrative_versions'>): Na
     }));
 }
 
+/**
+ * How many narrative versions a pack keeps. The column is append-only by
+ * design (0035_report_narrative_edit.sql) and nothing bounded how many
+ * edits a held run accepted, so one `reports:manage` holder could grow a
+ * single jsonb column toward the field limit and make the run unreadable
+ * and unapprovable, with every read of it expensive on the way there.
+ */
+export const MAX_NARRATIVE_VERSIONS = 20;
+
+/**
+ * The versions worth keeping: the first, which is what the template wrote
+ * and what a reviewer compares against, and the newest ones, which are the
+ * edit history anyone actually reads. What falls out of the middle is
+ * already in the audit stream, which records every edit with its author and
+ * its character count.
+ */
+export function trimNarrativeVersions(versions: readonly NarrativeVersion[]): NarrativeVersion[] {
+  if (versions.length <= MAX_NARRATIVE_VERSIONS) return [...versions];
+  return [versions[0], ...versions.slice(versions.length - (MAX_NARRATIVE_VERSIONS - 1))];
+}
+
 /** The narrative a pack currently stands on: its newest version. */
 export function currentNarrative(pack: Pick<PackRow, 'narrative_versions'>): NarrativeVersion | undefined {
   const versions = narrativeVersions(pack);
@@ -867,7 +888,7 @@ export class SchedulesService {
         at: new Date().toISOString(),
         rendered: false,
       };
-      await this.repo.setNarrativeVersions(tx, pack.id, [...versions, next], 'edited');
+      await this.repo.setNarrativeVersions(tx, pack.id, trimNarrativeVersions([...versions, next]), 'edited');
       await this.transition(tx, run.account_id, run.id, 'report.run.narrative_edited', actorOf(principal), ctx, {
         pack_id: pack.id,
         version: next.version,
