@@ -106,6 +106,21 @@ export function fromSnowTime(value: string | undefined | null): Date {
 const ERROR_BODY_BYTES = 8 * 1024;
 
 /**
+ * A ServiceNow record id is 32 lowercase hex characters. The id is chosen by
+ * the instance and reaches an encoded query by concatenation, and `^` and
+ * `=` are that grammar's own separators, so an id carrying `^OR...` would
+ * rewrite the query XMS sends back. `searchParams.set` percent-encodes the
+ * result and the grammar survives it as structure, which is why the shape is
+ * checked instead.
+ */
+const SYS_ID = /^[0-9a-f]{32}$/;
+
+export function assertSysId(sysId: string): string {
+  if (!SYS_ID.test(sysId)) throw new SnowError(0, `"${sysId.slice(0, 64)}" is not a ServiceNow record id`);
+  return sysId;
+}
+
+/**
  * The table and record segments are encoded, so a stored `table_name` can
  * never traverse out of /api/now/table/ or graft a query string on. The DTO
  * allowlist is the first gate; this is the second, at every use.
@@ -156,6 +171,7 @@ export class HttpSnowClient implements SnowClient {
   }
 
   async journal(sysId: string, since: Date | null): Promise<JournalEntry[]> {
+    assertSysId(sysId);
     const query = since
       ? `element_id=${sysId}^sys_created_on>${toSnowTime(since)}^ORDERBYsys_created_on`
       : `element_id=${sysId}^ORDERBYsys_created_on`;
@@ -214,9 +230,17 @@ export class HttpSnowClient implements SnowClient {
     element: 'comments' | 'work_notes',
     text: string,
   ): Promise<{ entry: JournalEntry; record: SnowRecord }> {
-    const record = await this.update(table, sysId, { [element]: text });
-    const entries = await this.journal(sysId, null);
-    const entry = entries.filter((one) => one.element === element).at(-1);
+    const record = await this.update(table, assertSysId(sysId), { [element]: text });
+    // Newest first, filtered to the element and to one row, so the entry
+    // read back is the one just written. Reading two hundred ascending and
+    // taking the last was an older entry on a record with more than that,
+    // and raced any comment a client added in between; the wrong id then
+    // became the out-link and the inbound dedupe missed our own write.
+    const result = await this.request<{ result: JournalEntry[] }>('GET', '/api/now/table/sys_journal_field', {
+      sysparm_query: `element_id=${sysId}^element=${encodeURIComponent(element)}^ORDERBYDESCsys_created_on`,
+      sysparm_limit: '1',
+    });
+    const entry = result.result.at(0);
     if (!entry) throw new SnowError(0, `journal entry not returned for ${sysId}`);
     return { entry, record };
   }
@@ -232,7 +256,7 @@ export class HttpSnowClient implements SnowClient {
         sys_created_by?: string;
       }[];
     }>('GET', '/api/now/attachment', {
-      sysparm_query: `table_sys_id=${sysId}`,
+      sysparm_query: `table_sys_id=${assertSysId(sysId)}`,
       sysparm_limit: '100',
     });
     return result.result.map((row) => ({
@@ -246,11 +270,9 @@ export class HttpSnowClient implements SnowClient {
   }
 
   async downloadAttachment(sysId: string, maxBytes: number): Promise<Buffer> {
-    const response = await this.send(
-      'GET',
-      new URL(`/api/now/attachment/${encodeURIComponent(sysId)}/file`, this.baseUrl),
-      { accept: '*/*' },
-    );
+    const response = await this.send('GET', new URL(`/api/now/attachment/${assertSysId(sysId)}/file`, this.baseUrl), {
+      accept: '*/*',
+    });
     // Read through the cap rather than around it. `arrayBuffer()` buys the
     // whole body before any check can refuse it, and an instance that omits
     // `content-length` used to make the pre-check vacuous, so a chunked

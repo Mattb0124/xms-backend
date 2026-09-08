@@ -43,8 +43,13 @@ export function journalMarker(commentId: string): string {
   return `[XMS:${commentId.replace(/-/g, '').slice(0, 8)}]`;
 }
 
+/**
+ * Anchored, exactly as `stripJournalMarker` is. Matching the marker
+ * anywhere in the body meant a client who typed `[XMS:deadbeef]` into a
+ * ServiceNow comment had it silently dropped as one of our own.
+ */
 export function hasJournalMarker(text: string): boolean {
-  return /\[XMS:[0-9a-f]{8}\]/i.test(text);
+  return /^\s*\[XMS:[0-9a-f]{8}\]/i.test(text);
 }
 
 export function stripJournalMarker(text: string): string {

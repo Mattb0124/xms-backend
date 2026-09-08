@@ -241,6 +241,11 @@ describe('reflection and conflict rules', () => {
     expect(hasJournalMarker(`${marker} We are on it`)).toBe(true);
     expect(stripJournalMarker(`${marker} We are on it`)).toBe('We are on it');
     expect(hasJournalMarker('Plain reply')).toBe(false);
+    // Anchored, as the strip already was: a client who types the marker
+    // into the middle of a comment is not writing one of ours, and their
+    // comment is not silently dropped for it.
+    expect(hasJournalMarker('We tried [XMS:deadbeef] and it worked')).toBe(false);
+    expect(hasJournalMarker('  [XMS:deadbeef] leading space is still ours')).toBe(true);
   });
 
   it('decides per field: external at create then XMS-owned, external wins, newest by timestamp, merge always, none never', () => {
