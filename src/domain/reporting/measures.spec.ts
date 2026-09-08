@@ -142,3 +142,39 @@ describe('risk, assignment and empty periods', () => {
     expect(notableTickets([ticket({ state: 'closed', closedAt: now })], now)).toEqual([]);
   });
 });
+
+describe('open by state', () => {
+  const tickets = [
+    ticket({ key: 'A', state: 'awaiting_client' }),
+    ticket({ key: 'B', state: 'new' }),
+    ticket({ key: 'C', state: 'awaiting_client' }),
+    ticket({ key: 'D', state: 'in_progress' }),
+    ticket({ key: 'E', state: 'closed', closedAt: now }),
+    ticket({ key: 'F', state: 'resolved', resolvedAt: now }),
+  ];
+
+  it('counts the open set in the machine order and leaves out the states with nothing in them', () => {
+    const measures = computeMeasures(tickets, [], period, now, [
+      'new',
+      'assigned',
+      'in_progress',
+      'awaiting_client',
+      'resolved',
+      'closed',
+    ]);
+    expect(Object.entries(measures.open_by_state)).toEqual([
+      ['new', 1],
+      ['in_progress', 1],
+      ['awaiting_client', 2],
+    ]);
+    // The three open breakdowns count one open set, so each sums to it.
+    const sum = (counts: Record<string, number>): number => Object.values(counts).reduce((a, b) => a + b, 0);
+    expect(sum(measures.open_by_state)).toBe(measures.open_tickets);
+    expect(sum(measures.open_by_priority)).toBe(measures.open_tickets);
+  });
+
+  it('puts a state the order does not name after the ones it does, in first-seen order', () => {
+    const measures = computeMeasures(tickets, [], period, now, ['in_progress']);
+    expect(Object.keys(measures.open_by_state)).toEqual(['in_progress', 'awaiting_client', 'new']);
+  });
+});

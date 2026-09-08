@@ -2,6 +2,20 @@ import { Injectable } from '@nestjs/common';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
 import type { TicketFacts, TimeFacts } from '../../domain/reporting/measures.js';
 
+/** One live contract period of an account with what has been booked to it. */
+export interface ContractPositionRow {
+  account_id: string;
+  starts_on: string;
+  ends_on: string;
+  /** What the period contracts for, before any carry-over. */
+  contracted_minutes: number;
+  /** What an earlier period left behind, where the model carries it. */
+  carried_over_minutes: number;
+  /** `contracted_minutes` plus `carried_over_minutes`: the budget to burn. */
+  available_minutes: number;
+  consumed_minutes: number;
+}
+
 /**
  * Row sets for the measures and the report pack (Dashboards & Report Packs
  * technical 2.7). Every query runs under the caller's binding; the fact
@@ -398,20 +412,21 @@ export class ReportingRepository extends RepositoryBase {
 
   /**
    * The current contract period of each account with what has been
-   * consumed against it: the budget factor of the health score, read in
-   * one query for the portfolio strip rather than one per account.
+   * consumed against it: the budget factor of the health score and the
+   * consumption beside each row of the portfolio strip, read in one query
+   * rather than one per account.
    */
   contractPositions(
     tx: Tx,
     accountIds: readonly string[],
     on: string,
     consumingClasses: readonly string[],
-  ): Promise<
-    { account_id: string; starts_on: string; ends_on: string; available_minutes: number; consumed_minutes: number }[]
-  > {
+  ): Promise<ContractPositionRow[]> {
     return this.many(
       tx,
       `select p.account_id, p.starts_on::text as starts_on, p.ends_on::text as ends_on,
+              p.contracted_minutes::int as contracted_minutes,
+              p.carried_over_minutes::int as carried_over_minutes,
               (p.contracted_minutes + p.carried_over_minutes)::int as available_minutes,
               coalesce((select sum(t.minutes) from acct.time_entries t
                          where t.contract_id = p.contract_id and t.performed_on between p.starts_on and p.ends_on

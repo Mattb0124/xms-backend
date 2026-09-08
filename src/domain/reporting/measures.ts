@@ -54,6 +54,22 @@ export function ageBucket(createdAt: Date, now: Date): AgeBucket {
   return '14d_plus';
 }
 
+/**
+ * The counted keys in a declared order, then whatever the order did not
+ * name in the order it was first seen. An object literal keeps insertion
+ * order for non-numeric keys, which is the order the response carries and
+ * the order a panel draws its rows in.
+ */
+function orderedCounts(counts: ReadonlyMap<string, number>, order: readonly string[]): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const key of order) {
+    const count = counts.get(key);
+    if (count !== undefined) result[key] = count;
+  }
+  for (const [key, count] of counts) if (!(key in result)) result[key] = count;
+  return result;
+}
+
 function inPeriod(at: Date | null, period: Period): boolean {
   return at !== null && at.getTime() >= period.start.getTime() && at.getTime() < period.end.getTime();
 }
@@ -76,6 +92,15 @@ export interface Measures {
   open_tickets: number;
   open_by_priority: Record<string, number>;
   open_by_type: Record<string, number>;
+  /**
+   * Open tickets per state, over the same open set as `open_by_priority`
+   * and `open_by_type`, so all three breakdowns sum to `open_tickets`. A
+   * resolved ticket awaiting closure is therefore left out, exactly as it
+   * is left out of `open_tickets`. Keys come in the order `stateOrder`
+   * declares, then any state the order does not name in first-seen order;
+   * a state with no open ticket is absent rather than a zero.
+   */
+  open_by_state: Record<string, number>;
   breached_now: number;
   at_risk_now: number;
   unassigned_now: number;
@@ -96,6 +121,7 @@ export function computeMeasures(
   time: readonly TimeFacts[],
   period: Period,
   now: Date,
+  stateOrder: readonly string[] = [],
 ): Measures {
   const open = tickets.filter(isOpen);
   const created = tickets.filter((ticket) => inPeriod(ticket.createdAt, period));
@@ -103,11 +129,13 @@ export function computeMeasures(
   const backlog: Record<AgeBucket, number> = { '0_1d': 0, '1_3d': 0, '3_7d': 0, '7_14d': 0, '14d_plus': 0 };
   const byPriority: Record<string, number> = {};
   const byType: Record<string, number> = {};
+  const byState = new Map<string, number>();
   let oldest = 0;
   for (const ticket of open) {
     backlog[ageBucket(ticket.createdAt, now)] += 1;
     byPriority[ticket.priority] = (byPriority[ticket.priority] ?? 0) + 1;
     byType[ticket.type] = (byType[ticket.type] ?? 0) + 1;
+    byState.set(ticket.state, (byState.get(ticket.state) ?? 0) + 1);
     oldest = Math.max(oldest, (now.getTime() - ticket.createdAt.getTime()) / 86_400_000);
   }
   const responseJudged = resolvedInPeriod.filter((ticket) => ticket.responseMet || ticket.responseBreached);
@@ -120,6 +148,7 @@ export function computeMeasures(
     open_tickets: open.length,
     open_by_priority: byPriority,
     open_by_type: byType,
+    open_by_state: orderedCounts(byState, stateOrder),
     breached_now: open.filter((ticket) => ticket.responseBreached || ticket.resolutionBreached).length,
     at_risk_now: open.filter(
       (ticket) =>

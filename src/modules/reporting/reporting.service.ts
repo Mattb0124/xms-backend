@@ -19,14 +19,15 @@ import {
   type Period,
 } from '../../domain/reporting/measures.js';
 import { computeHealth, type HealthScore } from '../../domain/reporting/health.js';
+import type { StateMachineBody } from '../../domain/tickets/state-machine.js';
 import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
-import { ConfigService } from '../admin/config/config.service.js';
+import { ConfigService, TICKET_TYPES } from '../admin/config/config.service.js';
 import { translate, type ConditionSet } from '../tickets/conditions.js';
 import { TicketsRepository, ticketKey } from '../tickets/tickets.repository.js';
 import { TimeRepository } from '../time/time.repository.js';
 import { ArchiveService, DigestService, type VerificationRow } from '../integrity/integrity.module.js';
 import { translateEvents, type EventQuery } from './audit-search.js';
-import { ReportingRepository } from './reporting.repository.js';
+import { ReportingRepository, type ContractPositionRow } from './reporting.repository.js';
 import { neutraliseCell, toCsvRows } from '../../domain/reporting/csv.js';
 import {
   EMPTY_SECTION_LINE,
@@ -118,7 +119,27 @@ export interface DashboardView {
     >;
     /** The health strip (DR-09): one composed number per account with its reasons. */
     health: HealthScore;
+    /** Where the account stands against its live contract period, or null where it holds none. */
+    consumption: AccountConsumption | null;
   }[];
+}
+
+/**
+ * The consumption panel's row for one account: its live contract period
+ * and the minutes contracted, used and left. Where an account holds more
+ * than one live period the minutes are added up and the span is the
+ * earliest start to the latest end, which is how the health score already
+ * reads the same rows.
+ */
+export interface AccountConsumption {
+  period: { starts_on: string; ends_on: string };
+  /** The period's own contracted minutes, before carry-over. */
+  contracted_minutes: number;
+  /** What an earlier period left behind, where the contract model carries it. */
+  carried_over_minutes: number;
+  used_minutes: number;
+  /** `contracted_minutes` plus `carried_over_minutes` less `used_minutes`; negative once the account is over. */
+  remaining_minutes: number;
 }
 
 /** The health score of one account over one window, as the account tile reads it. */
@@ -164,22 +185,20 @@ export class ReportingService {
       const accountIds = principal.accountIds.filter((id) => id !== GLOBAL_ACCOUNT_ID);
       const now = new Date();
       const period: Period = { start: new Date(now.getTime() - days * 86_400_000), end: now };
+      const consuming = await this.consumingClasses(tx);
       const facts = await this.reporting.ticketFacts(tx, accountIds, period.start);
-      const time = await this.reporting.timeFacts(
-        tx,
-        accountIds,
-        iso(period.start),
-        iso(now),
-        await this.consumingClasses(tx),
-      );
+      const time = await this.reporting.timeFacts(tx, accountIds, iso(period.start), iso(now), consuming);
       const accounts = await this.accounts.summariesByIds(tx, accountIds);
-      const health = await this.healthOf(tx, accountIds, period, now, facts, time);
+      const positions = await this.reporting.contractPositions(tx, accountIds, iso(now), [...consuming]);
+      const health = await this.healthOf(tx, accountIds, period, now, facts, time, positions);
+      const order = await this.stateOrder(tx);
       const perAccount = accounts.map((account) => {
         const measures = computeMeasures(
           facts.filter((fact) => fact.accountId === account.id),
           time.filter((entry) => entry.accountId === account.id),
           period,
           now,
+          order,
         );
         return {
           account_id: account.id,
@@ -194,11 +213,12 @@ export class ReportingService {
             volume_resolved: measures.volume_resolved,
           },
           health: health.get(account.id)!,
+          consumption: consumptionOf(positions.filter((row) => row.account_id === account.id)),
         };
       });
       return {
         period: { start: period.start.toISOString(), end: period.end.toISOString() },
-        measures: computeMeasures(facts, time, period, now),
+        measures: computeMeasures(facts, time, period, now, order),
         notable: notableTickets(facts, now, 10),
         per_account: perAccount,
       };
@@ -225,7 +245,7 @@ export class ReportingService {
         iso(now),
         await this.consumingClasses(tx, accountId),
       );
-      const measures = computeMeasures(facts, time, period, now);
+      const measures = computeMeasures(facts, time, period, now, await this.stateOrder(tx, accountId));
       const view = {
         period: { start: period.start.toISOString(), end: period.end.toISOString() },
         measures,
@@ -311,15 +331,19 @@ export class ReportingService {
     now: Date,
     facts: readonly (Parameters<typeof computeMeasures>[0][number] & { accountId: string })[],
     time: readonly (Parameters<typeof computeMeasures>[1][number] & { accountId: string })[],
+    known?: readonly ContractPositionRow[],
   ): Promise<Map<string, HealthScore>> {
     const scores = new Map<string, HealthScore>();
     if (accountIds.length === 0) return scores;
-    const consuming = await this.consumingClasses(tx);
     const from = iso(period.start);
     const to = iso(new Date(period.end.getTime() + 86_400_000));
     const csat = await this.reporting.csatScores(tx, accountIds, from, to);
     const signins = await this.reporting.portalSignins(tx, accountIds, from, to);
-    const positions = await this.reporting.contractPositions(tx, accountIds, iso(now), [...consuming]);
+    // The portfolio dashboard has already read the periods for its own
+    // consumption strip; the account tile has not, so it reads them here.
+    const positions =
+      known ??
+      (await this.reporting.contractPositions(tx, accountIds, iso(now), [...(await this.consumingClasses(tx))]));
     const settings = await this.reporting.portalEnabled(tx, accountIds);
     const windowDays = Math.max(1, Math.round((period.end.getTime() - period.start.getTime()) / 86_400_000));
     for (const accountId of accountIds) {
@@ -361,6 +385,22 @@ export class ReportingService {
       );
     }
     return scores;
+  }
+
+  /**
+   * The state keys of every ticket type's machine, first occurrence
+   * winning, so `open_by_state` reads in the order the machines declare
+   * rather than alphabetically or by size. The portfolio dashboard spans
+   * accounts and so reads the active defaults; an account dashboard names
+   * its account, so an account that overrides a machine orders by its own.
+   */
+  private async stateOrder(tx: Tx, accountId?: string): Promise<string[]> {
+    const order: string[] = [];
+    for (const type of TICKET_TYPES) {
+      const resolved = await this.config.resolve<StateMachineBody>(tx, 'state_machine', type, accountId);
+      for (const state of resolved.body.states) if (!order.includes(state.key)) order.push(state.key);
+    }
+    return order;
   }
 
   private clientMeasures(measures: Measures, consumptionVisible: boolean): Partial<Measures> {
@@ -1238,6 +1278,28 @@ function percentElapsed(startsOn: string, endsOn: string, now: Date): number {
   const total = Math.max(1, Math.round((end - start) / 86_400_000) + 1);
   const elapsed = Math.min(total, Math.max(0, Math.floor((now.getTime() - start) / 86_400_000) + 1));
   return (elapsed / total) * 100;
+}
+
+/**
+ * One account's live contract periods folded into the consumption row the
+ * portfolio strip draws. An account with no live period answers null, so a
+ * screen says nothing rather than drawing a bar out of zeros.
+ */
+function consumptionOf(rows: readonly ContractPositionRow[]): AccountConsumption | null {
+  if (rows.length === 0) return null;
+  const contracted = rows.reduce((sum, row) => sum + row.contracted_minutes, 0);
+  const carried = rows.reduce((sum, row) => sum + row.carried_over_minutes, 0);
+  const used = rows.reduce((sum, row) => sum + row.consumed_minutes, 0);
+  return {
+    period: {
+      starts_on: rows.map((row) => row.starts_on).sort()[0],
+      ends_on: rows.map((row) => row.ends_on).sort()[rows.length - 1],
+    },
+    contracted_minutes: contracted,
+    carried_over_minutes: carried,
+    used_minutes: used,
+    remaining_minutes: contracted + carried - used,
+  };
 }
 
 /** The last day a period covers, as a date: the period end is exclusive. */

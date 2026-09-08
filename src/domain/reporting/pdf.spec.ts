@@ -22,6 +22,7 @@ const measures: Measures = {
   open_tickets: 7,
   open_by_priority: { p2: 3, p3: 4 },
   open_by_type: { incident: 7 },
+  open_by_state: { new: 3, in_progress: 4 },
   breached_now: 1,
   at_risk_now: 2,
   unassigned_now: 0,

@@ -205,6 +205,18 @@ describe('dashboards', () => {
       'state',
       'title',
     ]);
+    // Render 10's two panels: the open set broken down by state, and where
+    // each account stands against its live contract period.
+    expect(response.body.measures.open_by_state).toEqual({ new: 3 });
+    const brookfield = response.body.per_account.find((row: { key: string }) => row.key === 'BRK');
+    expect(brookfield.consumption).toEqual({
+      period: { starts_on: expect.any(String), ends_on: expect.any(String) },
+      // Forty contracted hours, ninety minutes booked against them.
+      contracted_minutes: 2400,
+      carried_over_minutes: 0,
+      used_minutes: 90,
+      remaining_minutes: 2310,
+    });
   });
 
   it('account dashboard is bounded by grants and "as client" reduces to the whitelist', async () => {
@@ -1114,5 +1126,56 @@ describe('report packs and snapshots', () => {
     await expect(withSuperuser((client) => client.query(`delete from rpt.daily_snapshots`))).rejects.toMatchObject({
       code: '23001',
     });
+  });
+});
+
+/**
+ * Render 10's "Open by state" panel. Last in the file because it puts two
+ * more tickets on the account, which every count above was written against.
+ */
+describe('open by state', () => {
+  async function ticketIn(state: 'assigned' | 'awaiting_client'): Promise<void> {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(consultantToken))
+      .send({ account_id: accountId, type: 'incident', short_description: `Bound for ${state}` })
+      .expect(201);
+    if (state === 'assigned') {
+      await api()
+        .post(`/v1/tickets/${created.body.key}/transitions`)
+        .set(bearer(consultantToken))
+        .send({ version: 1, to: 'assigned' })
+        .expect(201);
+      return;
+    }
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 1, to: 'in_progress' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 2, to: 'awaiting_client', pause_reason: 'awaiting_client' })
+      .expect(201);
+  }
+
+  it('counts the open set per state in the machine order, portfolio and per account', async () => {
+    await ticketIn('assigned');
+    await ticketIn('awaiting_client');
+    const response = await api().get('/v1/dashboards/operations').set(bearer(adminToken)).expect(200);
+    // The machine declares new, assigned, in_progress, awaiting_client, so
+    // the panel reads in that order, which is neither alphabetical nor by
+    // size; a state with nothing in it is absent rather than a zero.
+    const portfolio = response.body.measures.open_by_state as Record<string, number>;
+    expect(Object.keys(portfolio)).toEqual(['new', 'assigned', 'awaiting_client']);
+    expect([portfolio.assigned, portfolio.awaiting_client]).toEqual([1, 1]);
+    const total = Object.values(portfolio).reduce((sum, count) => sum + count, 0);
+    expect(total).toBe(response.body.measures.open_tickets);
+    const account = await api().get(`/v1/dashboards/accounts/${accountId}`).set(bearer(consultantToken)).expect(200);
+    const brookfield = account.body.measures.open_by_state as Record<string, number>;
+    expect(Object.keys(brookfield)).toEqual(['new', 'assigned', 'awaiting_client']);
+    expect([brookfield.assigned, brookfield.awaiting_client]).toEqual([1, 1]);
+    expect(Object.values(brookfield).reduce((sum, count) => sum + count, 0)).toBe(account.body.measures.open_tickets);
   });
 });
