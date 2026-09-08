@@ -12,6 +12,7 @@ import { ContactsModule } from './modules/portal/contacts.module.js';
 import { CsatModule } from './modules/portal/csat.module.js';
 import { FormsModule } from './modules/portal/forms.module.js';
 import { WebhooksModule } from './modules/integrations/webhooks.module.js';
+import { CalendarFeedModule } from './modules/integrations/calendar-feed.module.js';
 import { FinanceModule } from './modules/integrations/finance.module.js';
 import { CspModule } from './modules/security/csp.module.js';
 import { StorageModule } from './common/storage/storage.module.js';
@@ -76,6 +77,7 @@ import { ChangeWindowsModule } from './modules/tickets/change-windows.module.js'
     CsatModule,
     WebhooksModule,
     FinanceModule,
+    CalendarFeedModule,
     CalendarsModule,
     MigrationModule,
   ],

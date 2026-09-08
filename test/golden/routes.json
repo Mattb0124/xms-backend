@@ -171,6 +171,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/change-calendar.ics",
+    "controller": "AccountCalendarFeedController",
+    "handler": "ics",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/configuration-items",
     "controller": "AccountConfigurationItemsController",
     "handler": "search",
@@ -1341,6 +1351,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/calendar-feed/:id/change-calendar.ics",
+    "controller": "CalendarFeedController",
+    "handler": "ics",
+    "realm": "internal",
+    "permission": null,
+    "public": "calendar subscription link; the feed token is the credential",
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/calendars/:id",
     "controller": "CalendarsController",
     "handler": "get",
@@ -1886,6 +1906,26 @@
     "handler": "createHolidayCalendar",
     "realm": "internal",
     "permission": "admin:config",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/me/calendar-token",
+    "controller": "CalendarTokenController",
+    "handler": "revoke",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/me/calendar-token",
+    "controller": "CalendarTokenController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },

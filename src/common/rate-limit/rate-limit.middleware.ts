@@ -48,8 +48,10 @@ export function policiesFromEnv(env = loadEnv()): RatePolicy[] {
     {
       name: 'public',
       // csat is the one unauthenticated write in the product: the survey
-      // link route, whose token is its only credential.
-      matches: (path) => /^\/v\d+\/(bootstrap|telemetry|storage|dev|csp-report|csat)(\/|$)/.test(path),
+      // link route, whose token is its only credential. calendar-feed is the
+      // one unauthenticated read: an ICS subscription a calendar client
+      // polls, whose feed token is its only credential (INT-05).
+      matches: (path) => /^\/v\d+\/(bootstrap|telemetry|storage|dev|csp-report|csat|calendar-feed)(\/|$)/.test(path),
       perMinute: env.RATE_LIMIT_PUBLIC_PER_MINUTE,
     },
   ];

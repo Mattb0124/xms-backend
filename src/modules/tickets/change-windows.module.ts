@@ -79,6 +79,11 @@ export interface TicketGroupRow {
   version: number;
 }
 
+/** A window as the calendar feed reads it: the row plus the account it belongs to. */
+export interface ChangeWindowFeedRow extends TicketGroupRow {
+  account_key: string;
+}
+
 /** The row as the pure rules see it. */
 export function toChangeWindow(row: TicketGroupRow): ChangeWindow {
   return {
@@ -118,6 +123,27 @@ export class TicketGroupsRepository extends RepositoryBase {
           and starts_at is not null and ends_at is not null
           and starts_at < $3::timestamptz and ends_at > $2::timestamptz
         order by starts_at`,
+      [accountIds, from, to],
+    );
+  }
+
+  /**
+   * The calendar feed's range (INT-05). Unlike the screen's calendar this
+   * keeps cancelled windows, because a subscriber already holds the event
+   * and needs it written back as CANCELLED to be rid of it, and it carries
+   * the account key so one feed across several clients says whose window
+   * each one is.
+   */
+  feed(tx: Tx, accountIds: string[], from: string, to: string): Promise<ChangeWindowFeedRow[]> {
+    return this.many<ChangeWindowFeedRow>(
+      tx,
+      `select g.*, a.key as account_key
+         from acct.ticket_groups g
+         join op.accounts a on a.id = g.account_id
+        where g.account_id = any ($1::uuid[]) and g.kind = 'change_window'
+          and g.starts_at is not null and g.ends_at is not null
+          and g.starts_at < $3::timestamptz and g.ends_at > $2::timestamptz
+        order by g.starts_at`,
       [accountIds, from, to],
     );
   }
