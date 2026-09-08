@@ -109,13 +109,18 @@ export function outOfOffice(input: MessageInput): Buffer {
   );
 }
 
-/** A new request carrying a small attachment (and optionally the EICAR test file). */
+/**
+ * A new request carrying a small attachment (and optionally the EICAR test
+ * file). Given a `cid`, the part is an inline image the body refers to by
+ * `cid:` rather than a file listed at the bottom of the message.
+ */
 export function withAttachment(
   input: MessageInput,
   text: string,
-  attachment: { name: string; contentType: string; content: Buffer },
+  attachment: { name: string; contentType: string; content: Buffer; cid?: string },
 ): Buffer {
   const boundary = 'XmsMixed_0001';
+  const disposition = attachment.cid ? 'inline' : 'attachment';
   const body = [
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',
@@ -125,7 +130,8 @@ export function withAttachment(
     text,
     `--${boundary}`,
     `Content-Type: ${attachment.contentType}; name="${attachment.name}"`,
-    `Content-Disposition: attachment; filename="${attachment.name}"`,
+    ...(attachment.cid ? [`Content-ID: <${attachment.cid}>`] : []),
+    `Content-Disposition: ${disposition}; filename="${attachment.name}"`,
     'Content-Transfer-Encoding: base64',
     '',
     attachment.content.toString('base64'),

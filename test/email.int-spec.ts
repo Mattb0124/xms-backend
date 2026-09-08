@@ -5,7 +5,9 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import request from 'supertest';
+import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { MAX_IMAGE_EDGE } from '../src/common/images/reencode.js';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { MAIL_TRANSPORT } from '../src/common/storage/storage.module.js';
@@ -373,6 +375,87 @@ describe('attachments by email', () => {
       .set(bearer(adminToken))
       .expect(200);
     expect(none.body).toEqual([]);
+  });
+
+  it('re-encodes an inline image before it is stored, and quarantines one it cannot decode', async () => {
+    // Constructed in the test: an oversized flat swatch carrying EXIF on
+    // purpose, so what is asserted is what the re-encode removed.
+    const original = await sharp({
+      create: { width: MAX_IMAGE_EDGE + 400, height: 900, channels: 3, background: { r: 30, g: 90, b: 150 } },
+    })
+      .withExifMerge({ IFD0: { Copyright: 'A client of ours', Software: 'Their screenshot tool' } })
+      .jpeg()
+      .toBuffer();
+    expect((await sharp(original).metadata()).exif).toBeDefined();
+
+    const created = await ingest(
+      withAttachment({ from: contactEmail, to: ALIAS, subject: 'Screenshot' }, 'The error looks like this:', {
+        name: 'screen.jpeg',
+        contentType: 'image/jpeg',
+        content: original,
+        cid: 'screen001',
+      }),
+    ).expect(201);
+    const stored = await api()
+      .get(`/v1/tickets/${created.body.ticketKey}/attachments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(stored.body).toHaveLength(1);
+    expect(stored.body[0]).toMatchObject({
+      file_name: 'screen.jpg',
+      content_type: 'image/jpeg',
+      scan_state: 'clean',
+      origin: 'email',
+    });
+    expect(stored.body[0].re_encode).toMatchObject({
+      original_content_type: 'image/jpeg',
+      content_type: 'image/jpeg',
+      original_bytes: original.length,
+      original_width: MAX_IMAGE_EDGE + 400,
+      original_height: 900,
+      width: MAX_IMAGE_EDGE,
+      resized: true,
+      metadata_stripped: true,
+    });
+    expect(Number(stored.body[0].size_bytes)).toBe(stored.body[0].re_encode.bytes);
+
+    const download = await api()
+      .get(`/v1/attachments/${stored.body[0].id}/download`)
+      .set(bearer(adminToken))
+      .expect(200);
+    const fetched = await request(app.getHttpServer())
+      .get(download.body.url.replace(/^https?:\/\/[^/]+/, ''))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const servedMeta = await sharp(fetched.body as Buffer).metadata();
+    expect(servedMeta.format).toBe('jpeg');
+    expect(servedMeta.width).toBe(MAX_IMAGE_EDGE);
+    expect(servedMeta.exif).toBeUndefined();
+
+    const trap = await ingest(
+      withAttachment({ from: contactEmail, to: ALIAS, subject: 'Not an image' }, 'Have a look.', {
+        name: 'logo.png',
+        contentType: 'image/png',
+        content: Buffer.from('<svg onload="alert(1)"><script>steal()</script></svg>', 'utf8'),
+        cid: 'logo001',
+      }),
+    ).expect(201);
+    const quarantined = await api()
+      .get(`/v1/tickets/${trap.body.ticketKey}/attachments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(quarantined.body[0]).toMatchObject({ scan_state: 'quarantined', re_encode: null });
+    expect(quarantined.body[0].scan_detail).toMatchObject({
+      reason: 'image_not_decodable',
+      declared_content_type: 'image/png',
+    });
+    expect(quarantined.body[0].scan_detail.detail).toMatch(/could not be decoded as an image/);
+    expect(quarantined.body[0].s3_key).toMatch(/^quarantine\//);
   });
 });
 

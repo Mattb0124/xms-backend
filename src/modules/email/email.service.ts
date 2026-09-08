@@ -33,6 +33,7 @@ import {
 import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { UsersRepository } from '../admin/users/users.repository.js';
 import { ALLOWED_TYPES, AttachmentsRepository, AttachmentsService } from '../attachments/attachments.module.js';
+import { ImageNotDecodableError, isReEncodedImage, reEncodeImage } from '../../common/images/reencode.js';
 import { TicketsRepository, ticketKey, type TicketRow } from '../tickets/tickets.repository.js';
 import { TicketsService } from '../tickets/tickets.service.js';
 import type { OutboxRow } from '../../worker/outbox-dispatcher.js';
@@ -404,22 +405,58 @@ export class EmailService {
         );
         continue;
       }
-      const key = `accounts/${ticket.account_id}/tickets/${ticket.id}/${randomUUID()}-${fileName.slice(0, 120)}`;
-      await this.store.putObject(key, attachment.content, contentType);
+      // Inline and attached images are decoded and written out again before
+      // anything is stored, so what lands in the object store is built from
+      // the pixels and carries none of the original container (Email Intake
+      // technical 3 step 4; Security & Tenancy section 6). The scan gate
+      // then sees the file that will actually be served.
+      let body = attachment.content;
+      let storedType = contentType;
+      let storedName = fileName;
+      let reEncode: Record<string, unknown> | null = null;
+      let undecodable: string | null = null;
+      if (isReEncodedImage(contentType)) {
+        try {
+          const encoded = await reEncodeImage(attachment.content, contentType, fileName);
+          body = encoded.body;
+          storedType = encoded.contentType;
+          storedName = encoded.fileName;
+          reEncode = encoded.detail;
+        } catch (error) {
+          undecodable =
+            error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+        }
+      }
+      const key = `accounts/${ticket.account_id}/tickets/${ticket.id}/${randomUUID()}-${storedName.slice(0, 120)}`;
+      await this.store.putObject(key, body, storedType);
       const row = await this.attachments.insert(tx, {
         accountId: ticket.account_id,
         ticketId: ticket.id,
         commentId,
-        fileName,
-        contentType,
-        sizeBytes: attachment.size,
+        fileName: storedName,
+        contentType: storedType,
+        sizeBytes: body.length,
         key,
         origin: 'email',
         visibility: 'public',
         uploadedBy: principal.userId,
         uploadedByName: principal.displayName,
+        reEncode,
       });
-      const verdict = await this.attachmentService['scanner'].scan(attachment.content);
+      // A file that says it is an image and is not one is not served on a
+      // guess: it goes to quarantine through the same gate a threat does,
+      // with the reason in the words the reviewer reads.
+      if (undecodable) {
+        await this.attachmentService.applyScan(
+          tx,
+          row,
+          'quarantined',
+          { reason: 'image_not_decodable', detail: undecodable, declared_content_type: contentType },
+          ctx,
+        );
+        continue;
+      }
+      const verdict = await this.attachmentService['scanner'].scan(body);
       await this.attachmentService.applyScan(tx, row, verdict.verdict, verdict.detail, ctx);
     }
   }

@@ -28,6 +28,7 @@ import { actorOf, AuditService } from '../../common/audit/audit.service.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { SecurityEventsService } from '../../common/events/security-events.service.js';
 import { OutboxService } from '../../common/outbox/outbox.service.js';
+import { ImageNotDecodableError, isReEncodedImage, reEncodeImage } from '../../common/images/reencode.js';
 import { OBJECT_STORE } from '../../common/storage/storage.module.js';
 import type { ObjectStore } from '../../common/storage/object-store.js';
 import { RepositoryBase, type Tx } from '../../db/repository.base.js';
@@ -80,6 +81,8 @@ export interface AttachmentRow {
   visibility: 'public' | 'internal';
   uploaded_by: string;
   uploaded_by_name: string;
+  /** What the image re-encode did, when the file arrived as bytes (Security section 6). */
+  re_encode: Record<string, unknown> | null;
   created_at: string;
   deleted_at: string | null;
 }
@@ -122,13 +125,14 @@ export class AttachmentsRepository extends RepositoryBase {
       uploadedByName: string;
       commentId?: string | null;
       workNoteId?: string | null;
+      reEncode?: Record<string, unknown> | null;
     },
   ): Promise<AttachmentRow> {
     return this.one<AttachmentRow>(
       tx,
       'attachment',
-      `insert into acct.attachments (account_id, ticket_id, comment_id, work_note_id, file_name, content_type, size_bytes, s3_key, origin, visibility, uploaded_by, uploaded_by_name)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning *`,
+      `insert into acct.attachments (account_id, ticket_id, comment_id, work_note_id, file_name, content_type, size_bytes, s3_key, origin, visibility, uploaded_by, uploaded_by_name, re_encode)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb) returning *`,
       [
         input.accountId,
         input.ticketId,
@@ -142,6 +146,7 @@ export class AttachmentsRepository extends RepositoryBase {
         input.visibility,
         input.uploadedBy,
         input.uploadedByName,
+        input.reEncode ? JSON.stringify(input.reEncode) : null,
       ],
     );
   }
@@ -349,22 +354,51 @@ export class AttachmentsService {
     },
     ctx: RequestContext,
   ): Promise<AttachmentRow> {
-    const safeName = input.fileName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
+    // Bytes in hand, so the image re-encode applies here exactly as it does
+    // to an image off an email: normalised format, no metadata, dimensions
+    // capped, before storage and before the scan gate (Security section 6).
+    let body = input.body;
+    let storedType = input.contentType.toLowerCase();
+    let storedName = input.fileName;
+    let reEncode: Record<string, unknown> | null = null;
+    let undecodable: string | null = null;
+    if (isReEncodedImage(storedType)) {
+      try {
+        const encoded = await reEncodeImage(input.body, storedType, input.fileName);
+        body = encoded.body;
+        storedType = encoded.contentType;
+        storedName = encoded.fileName;
+        reEncode = encoded.detail;
+      } catch (error) {
+        undecodable =
+          error instanceof ImageNotDecodableError ? error.reason : `the image could not be re-encoded: ${error}`;
+      }
+    }
+    const safeName = storedName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120);
     const objectKey = `accounts/${input.accountId}/tickets/${input.ticketId}/${randomUUID()}-${safeName}`;
-    await this.store.putObject(objectKey, input.body, input.contentType);
+    await this.store.putObject(objectKey, body, storedType);
     const row = await this.attachments.insert(tx, {
       accountId: input.accountId,
       ticketId: input.ticketId,
-      fileName: input.fileName,
-      contentType: input.contentType,
-      sizeBytes: input.body.length,
+      fileName: storedName,
+      contentType: storedType,
+      sizeBytes: body.length,
       key: objectKey,
       origin: 'sync',
       visibility: input.visibility ?? 'public',
       uploadedBy: input.uploadedBy,
       uploadedByName: input.uploadedByName,
+      reEncode,
     });
-    const verdict = await this.scanner.scan(input.body);
+    if (undecodable)
+      return this.applyScan(
+        tx,
+        row,
+        'quarantined',
+        { reason: 'image_not_decodable', detail: undecodable, declared_content_type: input.contentType },
+        ctx,
+      );
+    const verdict = await this.scanner.scan(body);
     return this.applyScan(tx, row, verdict.verdict, verdict.detail, ctx);
   }
 
