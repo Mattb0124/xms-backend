@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Injectable,
   Module,
@@ -295,6 +296,14 @@ export class PatchTicketGroupDto {
   freeze_windows?: FreezeWindowDto[];
 
   @IsOptional() @IsIn(GROUP_STATUSES) status?: GroupStatus;
+
+  /**
+   * Why the schedule of a change window is moving. Required whenever a
+   * patch touches `starts_at`, `ends_at` or `freeze_windows` on a
+   * change window, because that edit is the control the deploy gate stands
+   * on and the audit row has to say who widened it and why.
+   */
+  @IsOptional() @IsString() @MaxLength(1000) change_window_reason?: string;
 }
 
 const toList = ({ value }: { value: unknown }): string[] | undefined =>
@@ -322,7 +331,49 @@ export class WindowAtQueryDto {
   @IsOptional() @IsISO8601({ strict: true }) at?: string;
 }
 
-const PATCH_FIELDS = ['name', 'description', 'owner_user_id', 'starts_at', 'ends_at', 'status'] as const;
+/**
+ * The fields the audit diff covers. `freeze_windows` is on the list because
+ * it is the one a caller has a motive to clear: without it a patch that
+ * deletes a production freeze writes an audit row whose old and new values
+ * are both empty, which satisfies `sys.require_audit` while recording
+ * nothing. It is compared serialised, being an array rather than a scalar.
+ */
+const PATCH_FIELDS = [
+  'name',
+  'description',
+  'owner_user_id',
+  'starts_at',
+  'ends_at',
+  'status',
+  'freeze_windows',
+] as const;
+
+/** The three fields that decide when a change may be deployed (TM-18). */
+const SCHEDULE_FIELDS = ['starts_at', 'ends_at', 'freeze_windows'] as const;
+
+/** Scalars compare as themselves; a freeze list compares as its JSON. */
+function sameValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left === 'object' || typeof right === 'object') return JSON.stringify(left) === JSON.stringify(right);
+  return false;
+}
+
+/**
+ * Who owns the schedule of a change window (TM-10, TM-18). The transition
+ * gate refuses a deploy outside a window unless the principal holds
+ * `tickets:override-change-window`, and it evaluates a row that would
+ * otherwise be editable by every `tickets:work` holder, so the same
+ * principal could clear the freeze and widen the span instead of asking for
+ * the override. The schedule therefore moves only under the permission the
+ * override names, or under `admin:config`, and a change to a live window
+ * carries a reason the audit records.
+ */
+function assertScheduleOwner(principal: Principal, kind: GroupKind, reason: string | undefined, live: boolean): void {
+  if (kind !== 'change_window') return;
+  if (!principal.permissions.has('tickets:override-change-window') && !principal.permissions.has('admin:config'))
+    throw new ForbiddenException({ code: 'forbidden', permission: 'tickets:override-change-window' });
+  if (live && !reason?.trim()) throw new BadRequestException({ code: 'reason_required' });
+}
 
 @Injectable()
 export class TicketGroupsService {
@@ -354,6 +405,7 @@ export class TicketGroupsService {
     if (!principal.accountIds.includes(dto.account_id))
       throw new NotFoundException({ code: 'not_found', entity: 'account' });
     const freezes = (dto.freeze_windows ?? []) as FreezeWindow[];
+    assertScheduleOwner(principal, dto.kind, undefined, false);
     assertSchedule(dto.kind, dto.starts_at ?? null, dto.ends_at ?? null, freezes);
     const correlationId = ctx.requestId ?? randomUUID();
     return this.uow.run(principal, async (tx) => {
@@ -392,6 +444,8 @@ export class TicketGroupsService {
     const correlationId = ctx.requestId ?? randomUUID();
     return this.uow.run(principal, async (tx) => {
       const before = await this.groups.byId(tx, id);
+      const touchesSchedule = SCHEDULE_FIELDS.some((field) => dto[field] !== undefined);
+      if (touchesSchedule) assertScheduleOwner(principal, before.kind, dto.change_window_reason, true);
       const startsAt = dto.starts_at === undefined ? before.starts_at : dto.starts_at;
       const endsAt = dto.ends_at === undefined ? before.ends_at : dto.ends_at;
       const freezes = (dto.freeze_windows ?? before.freeze_windows ?? []) as FreezeWindow[];
@@ -400,14 +454,18 @@ export class TicketGroupsService {
       for (const field of ['name', 'description', 'owner_user_id', 'status'] as const)
         if (dto[field] !== undefined) assignments[field] = dto[field];
       const after = await this.groups.update(tx, id, dto.version, assignments);
-      const changed = PATCH_FIELDS.filter((field) => before[field] !== after[field]);
+      const changed = PATCH_FIELDS.filter((field) => !sameValue(before[field], after[field]));
+      const reason = dto.change_window_reason?.trim();
       await this.audit.account(tx, before.account_id, actorOf(principal), ctx, [
         {
           entityKind: 'ticket_group',
           entityId: id,
           eventType: 'updated',
           oldValue: Object.fromEntries(changed.map((field) => [field, before[field]])),
-          newValue: Object.fromEntries(changed.map((field) => [field, after[field]])),
+          newValue: {
+            ...Object.fromEntries(changed.map((field) => [field, after[field]])),
+            ...(touchesSchedule && reason ? { change_window_reason: reason } : {}),
+          },
         },
       ]);
       // Moving a window moves the work planned around it, so the calendar
@@ -420,6 +478,24 @@ export class TicketGroupsService {
         correlationId,
         payload: { fields: changed, starts_at: after.starts_at, ends_at: after.ends_at },
       });
+      // A freeze is a promise to a client that nothing ships in that span,
+      // so moving one is announced the way a transition override is
+      // (Integration Patterns section 2): the connector, the notification
+      // fan-out and any client alerting all read the outbox.
+      if (changed.includes('freeze_windows'))
+        await this.outbox.write(tx, {
+          accountId: before.account_id,
+          aggregate: 'ticket_group',
+          aggregateId: id,
+          eventType: 'ticket_group.freeze_changed',
+          correlationId,
+          payload: {
+            name: after.name,
+            reason: reason ?? null,
+            freeze_windows: after.freeze_windows ?? [],
+            was: before.freeze_windows ?? [],
+          },
+        });
       return after;
     });
   }

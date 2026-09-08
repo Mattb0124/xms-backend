@@ -320,6 +320,113 @@ describe('implementing inside the window', () => {
   });
 });
 
+describe('who owns the schedule of a change window', () => {
+  /**
+   * The deploy gate refuses a change outside its window unless the caller
+   * holds `tickets:override-change-window`, and it reads a row that used to
+   * be editable by any `tickets:work` holder. A consultant who could clear
+   * the freeze and widen the span would never need the permission at all.
+   */
+  it('refuses a tickets:work principal the freeze, the span and a new window', async () => {
+    const windowId = await newWindow({
+      name: 'Payroll freeze',
+      starts_at: days(30),
+      ends_at: days(31),
+      freeze_windows: [{ starts_at: days(29), ends_at: days(32), reason: 'Payroll run' }],
+    });
+    const current = await api().get(`/v1/ticket-groups/${windowId}`).set(bearer(adminToken)).expect(200);
+
+    const cleared = await api()
+      .patch(`/v1/ticket-groups/${windowId}`)
+      .set(bearer(caraToken))
+      .send({ version: current.body.version, freeze_windows: [] })
+      .expect(403);
+    expect(cleared.body).toMatchObject({ code: 'forbidden', permission: 'tickets:override-change-window' });
+
+    await api()
+      .patch(`/v1/ticket-groups/${windowId}`)
+      .set(bearer(caraToken))
+      .send({ version: current.body.version, starts_at: days(1), ends_at: days(40) })
+      .expect(403);
+
+    await api()
+      .post('/v1/ticket-groups')
+      .set(bearer(caraToken))
+      .send({
+        account_id: accountId,
+        kind: 'change_window',
+        status: 'active',
+        name: 'A window of my own',
+        starts_at: hours(-1),
+        ends_at: hours(2),
+      })
+      .expect(403);
+
+    // The same principal still owns projects and the parts of a window that
+    // do not decide when a change may ship.
+    const project = await api()
+      .post('/v1/ticket-groups')
+      .set(bearer(caraToken))
+      .send({ account_id: accountId, kind: 'project', name: 'Migration wave 2' })
+      .expect(201);
+    await api()
+      .patch(`/v1/ticket-groups/${windowId}`)
+      .set(bearer(caraToken))
+      .send({ version: current.body.version, description: 'Owned by Finance' })
+      .expect(200);
+    expect(project.body.kind).toBe('project');
+  });
+
+  it('makes an override name its reason and records the freeze on both sides', async () => {
+    const windowId = await newWindow({
+      name: 'Quarter close',
+      starts_at: days(40),
+      ends_at: days(41),
+      freeze_windows: [{ starts_at: days(39), ends_at: days(42), reason: 'Quarter close' }],
+    });
+    const current = await api().get(`/v1/ticket-groups/${windowId}`).set(bearer(adminToken)).expect(200);
+
+    const bare = await api()
+      .patch(`/v1/ticket-groups/${windowId}`)
+      .set(bearer(adminToken))
+      .send({ version: current.body.version, freeze_windows: [] })
+      .expect(400);
+    expect(bare.body.code).toBe('reason_required');
+
+    const patched = await api()
+      .patch(`/v1/ticket-groups/${windowId}`)
+      .set(bearer(adminToken))
+      .send({
+        version: current.body.version,
+        freeze_windows: [],
+        change_window_reason: 'Client asked for the security patch inside the freeze',
+      })
+      .expect(200);
+    expect(patched.body.freeze_windows).toEqual([]);
+
+    const audit = await withSuperuser((client) =>
+      client.query(
+        `select old_value, new_value from acct.audit_events where entity_id = $1 and event_type = 'updated' order by created_at desc limit 1`,
+        [windowId],
+      ),
+    ).then((result) => result.rows[0]);
+    expect(audit.old_value.freeze_windows).toHaveLength(1);
+    expect(audit.new_value.freeze_windows).toEqual([]);
+    expect(audit.new_value.change_window_reason).toContain('security patch');
+
+    const published = await withSuperuser((client) =>
+      client.query(
+        `select payload from sys.outbox where aggregate_id = $1 and event_type = 'ticket_group.freeze_changed'`,
+        [windowId],
+      ),
+    ).then((result) => result.rows);
+    expect(published).toHaveLength(1);
+    expect(published[0].payload.was).toHaveLength(1);
+    expect(published[0].payload.freeze_windows).toEqual([]);
+    expect(published[0].payload.reason).toContain('security patch');
+  });
+});
+
 describe('the change calendar', () => {
   it('answers whether an instant is inside a window and lists the windows of a range', async () => {
     const now = await api().get(`/v1/change-calendar/at?account_id=${accountId}`).set(bearer(adminToken)).expect(200);
