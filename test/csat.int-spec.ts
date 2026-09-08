@@ -1,5 +1,6 @@
 import { INestApplication, ValidationPipe, VersioningType } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -546,5 +547,128 @@ describe('the quarterly relationship survey', () => {
     // The ticket-close summary is untouched by the relationship survey: the
     // two answer different questions and are never averaged together.
     expect(view.body.summary).toMatchObject({ responses: 2, average: 3.5 });
+  });
+});
+
+/**
+ * The read behind the survey link (CP-07): the link page needs to know what
+ * the survey asks before anyone answers it, and the token is the only
+ * credential it holds. Describe answers the survey and nothing about the
+ * person it went to, and an id that does not exist reads exactly like a
+ * token that does not match.
+ */
+describe('the read behind the survey link', () => {
+  const closeToken = 'describe-token-for-the-ticket-close-survey';
+  const quarterlyToken = 'describe-token-for-the-quarterly-survey';
+  let closeSurveyId: string;
+  let quarterlySurveyId: string;
+
+  beforeAll(async () => {
+    // A ticket of its own, because one requester holds at most one
+    // ticket-close survey per ticket, and two constructed surveys with known
+    // tokens, so the read is exercised without disturbing the rows the
+    // earlier scenarios assert on.
+    const ticket = await api()
+      .post('/v1/portal/tickets')
+      .set(bearer(portalToken))
+      .send({ type: 'incident', short_description: 'Describe subject', description: 'Details' })
+      .expect(201);
+    const ids = await withSuperuser(async (client) => {
+      const close = await client.query(
+        `insert into acct.csat_surveys (account_id, kind, ticket_id, contact_id, token_hash, status, sent_at, remind_at, expires_at)
+         select account_id, 'ticket_close', $1, contact_id, $3, 'sent', now(), now() + interval '3 days', now() + interval '10 days'
+           from acct.csat_surveys where ticket_id = $2 limit 1 returning id`,
+        [ticket.body.id, ticketId, hashToken(closeToken)],
+      );
+      const quarterly = await client.query(
+        `insert into acct.csat_surveys (account_id, kind, period, contact_id, token_hash, status, sent_at, expires_at)
+         select account_id, 'quarterly', '2028-Q1', contact_id, $2, 'sent', now(), now() + interval '21 days'
+           from acct.csat_surveys where ticket_id = $1 limit 1 returning id`,
+        [ticketId, hashToken(quarterlyToken)],
+      );
+      return [close.rows[0].id as string, quarterly.rows[0].id as string];
+    });
+    closeSurveyId = ids[0];
+    quarterlySurveyId = ids[1];
+  });
+
+  it('describes a ticket-close survey with its key and its one question, and nothing about the recipient', async () => {
+    const described = await api().post(`/v1/csat/${closeSurveyId}/describe`).send({ token: closeToken }).expect(200);
+    expect(described.body).toMatchObject({ id: closeSurveyId, kind: 'ticket_close', period: null, status: 'sent' });
+    expect(described.body.ticket_key).toMatch(/^CS\d{7}$/);
+    expect(described.body.expires_at).not.toBeNull();
+    expect(described.body.questions.map((question: { key: string }) => question.key)).toEqual(['score']);
+    // The token holder learns the survey, never the account or the contact.
+    expect(Object.keys(described.body).sort()).toEqual([
+      'expires_at',
+      'id',
+      'kind',
+      'period',
+      'questions',
+      'status',
+      'ticket_key',
+    ]);
+  });
+
+  it('describes a quarterly survey with its period and its five questions', async () => {
+    const described = await api()
+      .post(`/v1/csat/${quarterlySurveyId}/describe`)
+      .send({ token: quarterlyToken })
+      .expect(200);
+    expect(described.body).toMatchObject({
+      id: quarterlySurveyId,
+      kind: 'quarterly',
+      period: '2028-Q1',
+      ticket_key: null,
+      status: 'sent',
+    });
+    expect(described.body.questions.map((question: { key: string }) => question.key)).toEqual([
+      'responsiveness',
+      'quality',
+      'communication',
+      'value',
+      'recommend',
+    ]);
+  });
+
+  it('answers a wrong token and an unknown id with the same 404, so the route confirms no id', async () => {
+    const wrong = await api()
+      .post(`/v1/csat/${closeSurveyId}/describe`)
+      .send({ token: 'not-the-token-at-all-0123456789' })
+      .expect(404);
+    const unknown = await api().post(`/v1/csat/${randomUUID()}/describe`).send({ token: closeToken }).expect(404);
+    const shape = (body: Record<string, unknown>) => ({ ...body, requestId: undefined });
+    expect(shape(wrong.body)).toEqual(shape(unknown.body));
+    expect(wrong.body).toMatchObject({ code: 'not_found', entity: 'survey' });
+    // A token belonging to another survey is no better than a made-up one.
+    await api().post(`/v1/csat/${closeSurveyId}/describe`).send({ token: quarterlyToken }).expect(404);
+  });
+
+  it('still describes an answered survey and an expired one, each with its status', async () => {
+    await api().post(`/v1/csat/${closeSurveyId}/answer`).send({ token: closeToken, score: 5 }).expect(200);
+    const answered = await api().post(`/v1/csat/${closeSurveyId}/describe`).send({ token: closeToken }).expect(200);
+    expect(answered.body).toMatchObject({ id: closeSurveyId, status: 'answered', kind: 'ticket_close' });
+    expect(answered.body.questions).toHaveLength(1);
+
+    await withSuperuser((client) =>
+      client.query(
+        `update acct.csat_surveys set status = 'expired', expires_at = now() - interval '1 minute' where id = $1`,
+        [quarterlySurveyId],
+      ),
+    );
+    const expired = await api()
+      .post(`/v1/csat/${quarterlySurveyId}/describe`)
+      .send({ token: quarterlyToken })
+      .expect(200);
+    expect(expired.body).toMatchObject({ id: quarterlySurveyId, status: 'expired', period: '2028-Q1' });
+    // Describing an expired survey does not make it answerable.
+    const late = await api()
+      .post(`/v1/csat/${quarterlySurveyId}/answer`)
+      .send({
+        token: quarterlyToken,
+        scores: { responsiveness: 4, quality: 4, communication: 4, value: 4, recommend: 4 },
+      })
+      .expect(409);
+    expect(late.body.code).toBe('survey_closed');
   });
 });

@@ -1441,6 +1441,16 @@
   },
   {
     "method": "POST",
+    "path": "/v1/csat/:id/describe",
+    "controller": "CsatLinkController",
+    "handler": "describe",
+    "realm": "internal",
+    "permission": null,
+    "public": "csat one-time link; the token is the credential",
+    "axel": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/csp-report",
     "controller": "CspReportController",
     "handler": "report",

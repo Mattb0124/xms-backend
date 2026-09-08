@@ -431,6 +431,11 @@ export class TokenAnswerDto extends AnswerDto {
   @IsString() @MinLength(20) @MaxLength(200) token!: string;
 }
 
+/** The read behind the link carries the token and nothing else. */
+export class DescribeSurveyDto {
+  @IsString() @MinLength(20) @MaxLength(200) token!: string;
+}
+
 // Service --------------------------------------------------------------------------
 
 @Injectable()
@@ -591,6 +596,47 @@ export class CsatService {
 
   /** Answers from the email link: the token must hash to the survey's; no session is needed. */
   async answerWithToken(surveyId: string, dto: TokenAnswerDto) {
+    return this.behindToken(surveyId, dto.token, (tx, survey) =>
+      this.record(tx, survey, dto, SYSTEM_ACTOR, { correlationId: `csat-link:${surveyId}` }),
+    );
+  }
+
+  /**
+   * The read behind the link: what this survey asks and where it stands, so
+   * the link page renders the right questions without guessing at them and
+   * without a portal session. It answers the survey and nothing about the
+   * person, so a token holder learns only what their own email already told
+   * them: no account id and no contact.
+   */
+  async describeWithToken(surveyId: string, dto: DescribeSurveyDto) {
+    return this.behindToken(surveyId, dto.token, async (tx, survey) => {
+      const ticket = survey.ticket_id
+        ? await this.tickets.byId(tx, survey.ticket_id).catch(() => undefined)
+        : undefined;
+      return {
+        id: survey.id,
+        kind: survey.kind,
+        period: survey.period,
+        ticket_key: ticket ? ticketKey(ticket.number) : null,
+        status: survey.status,
+        expires_at: survey.expires_at,
+        questions: questionsFor(survey.kind),
+      };
+    });
+  }
+
+  /**
+   * The gate both link routes share: the survey's account is resolved by a
+   * definer function because no session is bound yet, the row is then read
+   * under that one account, and the presented token is compared with the
+   * stored hash in constant time. An unknown id and a token that does not
+   * match raise the same 404, so the route never confirms that an id exists.
+   */
+  private async behindToken<T>(
+    surveyId: string,
+    token: string,
+    work: (tx: Tx, survey: SurveyRow) => Promise<T>,
+  ): Promise<T> {
     const lookup = await this.pools
       .get('app')
       .query<{ id: string | null }>('select sys.csat_survey_account($1) as id', [surveyId]);
@@ -598,9 +644,9 @@ export class CsatService {
     if (!accountId) throw new NotFoundException({ code: 'not_found', entity: 'survey' });
     return this.uow.system([accountId], async (tx) => {
       const survey = await this.repo.survey(tx, surveyId).catch(() => undefined);
-      if (!survey || !tokenMatches(survey.token_hash, dto.token))
+      if (!survey || !tokenMatches(survey.token_hash, token))
         throw new NotFoundException({ code: 'not_found', entity: 'survey' });
-      return this.record(tx, survey, dto, SYSTEM_ACTOR, { correlationId: `csat-link:${surveyId}` });
+      return work(tx, survey);
     });
   }
 
@@ -934,7 +980,11 @@ export class PortalSurveysController {
   }
 }
 
-/** The email link answers without a session: the one-time token is the credential, bound to the survey only. */
+/**
+ * The email link reads and answers without a session: the one-time token is
+ * the credential, bound to the survey only. Describe says what the survey
+ * asks and where it stands; answer records the response.
+ */
 @ApiTags('portal')
 @Controller('csat')
 export class CsatLinkController {
@@ -946,6 +996,17 @@ export class CsatLinkController {
   answer(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TokenAnswerDto) {
     if (!dto.token) throw new BadRequestException({ code: 'token_required' });
     return this.csat.answerWithToken(id, dto);
+  }
+
+  // The read behind the same credential: a POST because the token is a body
+  // field, which keeps it out of the query string, the access log and the
+  // browser history exactly as the answer route does.
+  @Post(':id/describe')
+  @HttpCode(200)
+  @Public('csat one-time link; the token is the credential')
+  describe(@Param('id', ParseUUIDPipe) id: string, @Body() dto: DescribeSurveyDto) {
+    if (!dto.token) throw new BadRequestException({ code: 'token_required' });
+    return this.csat.describeWithToken(id, dto);
   }
 }
 
