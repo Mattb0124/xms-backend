@@ -2390,6 +2390,26 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/tickets/:key/scope",
+    "controller": "TicketsController",
+    "handler": "flagScope",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/scope/decision",
+    "controller": "TicketsController",
+    "handler": "decideScope",
+    "realm": "internal",
+    "permission": "tickets:approve-scope",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/tickets/:key/solutions",
     "controller": "KnowledgeController",

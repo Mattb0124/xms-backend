@@ -284,3 +284,49 @@ export class ListTicketsQueryDto {
   @MaxLength(4000)
   conditions?: string;
 }
+
+/**
+ * The out-of-scope flag and its decision (TM-11, Ticket Management
+ * functional 5 and technical 4). Flagging states why in the client's words;
+ * the decision either buys the work a budget allowance or declines it and
+ * says so.
+ */
+export class ScopeFlagDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  /** True flags the work as out of scope; false withdraws a flag still waiting for a decision. */
+  @IsBoolean()
+  out_of_scope!: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  reason?: string;
+}
+
+export class ScopeDecisionDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  @IsIn(['approve', 'decline'])
+  decision!: 'approve' | 'decline';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
+
+  /**
+   * Minutes added to the contract period's budget when the work is
+   * approved, so the time logged against the ticket is inside budget
+   * instead of over it. Absent means "approved, no extra budget".
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  overage_allowance_minutes?: number;
+}

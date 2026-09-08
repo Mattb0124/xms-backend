@@ -582,6 +582,24 @@ export class TimeRepository extends RepositoryBase {
     );
   }
 
+  /**
+   * Adds an approved out-of-scope allowance to the period's budget (TM-11).
+   * The period carries no separate overage column, and `carried_over_minutes`
+   * is exactly the "extra minutes available this period" the burn maths adds
+   * to the contracted figure, so the allowance lands there; the caller writes
+   * the audit that names it an allowance rather than a rollover.
+   */
+  addCarriedOverMinutes(tx: Tx, id: string, minutes: number): Promise<ContractPeriodRow> {
+    return this.one<ContractPeriodRow>(
+      tx,
+      'contract_period',
+      `update acct.contract_periods
+          set carried_over_minutes = carried_over_minutes + $2, version = version + 1
+        where id = $1 returning *`,
+      [id, minutes],
+    );
+  }
+
   insertPeriod(
     tx: Tx,
     input: {

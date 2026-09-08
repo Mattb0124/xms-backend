@@ -8,6 +8,8 @@ import {
   ListTicketsQueryDto,
   MessageDto,
   PatchTicketDto,
+  ScopeDecisionDto,
+  ScopeFlagDto,
   TransitionDto,
   WatchDto,
 } from './tickets.dto.js';
@@ -64,6 +66,33 @@ export class TicketsController {
     @Body() dto: TransitionDto,
   ) {
     return this.tickets.transition(principal, ctx, key, dto);
+  }
+
+  /**
+   * Flagging work as out of scope is part of working the ticket; deciding
+   * the flag is the account's commercial answer and has its own permission
+   * (TM-11, Ticket Management technical 4).
+   */
+  @Post(':key/scope')
+  @RequirePermission('tickets:work')
+  flagScope(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('key') key: string,
+    @Body() dto: ScopeFlagDto,
+  ) {
+    return this.tickets.flagScope(principal, ctx, key, dto);
+  }
+
+  @Post(':key/scope/decision')
+  @RequirePermission('tickets:approve-scope')
+  decideScope(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('key') key: string,
+    @Body() dto: ScopeDecisionDto,
+  ) {
+    return this.tickets.decideScope(principal, ctx, key, dto);
   }
 
   @Get(':key/comments')

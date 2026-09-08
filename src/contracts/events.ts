@@ -96,6 +96,8 @@ export const AUDIT_EVENT_TYPES = [
   'ticket.transition',
   'ticket.assigned',
   'ticket.priority_overridden',
+  'ticket.scope_flagged',
+  'ticket.scope_decided',
   'comment.created',
   'work_note.created',
   'attachment.created',

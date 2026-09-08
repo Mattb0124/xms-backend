@@ -37,7 +37,15 @@ import { CalendarService } from '../calendars/calendars.module.js';
 import { UsersRepository } from '../admin/users/users.repository.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
 import { NotificationsRepository } from '../notifications/notifications.repository.js';
-import type { CreateTicketDto, ListTicketsQueryDto, MessageDto, PatchTicketDto, TransitionDto } from './tickets.dto.js';
+import type {
+  CreateTicketDto,
+  ListTicketsQueryDto,
+  MessageDto,
+  PatchTicketDto,
+  ScopeDecisionDto,
+  ScopeFlagDto,
+  TransitionDto,
+} from './tickets.dto.js';
 import { TicketsRepository, ticketKey, toClock, type ClockRow, type TicketRow } from './tickets.repository.js';
 
 /**
@@ -48,6 +56,42 @@ import { TicketsRepository, ticketKey, toClock, type ClockRow, type TicketRow } 
  * to the audit stream and the outbox in the same transaction, and returns
  * the computed view (the server owns the clocks).
  */
+/**
+ * What the record keeps about an out-of-scope flag (TM-11). The state lives
+ * in `acct.tickets.out_of_scope`; everything the people involved said lives
+ * in `out_of_scope_detail`, so the column stays a small closed vocabulary
+ * the queue and the waiting rail can count.
+ */
+export interface ScopeDetail {
+  reason?: string;
+  flagged_by?: string;
+  flagged_by_name?: string;
+  flagged_at?: string;
+  withdrawn_by?: string;
+  withdrawn_at?: string;
+  decision?: 'approve' | 'decline';
+  note?: string | null;
+  decided_by?: string;
+  decided_by_name?: string;
+  decided_at?: string;
+  overage_allowance_minutes?: number | null;
+  contract_period_id?: string | null;
+}
+
+export interface ScopeView {
+  out_of_scope: string;
+  reason: string | null;
+  flagged_by: string | null;
+  flagged_by_name: string | null;
+  flagged_at: string | null;
+  decision: 'approve' | 'decline' | null;
+  note: string | null;
+  decided_by: string | null;
+  decided_by_name: string | null;
+  decided_at: string | null;
+  overage_allowance_minutes: number | null;
+}
+
 export interface TicketView {
   id: string;
   key: string;
@@ -75,6 +119,8 @@ export interface TicketView {
     solution_candidate: boolean;
     time_exemption_reason: string | null;
   };
+  /** The out-of-scope flag and its decision (TM-11), for the record bar. */
+  scope: ScopeView;
   external_refs: Record<string, unknown>;
   reopen_count: number;
   first_response_at: string | null;
@@ -1142,6 +1188,245 @@ export class TicketsService {
   // Helpers -------------------------------------------------------------------
 
   /** Runs in the caller's transaction when one is bound (the portal write path), else in a fresh unit of work. */
+  // The out-of-scope flag and its approval (TM-11) -----------------------------
+
+  /**
+   * Flags work as outside the contract scope, or withdraws a flag still
+   * waiting for a decision. Anyone who works tickets may raise it; the
+   * account's contract managers are told, because they are the people who
+   * decide what the client is entitled to and they are the same list the
+   * budget thresholds already notify.
+   */
+  async flagScope(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    dto: ScopeFlagDto,
+    bound?: Tx,
+  ): Promise<TicketView> {
+    const correlationId = ctx.requestId ?? randomUUID();
+    return this.inTx(principal, bound, async (tx) => {
+      const before = await this.lock(tx, idOrKey);
+      if (OPEN_STATES_EXCLUDED.includes(before.state)) throw new ConflictException({ code: 'ticket_closed' });
+      const detail = (before.out_of_scope_detail ?? {}) as ScopeDetail;
+      if (dto.out_of_scope) {
+        if (before.out_of_scope === 'flagged') throw new ConflictException({ code: 'already_flagged' });
+        const reason = dto.reason?.trim();
+        if (!reason) throw new BadRequestException({ code: 'reason_required' });
+        const flaggedAt = new Date().toISOString();
+        const after = await this.tickets.update(tx, before.id, dto.version, {
+          out_of_scope: 'flagged',
+          // A new flag starts a new decision: the previous one is history in
+          // the audit stream, not a stale answer on the record.
+          out_of_scope_detail: {
+            reason,
+            flagged_by: principal.userId,
+            flagged_by_name: principal.displayName,
+            flagged_at: flaggedAt,
+          } satisfies ScopeDetail,
+        });
+        await this.audit.account(
+          tx,
+          before.account_id,
+          actorOf(principal),
+          { requestId: ctx.requestId, correlationId },
+          [
+            {
+              entityKind: 'ticket',
+              entityId: before.id,
+              ticketId: before.id,
+              eventType: 'ticket.scope_flagged',
+              field: 'out_of_scope',
+              oldValue: before.out_of_scope,
+              newValue: { state: 'flagged', reason },
+            },
+          ],
+        );
+        await this.outbox.write(tx, {
+          accountId: before.account_id,
+          aggregate: 'ticket',
+          aggregateId: before.id,
+          eventType: 'ticket.scope_flagged',
+          correlationId,
+          origin: ctx.origin,
+          payload: { reason, flagged_by: principal.userId },
+        });
+        await this.notifyScopeApprovers(tx, after, principal, reason);
+        return this.viewOf(tx, after);
+      }
+      if (before.out_of_scope !== 'flagged') throw new ConflictException({ code: 'not_flagged' });
+      const after = await this.tickets.update(tx, before.id, dto.version, {
+        out_of_scope: 'none',
+        out_of_scope_detail: { ...detail, withdrawn_at: new Date().toISOString(), withdrawn_by: principal.userId },
+      });
+      await this.audit.account(tx, before.account_id, actorOf(principal), { requestId: ctx.requestId, correlationId }, [
+        {
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.scope_flagged',
+          field: 'out_of_scope',
+          oldValue: 'flagged',
+          newValue: 'none',
+        },
+      ]);
+      return this.viewOf(tx, after);
+    });
+  }
+
+  /**
+   * Approves or declines a pending flag. Approval may carry an allowance in
+   * minutes, which is added to the contract period the ticket bills against
+   * so the time logged on it is inside budget rather than over it: the
+   * period has no separate overage column, so the allowance lands on
+   * `carried_over_minutes`, which is exactly the "extra minutes available
+   * this period" the burn maths already adds to the contracted figure, and
+   * the audit names the allowance so the increase is never mistaken for a
+   * rollover. Declining ends the flag and words why.
+   */
+  async decideScope(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    dto: ScopeDecisionDto,
+    bound?: Tx,
+  ): Promise<TicketView> {
+    const correlationId = ctx.requestId ?? randomUUID();
+    return this.inTx(principal, bound, async (tx) => {
+      const before = await this.lock(tx, idOrKey);
+      if (before.out_of_scope !== 'flagged') throw new ConflictException({ code: 'not_flagged' });
+      const detail = (before.out_of_scope_detail ?? {}) as ScopeDetail;
+      // The person who raised the flag is not the person who decides it
+      // (Ticket Management technical 3.3): approval is the client's
+      // commercial answer, not the flagger's own.
+      if (detail.flagged_by && detail.flagged_by === principal.userId)
+        throw new ConflictException({ code: 'flagger_cannot_decide' });
+      const approved = dto.decision === 'approve';
+      const allowance = approved ? (dto.overage_allowance_minutes ?? 0) : 0;
+      const decidedAt = new Date().toISOString();
+      const entries: AuditEntry[] = [];
+      let period: { id: string; carried_over_minutes: number } | undefined;
+      if (allowance > 0) {
+        const on = decidedAt.slice(0, 10);
+        const current = await this.time.periodFor(tx, before.contract_id, on);
+        if (!current) throw new ConflictException({ code: 'no_contract_period', on });
+        const updated = await this.time.addCarriedOverMinutes(tx, current.id, allowance);
+        period = { id: updated.id, carried_over_minutes: updated.carried_over_minutes };
+        entries.push({
+          entityKind: 'contract_period',
+          entityId: current.id,
+          ticketId: before.id,
+          eventType: 'ticket.scope_decided',
+          field: 'carried_over_minutes',
+          oldValue: { minutes: current.carried_over_minutes },
+          newValue: {
+            minutes: updated.carried_over_minutes,
+            out_of_scope_allowance_minutes: allowance,
+            ticket_id: before.id,
+          },
+        });
+      }
+      const after = await this.tickets.update(tx, before.id, dto.version, {
+        out_of_scope: approved ? 'approved' : 'declined',
+        out_of_scope_detail: {
+          ...detail,
+          decision: dto.decision,
+          note: dto.note?.trim() || null,
+          decided_by: principal.userId,
+          decided_by_name: principal.displayName,
+          decided_at: decidedAt,
+          overage_allowance_minutes: allowance > 0 ? allowance : null,
+          contract_period_id: period?.id ?? null,
+        } satisfies ScopeDetail,
+      });
+      entries.unshift({
+        entityKind: 'ticket',
+        entityId: before.id,
+        ticketId: before.id,
+        eventType: 'ticket.scope_decided',
+        field: 'out_of_scope',
+        oldValue: 'flagged',
+        newValue: { state: after.out_of_scope, note: dto.note?.trim() || null, allowance_minutes: allowance },
+      });
+      await this.audit.account(
+        tx,
+        before.account_id,
+        actorOf(principal),
+        { requestId: ctx.requestId, correlationId },
+        entries,
+      );
+      await this.outbox.write(tx, {
+        accountId: before.account_id,
+        aggregate: 'ticket',
+        aggregateId: before.id,
+        eventType: 'ticket.scope_decided',
+        correlationId,
+        origin: ctx.origin,
+        payload: {
+          decision: dto.decision,
+          decided_by: principal.userId,
+          allowance_minutes: allowance,
+          contract_period_id: period?.id ?? null,
+        },
+      });
+      await this.notifyScopeDecision(tx, after, principal, detail, dto.decision, allowance);
+      return this.viewOf(tx, after);
+    });
+  }
+
+  /** The flag needs a decision from the people who own the account's contracts. */
+  private async notifyScopeApprovers(tx: Tx, ticket: TicketRow, actor: Principal, reason: string): Promise<void> {
+    const key = ticketKey(ticket.number);
+    for (const recipientId of await this.time.budgetRecipients(tx, ticket.account_id)) {
+      if (recipientId === actor.userId) continue;
+      await this.notifications.upsert(tx, {
+        accountId: ticket.account_id,
+        recipientId,
+        type: 'ticket.scope_flagged',
+        title: `${key} is flagged out of scope and needs a decision`,
+        body: reason,
+        targetKind: 'ticket',
+        targetId: ticket.id,
+        link: `/tickets/${key}`,
+        collapseKey: `scope:${ticket.id}`,
+      });
+    }
+  }
+
+  /** The decision goes back to whoever raised the flag. */
+  private async notifyScopeDecision(
+    tx: Tx,
+    ticket: TicketRow,
+    actor: Principal,
+    detail: ScopeDetail,
+    decision: 'approve' | 'decline',
+    allowance: number,
+  ): Promise<void> {
+    if (!detail.flagged_by || detail.flagged_by === actor.userId) return;
+    const key = ticketKey(ticket.number);
+    await this.notifications.upsert(tx, {
+      accountId: ticket.account_id,
+      recipientId: detail.flagged_by,
+      type: 'ticket.scope_decided',
+      title:
+        decision === 'approve'
+          ? `${key} was approved out of scope${allowance > 0 ? ` with ${allowance} minutes of budget` : ''}`
+          : `${key} was declined as out of scope`,
+      body: ticket.short_description,
+      targetKind: 'ticket',
+      targetId: ticket.id,
+      link: `/tickets/${key}`,
+      collapseKey: `scope-decision:${ticket.id}`,
+    });
+  }
+
+  /** The computed view of a row the caller has just written, clocks and all. */
+  private async viewOf(tx: Tx, row: TicketRow): Promise<TicketView> {
+    const machine = await this.machineFor(tx, row, new Map());
+    const clocks = await this.tickets.clocksOf(tx, row.id);
+    return this.toView(row, clocks, machine, null, new Date(), await this.calendars.forClocks(tx, clocks));
+  }
+
   private inTx<T>(principal: Principal, bound: Tx | undefined, fn: (tx: Tx) => Promise<T>): Promise<T> {
     return bound ? fn(bound) : this.uow.run(principal, (tx) => fn(tx));
   }
@@ -1335,6 +1620,7 @@ export class TicketsService {
         solution_candidate: row.solution_candidate,
         time_exemption_reason: row.time_exemption_reason,
       },
+      scope: scopeView(row),
       external_refs: row.external_refs,
       reopen_count: row.reopen_count,
       first_response_at: row.first_response_at,
@@ -1369,6 +1655,24 @@ export class TicketsService {
       version: row.version,
     };
   }
+}
+
+/** The flag and the decision as the record shows them; absent fields read as null, never undefined. */
+function scopeView(row: TicketRow): ScopeView {
+  const detail = (row.out_of_scope_detail ?? {}) as ScopeDetail;
+  return {
+    out_of_scope: row.out_of_scope,
+    reason: detail.reason ?? null,
+    flagged_by: detail.flagged_by ?? null,
+    flagged_by_name: detail.flagged_by_name ?? null,
+    flagged_at: detail.flagged_at ?? null,
+    decision: detail.decision ?? null,
+    note: detail.note ?? null,
+    decided_by: detail.decided_by ?? null,
+    decided_by_name: detail.decided_by_name ?? null,
+    decided_at: detail.decided_at ?? null,
+    overage_allowance_minutes: detail.overage_allowance_minutes ?? null,
+  };
 }
 
 function name(user: { first_name: string; last_name: string; email: string }): string {
