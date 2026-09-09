@@ -267,6 +267,13 @@ export class TicketsService {
         tx,
         page.rows.map((row) => row.configuration_item_id),
       );
+      // A list names who raised each case, so it resolves every requester on
+      // the page in one query. It used to pass null and draw "No contact" on
+      // rows that had one.
+      const requesters = await this.tickets.contactsByIds(
+        tx,
+        page.rows.map((row) => row.requester_contact_id),
+      );
       const machines = new Map<string, StateMachine>();
       const items: TicketView[] = [];
       for (const row of page.rows) {
@@ -276,7 +283,7 @@ export class TicketsService {
             row,
             clocks.filter((clock) => clock.ticket_id === row.id),
             machine,
-            null,
+            row.requester_contact_id ? (requesters.get(row.requester_contact_id) ?? null) : null,
             now,
             calendars,
             configurationItems,

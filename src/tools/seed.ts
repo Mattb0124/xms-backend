@@ -294,7 +294,15 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
           newValue: { key: seed.key, seed: true },
         },
       ]);
-      await tx.query(`update op.accounts set status = 'active' where id = $1`, [account.id]);
+      // Every account has a CSM: the Account Owner on the roster owns the
+      // relationship, and a list names them beside the account.
+      await tx.query(
+        `update op.accounts
+            set status = 'active',
+                owner_user_id = (select id::text from op.users where email = 'erin.walsh@example.test')
+          where id = $1`,
+        [account.id],
+      );
       const contract = await tx.query<{ id: string }>(
         `insert into acct.contracts (account_id, key, name, model, period_hours, status)
          values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, $4, 'active') returning id`,

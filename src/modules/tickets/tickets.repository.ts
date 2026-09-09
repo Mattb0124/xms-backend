@@ -175,6 +175,14 @@ export class TicketsRepository extends RepositoryBase {
     return new Map(rows.map((row) => [row.id, row.name]));
   }
 
+  /** Every requester named on a page, in one query rather than one per row. */
+  async contactsByIds(tx: Tx, ids: readonly (string | null)[]): Promise<Map<string, ContactRow>> {
+    const wanted = [...new Set(ids.filter((id): id is string => id !== null))];
+    if (wanted.length === 0) return new Map();
+    const rows = await this.many<ContactRow>(tx, 'select * from acct.contacts where id = any ($1::uuid[])', [wanted]);
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
   insert(
     tx: Tx,
     row: Partial<TicketRow> & {
