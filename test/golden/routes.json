@@ -1780,6 +1780,26 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/contacts/:id",
+    "controller": "ContactsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/contacts/:id",
+    "controller": "ContactsController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/csat/:id/answer",
     "controller": "CsatLinkController",
