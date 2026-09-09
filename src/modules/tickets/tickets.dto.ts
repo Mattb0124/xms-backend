@@ -325,6 +325,11 @@ export class ListTicketsQueryDto {
   @IsIn(OUT_OF_SCOPE, { each: true })
   out_of_scope?: string[];
 
+  /** One contact's own cases, for the record that names them. */
+  @IsOptional()
+  @IsUUID()
+  requester_contact_id?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(200)

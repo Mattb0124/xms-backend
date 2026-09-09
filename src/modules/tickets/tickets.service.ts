@@ -253,6 +253,7 @@ export class TicketsService {
           open: query.open,
           breached: query.breached,
           outOfScope: query.out_of_scope,
+          requesterContactId: query.requester_contact_id,
           q: query.q,
         },
         { limit, sort: sort ?? 'updated_desc', cursor: decodeCursor(query.cursor) },
