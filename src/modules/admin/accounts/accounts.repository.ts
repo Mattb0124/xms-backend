@@ -64,6 +64,16 @@ export const SETTINGS_EDITABLE = [
   'store_search_terms',
 ] as const;
 
+/** An account as a picker sees it, with the person who owns the relationship. */
+export interface AccountSummaryRow {
+  id: string;
+  key: string;
+  name: string;
+  status: string;
+  owner_id: string | null;
+  owner_name: string | null;
+}
+
 /**
  * op.accounts (operator scope, no RLS) and acct.account_settings (RLS).
  * Callers pass a transaction from the unit of work; settings reads and
@@ -87,12 +97,23 @@ export class AccountsRepository extends RepositoryBase {
     return this.many<AccountRow>(tx, `select * from op.accounts ${clause} order by key limit $1`, values);
   }
 
-  /** Summary rows for the granted accounts (the non-admin picker). */
-  summariesByIds(tx: Tx, ids: readonly string[]): Promise<Pick<AccountRow, 'id' | 'key' | 'name' | 'status'>[]> {
+  /**
+   * Summary rows for the granted accounts (the non-admin picker). The owner
+   * is the account's CSM: a list names them beside the account, so the row
+   * carries the id to link to and the name to draw, and neither is fetched
+   * again per row.
+   */
+  summariesByIds(tx: Tx, ids: readonly string[]): Promise<AccountSummaryRow[]> {
     if (ids.length === 0) return Promise.resolve([]);
     return this.many(
       tx,
-      `select id, key, name, status from op.accounts where id = any ($1::uuid[]) and status <> 'system' order by name`,
+      `select a.id, a.key, a.name, a.status,
+              a.owner_user_id as owner_id,
+              nullif(trim(concat_ws(' ', o.first_name, o.last_name)), '') as owner_name
+         from op.accounts a
+         left join op.users o on o.id::text = a.owner_user_id
+        where a.id = any ($1::uuid[]) and a.status <> 'system'
+        order by a.name`,
       [ids],
     );
   }

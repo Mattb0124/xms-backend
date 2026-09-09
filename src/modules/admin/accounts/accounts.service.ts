@@ -10,6 +10,7 @@ import {
   SETTINGS_EDITABLE,
   type AccountRow,
   type AccountSettingsRow,
+  type AccountSummaryRow,
 } from './accounts.repository.js';
 import type { CreateAccountDto, UpdateAccountDto, UpdateAccountSettingsDto } from './accounts.dto.js';
 
@@ -42,7 +43,7 @@ export class AccountsService {
   }
 
   /** Granted accounts for pickers; administrators see every account. */
-  granted(principal: Principal): Promise<Pick<AccountRow, 'id' | 'key' | 'name' | 'status'>[]> {
+  granted(principal: Principal): Promise<AccountSummaryRow[]> {
     return this.uow.operator((tx) => this.accounts.summariesByIds(tx, principal.accountIds));
   }
 
