@@ -2431,6 +2431,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/portal/tickets/:key/scope",
+    "controller": "PortalController",
+    "handler": "scopeRecord",
+    "realm": "portal",
+    "permission": "portal:submit",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/portal/tickets/:key/timeline",
     "controller": "PortalController",
     "handler": "timeline",
@@ -3011,6 +3021,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/tickets/:key/scope/record",
+    "controller": "TicketsController",
+    "handler": "scopeRecord",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/tickets/:key/solutions",
     "controller": "KnowledgeController",
     "handler": "rail",
@@ -3116,6 +3136,16 @@
     "handler": "apply",
     "realm": "internal",
     "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/scope-decisions.csv",
+    "controller": "TicketsController",
+    "handler": "exportScopeDecisions",
+    "realm": "internal",
+    "permission": "contracts:view",
     "public": null,
     "axel": false
   },

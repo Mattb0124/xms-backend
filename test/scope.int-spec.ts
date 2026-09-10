@@ -465,3 +465,64 @@ describe('filtering the queue on the flag', () => {
     await api().get('/v1/tickets?out_of_scope=flagged,maybe').set(bearer(adminToken)).expect(400);
   });
 });
+
+describe('the scope record (TM-11)', () => {
+  it('keeps one row per thing that happened, and refuses to let any of them be changed', async () => {
+    const ticket = await newTicket('Rework the mapping tables');
+    const flagged = await flag(ticket.key, ticket.version, 'Not in the statement of work');
+    await api()
+      .post(`/v1/tickets/${ticket.key}/scope/decision`)
+      .set(bearer(adminToken))
+      .send({ version: flagged.body.version, decision: 'approve', note: 'Client agreed on the call' })
+      .expect(201);
+
+    const record = await api().get(`/v1/tickets/${ticket.key}/scope/record`).set(bearer(adminToken)).expect(200);
+    expect(record.body.map((row: { event: string }) => row.event)).toEqual(['flagged', 'approved']);
+    // The flag is internal; the decision is what the client is shown.
+    expect(record.body.map((row: { client_visible: boolean }) => row.client_visible)).toEqual([false, true]);
+    expect(record.body[1]).toMatchObject({
+      reason: 'Not in the statement of work',
+      note: 'Client agreed on the call',
+    });
+
+    // Append-only in the database, which is what makes it worth showing.
+    const row = record.body[0];
+    await expect(
+      withSuperuser((client) =>
+        client.query('update acct.scope_decisions set reason = $2 where id = $1', [row.id, 'rewritten']),
+      ),
+    ).rejects.toThrow();
+    await expect(
+      withSuperuser((client) => client.query('delete from acct.scope_decisions where id = $1', [row.id])),
+    ).rejects.toThrow();
+  });
+
+  it('records a withdrawal, which the ticket column cannot express', async () => {
+    const ticket = await newTicket('Second look at the load');
+    const flagged = await flag(ticket.key, ticket.version, 'Looks like new work');
+    await api()
+      .post(`/v1/tickets/${ticket.key}/scope`)
+      .set(bearer(consultantToken))
+      .send({ version: flagged.body.version, out_of_scope: false })
+      .expect(201);
+
+    const record = await api().get(`/v1/tickets/${ticket.key}/scope/record`).set(bearer(adminToken)).expect(200);
+    expect(record.body.map((row: { event: string }) => row.event)).toEqual(['flagged', 'withdrawn']);
+    // The ticket is back to 'none', so without the record the flag would look
+    // like something that never happened.
+    const after = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.scope.out_of_scope).toBe('none');
+  });
+
+  it('exports every event in the window, withdrawals and declines included', async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const csv = await api()
+      .get(`/v1/tickets/scope-decisions.csv?account_id=${accountId}&from=${today}&to=${today}`)
+      .set(bearer(adminToken))
+      .expect(200);
+    const lines = csv.text.trim().split('\n');
+    expect(lines[0]).toContain('ticket,event,reason,note,allowance_minutes');
+    expect(lines.length).toBeGreaterThan(1);
+    expect(csv.headers['content-disposition']).toContain('scope-decisions-');
+  });
+});

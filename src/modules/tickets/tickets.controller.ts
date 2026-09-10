@@ -1,5 +1,19 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Res,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import {
@@ -32,6 +46,23 @@ export class TicketsController {
   @RequirePermission('tickets:create')
   create(@CurrentPrincipal() principal: Principal, @RequestCtx() ctx: RequestContext, @Body() dto: CreateTicketDto) {
     return this.tickets.create(principal, ctx, dto);
+  }
+
+  /** Every scope decision on an account in a window, as CSV. */
+  @Get('scope-decisions.csv')
+  @RequirePermission('contracts:view')
+  async exportScopeDecisions(
+    @Res() response: Response,
+    @CurrentPrincipal() principal: Principal,
+    @Query('account_id') accountId: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    const result = await this.tickets.exportScopeDecisions(principal, accountId, from, to);
+    response.setHeader('content-type', 'text/csv; charset=utf-8');
+    response.setHeader('content-disposition', `attachment; filename="${result.fileName}"`);
+    response.setHeader('x-row-count', String(result.rows));
+    response.send(result.body);
   }
 
   @Get(':key')
@@ -93,6 +124,13 @@ export class TicketsController {
     @Body() dto: ScopeDecisionDto,
   ) {
     return this.tickets.decideScope(principal, ctx, key, dto);
+  }
+
+  /** The immutable record behind the flag: who raised it, who decided it, when. */
+  @Get(':key/scope/record')
+  @RequirePermission('tickets:view')
+  scopeRecord(@CurrentPrincipal() principal: Principal, @Param('key') key: string) {
+    return this.tickets.scopeRecord(principal, key);
   }
 
   @Get(':key/comments')

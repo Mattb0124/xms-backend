@@ -144,6 +144,39 @@ export function toClock(row: ClockRow): Clock {
  * bound transaction; the referenced ids a client supplies are loaded under
  * the same session so a foreign id raises 404, never 403.
  */
+/**
+ * One thing that happened to a scope flag (TM-11), written once and never
+ * changed. The ticket columns say where the flag stands now; these rows say
+ * how it got there, and they are what the client and the export read.
+ */
+export interface ScopeDecisionRow {
+  id: string;
+  account_id: string;
+  ticket_id: string;
+  event: 'flagged' | 'withdrawn' | 'approved' | 'declined';
+  reason: string;
+  note: string | null;
+  allowance_minutes: number;
+  contract_period_id: string | null;
+  actor_id: string;
+  actor_name: string;
+  client_visible: boolean;
+  at: string;
+}
+
+export interface ScopeDecisionInput {
+  accountId: string;
+  ticketId: string;
+  event: ScopeDecisionRow['event'];
+  reason: string;
+  note?: string | null;
+  allowanceMinutes?: number;
+  contractPeriodId?: string | null;
+  actorId: string;
+  actorName: string;
+  clientVisible: boolean;
+}
+
 @Injectable()
 export class TicketsRepository extends RepositoryBase {
   byId(tx: Tx, id: string): Promise<TicketRow> {
@@ -563,6 +596,59 @@ export class TicketsRepository extends RepositoryBase {
       [accountIds],
     );
     return row ?? { open: 0, unassigned: 0, breached: 0, p1: 0 };
+  }
+  /** Writes one row of the scope record. Nothing ever updates one. */
+  recordScopeDecision(tx: Tx, input: ScopeDecisionInput): Promise<ScopeDecisionRow> {
+    return this.one<ScopeDecisionRow>(
+      tx,
+      'scope decision',
+      `insert into acct.scope_decisions
+            (account_id, ticket_id, event, reason, note, allowance_minutes, contract_period_id,
+             actor_id, actor_name, client_visible)
+          values ($1, $2, $3, $4, $5, coalesce($6, 0), $7, $8, $9, $10)
+        returning *`,
+      [
+        input.accountId,
+        input.ticketId,
+        input.event,
+        input.reason,
+        input.note ?? null,
+        input.allowanceMinutes ?? 0,
+        input.contractPeriodId ?? null,
+        input.actorId,
+        input.actorName,
+        input.clientVisible,
+      ],
+    );
+  }
+
+  /** The record of one ticket, oldest first, so it reads as the story it is. */
+  scopeDecisionsOf(tx: Tx, ticketId: string, clientVisibleOnly = false): Promise<ScopeDecisionRow[]> {
+    return this.many<ScopeDecisionRow>(
+      tx,
+      `select * from acct.scope_decisions
+         where ticket_id = $1 and ($2::boolean is false or client_visible)
+         order by at`,
+      [ticketId, clientVisibleOnly],
+    );
+  }
+
+  /** Every decision on an account in a window, for the export. */
+  scopeDecisionsOfAccount(
+    tx: Tx,
+    accountId: string,
+    from: string,
+    to: string,
+  ): Promise<(ScopeDecisionRow & { ticket_number: string | null })[]> {
+    return this.many(
+      tx,
+      `select d.*, t.number::text as ticket_number
+         from acct.scope_decisions d
+         join acct.tickets t on t.id = d.ticket_id
+        where d.account_id = $1 and d.at >= $2::date and d.at < ($3::date + 1)
+        order by d.at`,
+      [accountId, from, to],
+    );
   }
 }
 

@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { toCsvRows } from '../../domain/reporting/csv.js';
 import { randomUUID } from 'node:crypto';
 import type { RequestContext } from '../../common/auth/decorators.js';
 import { actorKindOf, type Principal } from '../../common/auth/principal.js';
@@ -79,6 +80,41 @@ export interface ScopeDetail {
   decided_at?: string;
   overage_allowance_minutes?: number | null;
   contract_period_id?: string | null;
+}
+
+/** The export's columns, in the order a reconciler reads them. */
+export const SCOPE_EXPORT_COLUMNS = [
+  'ticket',
+  'event',
+  'reason',
+  'note',
+  'allowance_minutes',
+  'actor',
+  'at',
+  'client_visible',
+] as const;
+
+export function scopeExportRow(row: {
+  ticket_number: string | null;
+  event: string;
+  reason: string;
+  note: string | null;
+  allowance_minutes: number;
+  actor_name: string;
+  actor_id: string;
+  at: string;
+  client_visible: boolean;
+}): (string | number)[] {
+  return [
+    row.ticket_number ? `CS${row.ticket_number.padStart(7, '0')}` : '',
+    row.event,
+    row.reason,
+    row.note ?? '',
+    row.allowance_minutes,
+    row.actor_name || row.actor_id,
+    row.at,
+    row.client_visible ? 'yes' : 'no',
+  ];
 }
 
 export interface ScopeView {
@@ -1409,6 +1445,18 @@ export class TicketsService {
             },
           ],
         );
+        // The record the client and the export read (TM-11). A flag is
+        // written invisible: it is an internal opinion until somebody with
+        // the authority answers it.
+        await this.tickets.recordScopeDecision(tx, {
+          accountId: before.account_id,
+          ticketId: before.id,
+          event: 'flagged',
+          reason,
+          actorId: principal.userId,
+          actorName: principal.displayName ?? '',
+          clientVisible: false,
+        });
         await this.outbox.write(tx, {
           accountId: before.account_id,
           aggregate: 'ticket',
@@ -1441,6 +1489,17 @@ export class TicketsService {
           newValue: 'none',
         },
       ]);
+      // Withdrawing is the one thing the ticket column cannot express, since
+      // it returns to 'none' and looks like a flag that never happened.
+      await this.tickets.recordScopeDecision(tx, {
+        accountId: before.account_id,
+        ticketId: before.id,
+        event: 'withdrawn',
+        reason: detail.reason ?? '',
+        actorId: principal.userId,
+        actorName: principal.displayName ?? '',
+        clientVisible: false,
+      });
       await this.outbox.write(tx, {
         accountId: before.account_id,
         aggregate: 'ticket',
@@ -1464,6 +1523,39 @@ export class TicketsService {
    * the audit names the allowance so the increase is never mistaken for a
    * rollover. Declining ends the flag and words why.
    */
+  /**
+   * The record of one ticket's scope flags and decisions (TM-11), oldest
+   * first, so it reads as the story it is rather than as a state.
+   *
+   * Nothing in it can be edited: the rows are append-only in the database,
+   * which is what makes it worth showing a client.
+   */
+  scopeRecord(principal: Principal, idOrKey: string, clientVisibleOnly = false) {
+    return this.uow.run(principal, async (tx) => {
+      // Read, so it loads rather than locking the row.
+      const ticket = await this.load(tx, idOrKey);
+      return this.tickets.scopeDecisionsOf(tx, ticket.id, clientVisibleOnly);
+    });
+  }
+
+  /**
+   * Every scope decision on an account in a window, as CSV (TM-11).
+   *
+   * One row per thing that happened, not per ticket: the point of an
+   * exportable record is that somebody can reconcile what was agreed against
+   * what was billed, and that needs the withdrawals and the declines too.
+   */
+  async exportScopeDecisions(
+    principal: Principal,
+    accountId: string,
+    from: string,
+    to: string,
+  ): Promise<{ fileName: string; body: string; rows: number }> {
+    const rows = await this.uow.run(principal, (tx) => this.tickets.scopeDecisionsOfAccount(tx, accountId, from, to));
+    const body = toCsvRows(SCOPE_EXPORT_COLUMNS, rows.map(scopeExportRow));
+    return { fileName: `scope-decisions-${from}-to-${to}.csv`, body, rows: rows.length };
+  }
+
   async decideScope(
     principal: Principal,
     ctx: RequestContext,
@@ -1528,6 +1620,20 @@ export class TicketsService {
           overage_allowance_minutes: allowance > 0 ? allowance : null,
           contract_period_id: period?.id ?? null,
         } satisfies ScopeDetail,
+      });
+      // The decision, and this one the client sees: what was agreed is
+      // theirs to read, the argument that got there is not.
+      await this.tickets.recordScopeDecision(tx, {
+        accountId: before.account_id,
+        ticketId: before.id,
+        event: approved ? 'approved' : 'declined',
+        reason: detail.reason ?? '',
+        note: dto.note?.trim() || null,
+        allowanceMinutes: allowance,
+        contractPeriodId: period?.id ?? null,
+        actorId: principal.userId,
+        actorName: principal.displayName ?? '',
+        clientVisible: true,
       });
       entries.unshift({
         entityKind: 'ticket',

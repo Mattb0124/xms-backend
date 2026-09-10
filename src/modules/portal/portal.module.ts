@@ -236,6 +236,23 @@ export class PortalService {
   }
 
   /**
+   * What was decided about this request's scope, in the client's own view
+   * (TM-11).
+   *
+   * Only the decided rows: a flag is an internal opinion until somebody with
+   * the authority answers it, and showing a client an argument in progress
+   * would be worse than showing them nothing. The rows are append-only, which
+   * is what makes them worth showing at all.
+   */
+  async scopeRecord(principal: Principal, key: string) {
+    return this.uow.run(principal, async (tx) => {
+      const view = await this.tickets.get(principal, key, tx);
+      await this.assertVisible(tx, principal, view.id);
+      return this.ticketsRepo.scopeDecisionsOf(tx, view.id, true);
+    });
+  }
+
+  /**
    * The request types the account offers, each with the form the client is
    * asked to fill in (CP-03). A type the account has not authored a form for
    * still answers, with the fixed default definition, so the web form keeps
@@ -489,6 +506,13 @@ export class PortalController {
   @RequirePermission('portal:submit')
   get(@CurrentPrincipal() principal: Principal, @Param('key') key: string) {
     return this.portal.get(principal, key);
+  }
+
+  /** What was decided about this request's scope, and nothing that was not. */
+  @Get('tickets/:key/scope')
+  @RequirePermission('portal:submit')
+  scopeRecord(@CurrentPrincipal() principal: Principal, @Param('key') key: string) {
+    return this.portal.scopeRecord(principal, key);
   }
 
   @Get('tickets/:key/timeline')
