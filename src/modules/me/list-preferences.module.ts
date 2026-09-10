@@ -14,7 +14,7 @@ import { UnitOfWork } from '../../db/unit-of-work.js';
  * product: the screen owns the columns that exist and their defaults, and
  * this only says which of them one person wants and in what order. A row that
  * names a column the product no longer has costs nothing, because the screen
- * ignores what it does not recognise.
+ * ignores what it does not recognize.
  *
  * Operator scope, keyed on the person, so an arrangement holds across
  * accounts and machines.
