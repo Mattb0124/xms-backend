@@ -283,3 +283,37 @@ describe('account profitability (TB-16)', () => {
       .expect(400);
   });
 });
+
+describe('system roles reconcile on boot (TB-16)', () => {
+  it('gives an existing Administrator a permission the catalog gained, without touching one it did not', async () => {
+    const roles = await api().get('/v1/admin/roles?catalog=operator').set(bearer(adminToken)).expect(200);
+    const admin = roles.body.find((role: { name: string }) => role.name === 'Administrator');
+    const finance = roles.body.find((role: { name: string }) => role.name === 'Finance');
+    expect(admin.permissions).toContain('finance:manage-cost');
+    expect(finance.permissions).toContain('finance:manage-cost');
+
+    // A role the bundle does not name keeps its own list.
+    const consultant = roles.body.find((role: { name: string }) => role.name === 'Consultant');
+    expect(consultant.permissions).not.toContain('finance:view-margin');
+    expect(consultant.permissions).not.toContain('finance:manage-cost');
+  });
+
+  it('never takes a permission away that an operator added to a system role', async () => {
+    const roles = await api().get('/v1/admin/roles?catalog=operator').set(bearer(adminToken)).expect(200);
+    const dispatcher = roles.body.find((role: { name: string }) => role.name === 'Dispatcher');
+    await api()
+      .patch(`/v1/admin/roles/${dispatcher.id}`)
+      .set(bearer(adminToken))
+      .send({ version: dispatcher.version, permissions: [...dispatcher.permissions, 'kb:author'] })
+      .expect(200);
+
+    // Booting again reconciles; the operator's own addition survives it.
+    const { BootstrapService } = await import('../src/modules/admin/bootstrap.service.js');
+    const { UnitOfWork } = await import('../src/db/unit-of-work.js');
+    await app.get(UnitOfWork).operator((tx) => app.get(BootstrapService).ensureSystemRoles(tx));
+
+    const after = await api().get('/v1/admin/roles?catalog=operator').set(bearer(adminToken)).expect(200);
+    const again = after.body.find((role: { name: string }) => role.name === 'Dispatcher');
+    expect(again.permissions).toContain('kb:author');
+  });
+});

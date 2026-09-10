@@ -30,24 +30,49 @@ export class BootstrapService {
     private readonly config: ConfigService,
   ) {}
 
-  /** Seeds the system roles when missing; safe to call on every boot. */
+  /**
+   * Seeds the system roles when missing and reconciles the ones already
+   * there; safe to call on every boot.
+   *
+   * Creating only was not enough. A permission added to a bundle in code
+   * never reached a database that had already been bootstrapped, so a new
+   * capability shipped with nobody able to reach it: the key existed, every
+   * route declared it, and no role carried it.
+   *
+   * Reconciliation is additive on purpose. An administrator may edit a
+   * system role's permissions (only its name and its retirement are fixed),
+   * so a narrowed role is a deliberate act and setting the list back to the
+   * catalog's would silently undo it on the next boot. Adding what the
+   * catalog says the role should have, and never taking anything away, gets
+   * a new capability to the roles meant to hold it while leaving an
+   * operator's own decisions standing. A permission dropped from a bundle in
+   * code therefore has to be revoked by hand, which is the trade this makes.
+   */
   async ensureSystemRoles(tx: Tx): Promise<string[]> {
-    const created: string[] = [];
+    const changed: string[] = [];
     for (const catalog of ['operator', 'portal'] as const) {
       for (const [name, permissions] of Object.entries(SYSTEM_ROLES[catalog])) {
         const existing = await this.users.roleByName(tx, catalog, name);
-        if (existing) continue;
-        await this.users.insertRole(tx, {
-          catalog,
-          name,
-          permissions: [...permissions],
-          is_system: true,
-          description: `System role: ${name}`,
+        if (!existing) {
+          await this.users.insertRole(tx, {
+            catalog,
+            name,
+            permissions: [...permissions],
+            is_system: true,
+            description: `System role: ${name}`,
+          });
+          changed.push(`${catalog}:${name}`);
+          continue;
+        }
+        const missing = permissions.filter((key) => !existing.permissions.includes(key));
+        if (missing.length === 0) continue;
+        await this.users.updateRole(tx, existing.id, existing.version, {
+          permissions: [...existing.permissions, ...missing],
         });
-        created.push(`${catalog}:${name}`);
+        changed.push(`${catalog}:${name} +${missing.join(',')}`);
       }
     }
-    return created;
+    return changed;
   }
 
   async bootstrap(bearer: string | undefined, ctx: RequestContext): Promise<{ userId: string; email: string }> {
