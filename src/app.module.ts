@@ -23,6 +23,7 @@ import { AiModule } from './modules/ai/ai.module.js';
 import { ContractsModule } from './modules/contracts/contracts.module.js';
 import { EngagementsModule } from './modules/contracts/engagements.module.js';
 import { ListPreferencesModule } from './modules/me/list-preferences.module.js';
+import { ProfitabilityModule } from './modules/time/profitability.module.js';
 import { WaitingModule } from './modules/me/waiting.module.js';
 import { AttachmentsModule } from './modules/attachments/attachments.module.js';
 import { EmailModule } from './modules/email/email.module.js';
@@ -56,6 +57,7 @@ import { ChangeWindowsModule } from './modules/tickets/change-windows.module.js'
     ContractsModule,
     EngagementsModule,
     ListPreferencesModule,
+    ProfitabilityModule,
     WaitingModule,
     TicketsModule,
     RoutingModule,

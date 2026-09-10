@@ -20,6 +20,8 @@ export const OPERATOR_PERMISSIONS = {
   'time:lock-period': 'Lock billing periods',
   'contracts:view': 'Read contracts, rate cards, budget, account time and billing periods',
   'contracts:manage': 'Manage contracts, periods and rate cards',
+  'finance:view-margin': 'Read cost rates, margin and account profitability',
+  'finance:manage-cost': 'Set the cost rate of a person on the roster',
   'capacity:view': 'View the roster, skills and capacity',
   'capacity:manage': 'Manage roster, skills and allocations',
   'reports:view-portfolio': 'View portfolio dashboards',
@@ -69,6 +71,10 @@ export const PERMISSION_IMPLICATIONS: Partial<Record<Permission, readonly Permis
   'capacity:manage': ['capacity:view'],
   'contracts:view': ['tickets:view'],
   'contracts:manage': ['contracts:view'],
+  // Margin is revenue against cost, and revenue comes off the rate cards, so
+  // reading a margin means reading the commercial terms it stands on.
+  'finance:view-margin': ['contracts:view'],
+  'finance:manage-cost': ['finance:view-margin'],
   'reports:manage': ['reports:view-portfolio'],
   'kb:publish': ['kb:author'],
   'ai:configure': ['ai:use'],
@@ -146,6 +152,7 @@ export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>
       'admin:config',
       'admin:connectors',
       'admin:migration',
+      'finance:manage-cost',
     ],
     Consultant: ['tickets:resolve', 'time:log', 'kb:author', 'ai:use'],
     Dispatcher: ['tickets:work', 'tickets:override-priority', 'reports:view-portfolio', 'capacity:view', 'ai:use'],
@@ -165,7 +172,7 @@ export const SYSTEM_ROLES: Record<Catalog, Record<string, readonly Permission[]>
       'ai:use',
       'analytics:read',
     ],
-    Finance: ['time:lock-period', 'contracts:manage', 'reports:view-portfolio', 'capacity:view'],
+    Finance: ['time:lock-period', 'contracts:manage', 'reports:view-portfolio', 'capacity:view', 'finance:manage-cost'],
   },
   portal: {
     Requester: ['portal:submit', 'portal:kb'],

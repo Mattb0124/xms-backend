@@ -219,7 +219,9 @@ describe('accounts', () => {
       .expect(200);
     const second = await api().get('/v1/admin/me').set(asAdmin(consultantToken)).expect(200);
     expect(second.body.principal.accountIds).toEqual([accountId]);
-    expect(second.body.accounts).toEqual([{ id: accountId, key: 'BRK', name: 'Brookfield', status: 'active' }]);
+    expect(second.body.accounts).toEqual([
+      { id: accountId, key: 'BRK', name: 'Brookfield', status: 'active', owner_id: null, owner_name: null },
+    ]);
   });
 
   it('gives a consultant 403 on the admin routes with a security event', async () => {

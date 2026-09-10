@@ -371,6 +371,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/accounts/:accountId/profitability",
+    "controller": "ProfitabilityController",
+    "handler": "ofAccount",
+    "realm": "internal",
+    "permission": "finance:view-margin",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/accounts/:accountId/rate-cards",
     "controller": "TimeController",
     "handler": "rateCards",
@@ -2216,6 +2226,36 @@
     "handler": "unreadCount",
     "realm": "any",
     "permission": "authenticated",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/people/:personId/cost-rates",
+    "controller": "ProfitabilityController",
+    "handler": "costRates",
+    "realm": "internal",
+    "permission": "finance:view-margin",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/people/:personId/cost-rates",
+    "controller": "ProfitabilityController",
+    "handler": "setCostRate",
+    "realm": "internal",
+    "permission": "finance:manage-cost",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/people/:personId/cost-rates/:id",
+    "controller": "ProfitabilityController",
+    "handler": "removeCostRate",
+    "realm": "internal",
+    "permission": "finance:manage-cost",
     "public": null,
     "axel": false
   },
