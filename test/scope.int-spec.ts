@@ -740,6 +740,14 @@ describe('participant invitations', () => {
       group_name: 'Consolidation Technical',
     });
 
+    // The reader is told whether the answer is theirs to give, because
+    // whether somebody is in the group that was asked is knowable on the
+    // server and not in a browser.
+    const asked = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(consultantToken)).expect(200);
+    expect(asked.body.items[0].can_answer, 'a member of the group asked may answer').toBe(true);
+    const bystander = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(bystander.body.items[0].can_answer, 'nobody else may').toBe(false);
+
     const twice = await api()
       .post(`/v1/tickets/${ticket.key}/participants/invitations`)
       .set(bearer(adminToken))

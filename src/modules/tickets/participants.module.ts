@@ -57,6 +57,15 @@ export interface ParticipantRow {
   version: number;
 }
 
+/**
+ * A participant as a reader sees it. `can_answer` is the server's answer to
+ * "is this invitation mine?", because whether somebody is in the group that
+ * was asked is knowable here and not in a browser.
+ */
+export interface ParticipantView extends ParticipantRow {
+  can_answer: boolean;
+}
+
 export class AddParticipantDto {
   @IsString() @MinLength(1) @MaxLength(200) user_id!: string;
 
@@ -238,6 +247,15 @@ export class ParticipantsRepository extends RepositoryBase {
     ]);
   }
 
+  /** The groups a person is in, so a whole list can be judged in one query. */
+  groupsOfUser(tx: Tx, userId: string): Promise<string[]> {
+    return this.many<{ group_id: string }>(
+      tx,
+      'select group_id::text as group_id from op.group_members where user_id::text = $1',
+      [userId],
+    ).then((rows) => rows.map((row) => row.group_id));
+  }
+
   /** The members of a group, as the text user ids a ticket names people by. */
   groupMembers(tx: Tx, groupId: string): Promise<string[]> {
     return this.many<{ user_id: string }>(
@@ -268,7 +286,16 @@ export class ParticipantsService {
     return this.uow.run(principal, async (tx) => {
       const ticket = await this.ticketOf(tx, key);
       const rows = await this.participants.ofTicket(tx, ticket.id);
-      return { items: rows, contributors: await this.participants.contributorCount(tx, ticket.id) };
+      const mine = rows.some((row) => row.status === 'invited' && row.group_id)
+        ? new Set(await this.participants.groupsOfUser(tx, principal.userId))
+        : new Set<string>();
+      const items: ParticipantView[] = rows.map((row) => ({
+        ...row,
+        can_answer:
+          row.status === 'invited' &&
+          (row.user_id ? row.user_id === principal.userId : Boolean(row.group_id && mine.has(row.group_id))),
+      }));
+      return { items, contributors: await this.participants.contributorCount(tx, ticket.id) };
     });
   }
 
