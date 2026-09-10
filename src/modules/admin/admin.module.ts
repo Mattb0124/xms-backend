@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module, type OnApplicationBootstrap } from '@nestjs/common';
 import { ClerkAdminClient } from '../../common/clerk/clerk-admin.js';
 import { loadEnv } from '../../config/env.js';
 import { AccountsController, AdminAccountsController } from './accounts/accounts.controller.js';
@@ -6,6 +6,7 @@ import { AccountsRepository } from './accounts/accounts.repository.js';
 import { AccountsService } from './accounts/accounts.service.js';
 import { BootstrapController, MeController } from './admin.controller.js';
 import { BootstrapService } from './bootstrap.service.js';
+import { UnitOfWork } from '../../db/unit-of-work.js';
 import { AccountConfigController, AdminConfigController } from './config/config.controller.js';
 import { ConfigRepository, ConfigService } from './config/config.service.js';
 import { AdminUsersController, DirectoryController } from './users/users.controller.js';
@@ -55,4 +56,33 @@ export class AdminCoreModule {}
   providers: [BootstrapService],
   exports: [AdminCoreModule],
 })
-export class AdminModule {}
+export class AdminModule implements OnApplicationBootstrap {
+  private readonly logger = new Logger(AdminModule.name);
+
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly bootstrap: BootstrapService,
+  ) {}
+
+  /**
+   * Reconcile the system roles every time the application starts.
+   *
+   * Doing it inside the bootstrap route was no use: that route throws
+   * `already_bootstrapped` on a system that has an administrator, and the
+   * throw rolls the reconciliation back with it, so a permission added to a
+   * bundle in code never reached anybody.
+   *
+   * It is additive and idempotent, so both the API and the worker may run it
+   * and a second run finds nothing to do. A race between them shows up as a
+   * version conflict on the role row; the other process has already made the
+   * change, so it is logged and left rather than retried.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      const changed = await this.uow.operator((tx) => this.bootstrap.ensureSystemRoles(tx));
+      if (changed.length > 0) this.logger.log(`system roles reconciled: ${changed.join('; ')}`);
+    } catch (error) {
+      this.logger.warn(`system roles were not reconciled: ${(error as Error).message}`);
+    }
+  }
+}
