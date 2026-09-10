@@ -3031,6 +3031,36 @@
   },
   {
     "method": "POST",
+    "path": "/v1/tickets/:key/participants/:id/accept",
+    "controller": "ParticipantsController",
+    "handler": "accept",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/participants/:id/decline",
+    "controller": "ParticipantsController",
+    "handler": "decline",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/participants/invitations",
+    "controller": "ParticipantsController",
+    "handler": "invite",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
     "path": "/v1/tickets/:key/scope",
     "controller": "TicketsController",
     "handler": "flagScope",

@@ -613,3 +613,189 @@ describe('ticket participants (TM-21)', () => {
     expect(again.body.contributors).toBe(1);
   });
 });
+
+/**
+ * Inviting somebody onto a ticket without handing it to them (TM-22,
+ * Ticket Management functional 5). The day-in-the-life analysis found people
+ * transferring a ticket to ask a question and never getting it back, so the
+ * assignee staying put is the assertion every test here carries.
+ */
+describe('participant invitations', () => {
+  async function assignedTicket(description: string): Promise<{ key: string; assignee: string }> {
+    const ticket = await newTicket(description);
+    await api()
+      .post(`/v1/tickets/${ticket.key}/transitions`)
+      .set(bearer(adminToken))
+      .send({ version: 1, to: 'in_progress' })
+      .expect(201);
+    const current = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    const assigned = await api()
+      .patch(`/v1/tickets/${ticket.key}`)
+      .set(bearer(adminToken))
+      .send({ version: current.body.version, assignee_id: adminId })
+      .expect(200);
+    return { key: ticket.key, assignee: assigned.body.assignee_id };
+  }
+
+  it('asks a person on, tells them, and leaves the assignee where it was', async () => {
+    const ticket = await assignedTicket('Reconcile the intercompany rule');
+    const invited = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, display_name: 'Cara Lee', role: 'collaborator' })
+      .expect(201);
+    expect(invited.body).toMatchObject({ status: 'invited', user_id: consultantId, joined_at: null });
+
+    // The invitee hears about it. Being asked is no use if nobody is told.
+    const feed = await api().get('/v1/notifications').set(bearer(consultantToken)).expect(200);
+    const note = feed.body.find((row: { type: string }) => row.type === 'ticket.participant_invited');
+    expect(note, 'the invitee is notified').toBeDefined();
+    expect(note.link).toBe(`/cases/${ticket.key}`);
+
+    // An unanswered invitation is not a contributor.
+    const pending = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(pending.body.contributors).toBe(0);
+
+    const accepted = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/${invited.body.id}/accept`)
+      .set(bearer(consultantToken))
+      .expect(200);
+    expect(accepted.body).toMatchObject({ status: 'active', responded_by: consultantId });
+    expect(accepted.body.joined_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const after = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.assignee_id, 'the assignee is untouched by an invitation').toBe(ticket.assignee);
+    const listed = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(listed.body.contributors).toBe(1);
+  });
+
+  it('keeps a no on the record, with its reason, and counts nobody for it', async () => {
+    const ticket = await assignedTicket('Rebuild the metadata load');
+    const invited = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, role: 'reviewer' })
+      .expect(201);
+    const declined = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/${invited.body.id}/decline`)
+      .set(bearer(consultantToken))
+      .send({ reason: 'On the Brookfield cutover all week' })
+      .expect(200);
+    expect(declined.body).toMatchObject({
+      status: 'declined',
+      decline_reason: 'On the Brookfield cutover all week',
+      responded_by: consultantId,
+      joined_at: null,
+    });
+
+    const listed = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(listed.body.items).toHaveLength(1);
+    expect(listed.body.contributors).toBe(0);
+
+    // Asking again is allowed, because a no was about that week and not forever.
+    await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, role: 'reviewer' })
+      .expect(201);
+  });
+
+  it('refuses an answer from anybody but the person asked', async () => {
+    const ticket = await assignedTicket('Trace the failing consolidation');
+    const invited = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, role: 'collaborator' })
+      .expect(201);
+    const refused = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/${invited.body.id}/accept`)
+      .set(bearer(adminToken))
+      .expect(403);
+    expect(refused.body.code).toBe('not_your_invitation');
+  });
+
+  it('asks a group, and a member accepts for it without losing who was asked', async () => {
+    const group = await api()
+      .post('/v1/admin/groups')
+      .set(bearer(adminToken))
+      .send({ name: 'Consolidation Technical', service_line: 'OneStream' })
+      .expect(201);
+    await api()
+      .put(`/v1/admin/groups/${group.body.id}/members`)
+      .set(bearer(adminToken))
+      .send({ user_ids: [consultantId] })
+      .expect(200);
+
+    const ticket = await assignedTicket('Cash flow statement will not tie');
+    const invited = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ group_id: group.body.id, role: 'reviewer' })
+      .expect(201);
+    // Nobody is invented to hang the ask on: the group was asked, not a person.
+    expect(invited.body).toMatchObject({
+      status: 'invited',
+      user_id: null,
+      group_id: group.body.id,
+      group_name: 'Consolidation Technical',
+    });
+
+    const twice = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ group_id: group.body.id, role: 'collaborator' })
+      .expect(409);
+    expect(twice.body.code).toBe('group_already_invited');
+
+    const accepted = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/${invited.body.id}/accept`)
+      .set(bearer(consultantToken))
+      .expect(200);
+    expect(accepted.body).toMatchObject({
+      status: 'active',
+      user_id: consultantId,
+      group_id: group.body.id,
+      group_name: 'Consolidation Technical',
+    });
+
+    const after = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.assignee_id, 'a group invitation moves no ownership either').toBe(ticket.assignee);
+  });
+
+  it('lets the inviter take an unanswered ask back, which is not a no', async () => {
+    const ticket = await assignedTicket('Second look at the currency table');
+    const invited = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, role: 'observer' })
+      .expect(201);
+    const withdrawn = await api()
+      .delete(`/v1/tickets/${ticket.key}/participants/${invited.body.id}`)
+      .set(bearer(adminToken))
+      .expect(200);
+    // Withdrawn, not declined and not left: three different facts, three words.
+    expect(withdrawn.body).toMatchObject({ status: 'withdrawn', left_at: null, responded_at: null });
+
+    const late = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/${invited.body.id}/accept`)
+      .set(bearer(consultantToken))
+      .expect(409);
+    expect(late.body.code).toBe('invitation_not_open');
+  });
+
+  it('wants a person or a group, and not both or neither', async () => {
+    const ticket = await assignedTicket('Close the period early');
+    const neither = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ role: 'collaborator' })
+      .expect(400);
+    expect(neither.body.code).toBe('invite_a_person_or_a_group');
+    const both = await api()
+      .post(`/v1/tickets/${ticket.key}/participants/invitations`)
+      .set(bearer(adminToken))
+      .send({ user_id: consultantId, group_id: accountId, role: 'collaborator' })
+      .expect(400);
+    expect(both.body.code).toBe('invite_a_person_or_a_group');
+  });
+});
