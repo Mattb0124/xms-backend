@@ -452,6 +452,52 @@ export class TimeRepository extends RepositoryBase {
     );
   }
 
+  /**
+   * Every entry in the window by anyone who shares an assignment group with
+   * this person, themselves included.
+   *
+   * The group is read from the roster rather than passed in, so a lead sees
+   * their own team and not one they chose: "across your group" is a fact
+   * about the reader, not a filter they set. Somebody with no roster row, or
+   * one in no group, sees only their own entries, which is what they would
+   * have seen on My timesheet anyway.
+   */
+  entriesOfGroupMates(
+    tx: Tx,
+    userId: string,
+    from: string,
+    to: string,
+  ): Promise<
+    (TimeEntryRow & {
+      ticket_number: string | null;
+      bucket_label: string | null;
+      adjusted_minutes: number;
+      person_role: string | null;
+    })[]
+  > {
+    return this.many(
+      tx,
+      `with me as (
+           select assignment_group_ids from op.people where user_id = $1::uuid
+         ),
+         mates as (
+           select p.user_id::text as person_id, p.role
+             from op.people p, me
+            where p.user_id is not null
+              and (p.user_id::text = $1 or p.assignment_group_ids && me.assignment_group_ids)
+         )
+         select e.*, t.number::text as ticket_number, b.label as bucket_label, mates.role as person_role,
+                e.minutes + coalesce((select sum(a.delta_minutes) from acct.time_adjustments a where a.entry_id = e.id), 0)::int as adjusted_minutes
+           from acct.time_entries e
+           join mates on mates.person_id = e.person_id
+           left join acct.tickets t on t.id = e.ticket_id
+           left join acct.non_ticket_buckets b on b.id = e.bucket_id
+          where e.performed_on between $2 and $3
+          order by e.performed_on, e.person_name, e.created_at`,
+      [userId, from, to],
+    );
+  }
+
   /** The person's working calendar and holiday dates for the unlogged computation; undefined without a roster row. */
   async personCalendarOfUser(
     tx: Tx,

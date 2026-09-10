@@ -3141,6 +3141,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/time/team",
+    "controller": "TimeController",
+    "handler": "team",
+    "realm": "internal",
+    "permission": "time:adjust",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/timesheets/me",
     "controller": "TimeController",
     "handler": "myWeek",

@@ -398,6 +398,15 @@ export class TimeService {
     return this.uow.run(principal, (tx) => this.time.entriesOfPerson(tx, principal.userId, from, to));
   }
 
+  /**
+   * Team time: every entry in the window by anyone sharing an assignment
+   * group with the caller. Answered to `time:adjust`, because the reason to
+   * read a colleague's time is to correct it.
+   */
+  team(principal: Principal, from: string, to: string) {
+    return this.uow.run(principal, (tx) => this.time.entriesOfGroupMates(tx, principal.userId, from, to));
+  }
+
   /** My week: entries grouped by day with totals and the unlogged minutes per day (P2.18.3). */
   myWeek(principal: Principal, week: string | undefined) {
     const bounds = weekBounds(week ?? new Date().toISOString().slice(0, 10));
@@ -1267,6 +1276,12 @@ export class TimeController {
   @RequirePermission('time:log')
   mine(@CurrentPrincipal() principal: Principal, @Query('from') from: string, @Query('to') to: string) {
     return this.time.mine(principal, dateOr(from, -6), dateOr(to, 0));
+  }
+
+  @Get('time/team')
+  @RequirePermission('time:adjust')
+  team(@CurrentPrincipal() principal: Principal, @Query('from') from: string, @Query('to') to: string) {
+    return this.time.team(principal, dateOr(from, -6), dateOr(to, 0));
   }
 
   @Get('timesheets/me')
