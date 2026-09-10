@@ -478,7 +478,7 @@ export class TimeRepository extends RepositoryBase {
     return this.many(
       tx,
       `with me as (
-           select assignment_group_ids from op.people where user_id = $1::uuid
+           select assignment_group_ids from op.people where user_id::text = $1
          ),
          mates as (
            select p.user_id::text as person_id, p.role

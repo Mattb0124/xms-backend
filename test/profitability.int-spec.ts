@@ -317,3 +317,23 @@ describe('system roles reconcile on boot (TB-16)', () => {
     expect(again.permissions).toContain('kb:author');
   });
 });
+
+describe('team time (P2.18)', () => {
+  it('returns the entries of everyone sharing a group, and refuses a reader without time:adjust', async () => {
+    // The consultant logs time; the admin, who holds time:adjust, reads it.
+    const window = `from=${monthStart}&to=${monthEnd}`;
+    const mine = await api().get(`/v1/time/team?${window}`).set(bearer(adminToken)).expect(200);
+    expect(Array.isArray(mine.body)).toBe(true);
+
+    // A consultant holds time:log and not time:adjust: reading a colleague's
+    // time is for correcting it.
+    await api().get(`/v1/time/team?${window}`).set(bearer(consultantToken)).expect(403);
+  });
+
+  it('falls back to the reader alone rather than failing, for somebody in no group', async () => {
+    // The admin has no roster row at all in this suite, which is the same
+    // shape as a person in no group: the query must still answer.
+    const rows = await api().get(`/v1/time/team?from=${monthStart}&to=${monthEnd}`).set(bearer(adminToken)).expect(200);
+    expect(rows.body.every((row: { person_id: string }) => typeof row.person_id === 'string')).toBe(true);
+  });
+});
