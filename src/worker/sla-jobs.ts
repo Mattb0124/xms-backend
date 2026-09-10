@@ -153,7 +153,7 @@ export class SlaJobs {
         body: ticket.short_description,
         targetKind: 'ticket',
         targetId: ticket.id,
-        link: `/tickets/${ticketKey(ticket.number)}`,
+        link: `/cases/${ticketKey(ticket.number)}`,
         collapseKey: `${collapseKey}:${recipient}`,
       });
     }

@@ -599,7 +599,7 @@ export class AttachmentsService {
         body: row.file_name,
         targetKind: 'ticket',
         targetId: ticket.id,
-        link: `/tickets/${ticketKey(ticket.number)}`,
+        link: `/cases/${ticketKey(ticket.number)}`,
         collapseKey: `quarantined:${row.id}:${recipient}`,
       });
     }

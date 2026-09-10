@@ -1683,7 +1683,7 @@ export class TicketsService {
         body: reason,
         targetKind: 'ticket',
         targetId: ticket.id,
-        link: `/tickets/${key}`,
+        link: `/cases/${key}`,
         collapseKey: `scope:${ticket.id}`,
       });
     }
@@ -1711,7 +1711,7 @@ export class TicketsService {
       body: ticket.short_description,
       targetKind: 'ticket',
       targetId: ticket.id,
-      link: `/tickets/${key}`,
+      link: `/cases/${key}`,
       collapseKey: `scope-decision:${ticket.id}`,
     });
   }
@@ -1988,7 +1988,7 @@ export class TicketsService {
       body: ticket.short_description,
       targetKind: 'ticket',
       targetId: ticket.id,
-      link: `/tickets/${ticketKey(ticket.number)}`,
+      link: `/cases/${ticketKey(ticket.number)}`,
       collapseKey: `assigned:${ticket.id}`,
     });
     await this.outbox.write(tx, {
@@ -2020,7 +2020,7 @@ export class TicketsService {
         body: ticket.short_description,
         targetKind: 'ticket',
         targetId: ticket.id,
-        link: `/tickets/${ticketKey(ticket.number)}`,
+        link: `/cases/${ticketKey(ticket.number)}`,
         collapseKey: `${type}:${ticket.id}`,
       });
     }

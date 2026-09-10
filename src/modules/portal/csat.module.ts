@@ -743,7 +743,7 @@ export class CsatService {
         body: comment ?? '',
         targetKind: survey.kind === 'quarterly' ? 'account' : 'ticket',
         targetId: survey.ticket_id ?? survey.id,
-        link: ticket ? `/tickets/${key}` : `/accounts/${survey.account_id}?tab=satisfaction`,
+        link: ticket ? `/cases/${key}` : `/accounts/${survey.account_id}?tab=satisfaction`,
         collapseKey: `csat:${survey.id}`,
       });
     await this.outbox.write(tx, {
