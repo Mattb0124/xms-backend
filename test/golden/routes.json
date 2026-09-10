@@ -2051,6 +2051,36 @@
   },
   {
     "method": "GET",
+    "path": "/v1/me/list-preferences",
+    "controller": "ListPreferencesController",
+    "handler": "all",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/me/list-preferences/:screen",
+    "controller": "ListPreferencesController",
+    "handler": "clear",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/me/list-preferences/:screen",
+    "controller": "ListPreferencesController",
+    "handler": "save",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/me/waiting",
     "controller": "WaitingController",
     "handler": "waitingOnMe",
