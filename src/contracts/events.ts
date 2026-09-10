@@ -103,6 +103,8 @@ export const AUDIT_EVENT_TYPES = [
   'ticket.scope_flagged',
   'ticket.scope_withdrawn',
   'ticket.scope_decided',
+  'ticket.participant_added',
+  'ticket.participant_left',
   'comment.created',
   'work_note.created',
   'attachment.created',

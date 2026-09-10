@@ -3000,6 +3000,36 @@
     "axel": false
   },
   {
+    "method": "GET",
+    "path": "/v1/tickets/:key/participants",
+    "controller": "ParticipantsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/tickets/:key/participants",
+    "controller": "ParticipantsController",
+    "handler": "add",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/tickets/:key/participants/:id",
+    "controller": "ParticipantsController",
+    "handler": "remove",
+    "realm": "internal",
+    "permission": "tickets:work",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "POST",
     "path": "/v1/tickets/:key/scope",
     "controller": "TicketsController",

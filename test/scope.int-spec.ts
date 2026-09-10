@@ -526,3 +526,90 @@ describe('the scope record (TM-11)', () => {
     expect(csv.headers['content-disposition']).toContain('scope-decisions-');
   });
 });
+
+describe('ticket participants (TM-21)', () => {
+  it('records who had a part, in what role, and who put them there', async () => {
+    const ticket = await newTicket('Migrate the reporting cube');
+    const added = await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: 'dev_cara', display_name: 'Cara Lee', role: 'collaborator' })
+      .expect(201);
+    expect(added.body).toMatchObject({
+      user_id: 'dev_cara',
+      role: 'collaborator',
+      status: 'active',
+      invited_by_name: expect.any(String),
+    });
+    expect(added.body.joined_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const listed = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(listed.body.items).toHaveLength(1);
+    expect(listed.body.contributors).toBe(1);
+  });
+
+  it('refuses to put the same person on twice, and refuses the assignee', async () => {
+    const ticket = await newTicket('Second pass on the cube');
+    await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: 'dev_cara', role: 'reviewer' })
+      .expect(201);
+    const again = await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: 'dev_cara', role: 'observer' })
+      .expect(409);
+    expect(again.body.code).toBe('already_a_participant');
+
+    // The ticket owns who it is assigned to; a second place to say so is a
+    // second place for it to be wrong. An assignee is a real user id rather
+    // than a token subject, so it is read back from the API.
+    const who = await api().get('/v1/admin/me').set(bearer(consultantToken)).expect(200);
+    const assigneeId = who.body.principal.userId;
+    const current = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    const assigned = await api()
+      .patch(`/v1/tickets/${ticket.key}`)
+      .set(bearer(adminToken))
+      .send({ version: current.body.version, assignee_id: assigneeId })
+      .expect(200);
+    expect(assigned.body.assignee_id).toBe(assigneeId);
+    const refused = await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: assigneeId, role: 'collaborator' })
+      .expect(409);
+    expect(refused.body.code).toBe('assignee_is_not_a_participant');
+  });
+
+  it('keeps the row when somebody leaves, so the history survives', async () => {
+    const ticket = await newTicket('Third pass on the cube');
+    const added = await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: 'dev_cara', role: 'collaborator' })
+      .expect(201);
+    const left = await api()
+      .delete(`/v1/tickets/${ticket.key}/participants/${added.body.id}`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(left.body).toMatchObject({ status: 'left' });
+    expect(left.body.left_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    // Gone from the ticket, still on the record, and still a contributor.
+    const listed = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(listed.body.items).toHaveLength(1);
+    expect(listed.body.contributors).toBe(1);
+
+    // And they can be asked back, which is a second row rather than an edit.
+    await api()
+      .post(`/v1/tickets/${ticket.key}/participants`)
+      .set(bearer(adminToken))
+      .send({ user_id: 'dev_cara', role: 'reviewer' })
+      .expect(201);
+    const again = await api().get(`/v1/tickets/${ticket.key}/participants`).set(bearer(adminToken)).expect(200);
+    expect(again.body.items).toHaveLength(2);
+    // Counted once: a contributor is a person, not a stint.
+    expect(again.body.contributors).toBe(1);
+  });
+});
