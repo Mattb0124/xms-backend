@@ -22,6 +22,7 @@ import { TicketsCoreModule } from '../modules/tickets/tickets.module.js';
 import { EngagementsCoreModule } from '../modules/contracts/engagements.module.js';
 import { JobRunner } from './jobs.js';
 import { OutboxDispatcher } from './outbox-dispatcher.js';
+import { ContainerJobs } from './container-jobs.js';
 import { SlaJobs } from './sla-jobs.js';
 import { PeriodJobs } from './period-jobs.js';
 import { RenewalJobs } from './renewal-jobs.js';
@@ -62,6 +63,7 @@ import { RosterJobs } from './roster-jobs.js';
     },
     JobRunner,
     SlaJobs,
+    ContainerJobs,
     PeriodJobs,
     RenewalJobs,
     RosterJobs,
@@ -71,6 +73,7 @@ export class WorkerModule implements OnModuleInit {
   constructor(
     private readonly runner: JobRunner,
     private readonly sla: SlaJobs,
+    private readonly containers: ContainerJobs,
     private readonly pools: DbPools,
     private readonly dispatcher: OutboxDispatcher,
     private readonly email: EmailService,
@@ -122,6 +125,8 @@ export class WorkerModule implements OnModuleInit {
     if (!this.pools.has('worker')) return;
     this.runner.schedule(this.sla.sweeper());
     this.runner.schedule(this.sla.atRisk());
+    this.runner.schedule(this.containers.detection());
+    this.runner.schedule(this.containers.detection());
     this.runner.schedule(this.snapshots.job());
     this.runner.schedule(this.suggestions.expiryJob());
     this.runner.schedule(this.digests.digestJob());

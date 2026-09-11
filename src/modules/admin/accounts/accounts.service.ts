@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import type { RequestContext } from '../../../common/auth/decorators.js';
 import type { Principal } from '../../../common/auth/principal.js';
 import { actorOf, AuditService } from '../../../common/audit/audit.service.js';
@@ -12,7 +12,12 @@ import {
   type AccountSettingsRow,
   type AccountSummaryRow,
 } from './accounts.repository.js';
-import type { CreateAccountDto, UpdateAccountDto, UpdateAccountSettingsDto } from './accounts.dto.js';
+import type {
+  ChangeAccountOwnerDto,
+  CreateAccountDto,
+  UpdateAccountDto,
+  UpdateAccountSettingsDto,
+} from './accounts.dto.js';
 
 /**
  * Accounts and their settings (Accounts & Administration technical 3.3, 4).
@@ -121,11 +126,121 @@ export class AccountsService {
     });
   }
 
+  /**
+   * Hand the account to a different owner (TM-23). Its own route because it
+   * is its own decision: the candidate is checked, the change is refused
+   * rather than silently applied when they cannot hold it, and both the
+   * audit entry and the security event name the person leaving and the
+   * person arriving.
+   */
+  async changeOwner(
+    principal: Principal,
+    ctx: RequestContext,
+    id: string,
+    dto: ChangeAccountOwnerDto,
+  ): Promise<AccountRow> {
+    return this.uow.run(principal, async (tx) => {
+      const before = await this.accounts.byId(tx, id);
+      const candidate = await this.accounts.ownerCandidate(tx, dto.owner_user_id, id);
+      // A portal identity can never own an account: the owner is the CSM,
+      // and the realms do not cross.
+      if (!candidate || candidate.kind !== 'internal') {
+        throw new BadRequestException({ code: 'owner_not_internal' });
+      }
+      if (candidate.status !== 'active') {
+        throw new BadRequestException({ code: 'owner_not_active', status: candidate.status });
+      }
+      // An owner who cannot open the account cannot own it. The grant is the
+      // thing that decides what an internal user may see (Security &
+      // Tenancy 2.3), so the account is handed over only to somebody who
+      // already holds one.
+      if (!candidate.granted) {
+        throw new BadRequestException({ code: 'owner_not_granted', account_id: id });
+      }
+      if (before.owner_user_id === dto.owner_user_id) return before;
+
+      const previousName = await this.accounts.ownerName(tx, before.owner_user_id);
+      const after = await this.accounts.update(tx, id, dto.version, { owner_user_id: dto.owner_user_id });
+      await this.audit.account(tx, id, actorOf(principal), ctx, [
+        {
+          entityKind: 'account',
+          entityId: id,
+          eventType: 'admin.account.owner_changed',
+          field: 'owner_user_id',
+          oldValue: before.owner_user_id ? { user_id: before.owner_user_id, name: previousName } : null,
+          newValue: { user_id: candidate.id, name: candidate.display_name, reason: dto.reason ?? null },
+        },
+      ]);
+      await this.security.write(
+        {
+          type: 'admin.account.owner_changed',
+          outcome: 'success',
+          accountId: id,
+          actorKind: 'user',
+          actorId: principal.userId,
+          actorName: principal.displayName,
+          principalKind: principal.kind,
+          requestId: ctx.requestId,
+          entityKind: 'account',
+          entityId: id,
+          attrs: { from: before.owner_user_id, to: candidate.id },
+        },
+        tx,
+      );
+      return after;
+    });
+  }
+
   async transition(principal: Principal, ctx: RequestContext, id: string, to: string): Promise<AccountRow> {
     return this.uow.run(principal, async (tx) => {
       const before = await this.accounts.byId(tx, id);
       if (!STATUS_TRANSITIONS[before.status]?.includes(to)) {
         throw new ConflictException({ code: 'invalid_transition', from: before.status, to });
+      }
+      // Past onboarding, an account has an owner (TM-23), and migration 0050
+      // will not let it be otherwise. Taking an account live is therefore
+      // also the moment ownership is established: rather than refuse, the
+      // person doing it becomes the owner, audited as such and changed
+      // afterwards through the owner route like any other handover. That
+      // keeps the invariant true by construction, and the fact it records
+      // (this named administrator took the account live and answers for it
+      // until they hand it on) is one that actually happened. A principal
+      // who cannot hold the account is refused instead, with the thing to
+      // fix named.
+      if (before.owner_user_id === null && to !== 'onboarding') {
+        const candidate = await this.accounts.ownerCandidate(tx, principal.userId, id);
+        if (!candidate || candidate.kind !== 'internal' || candidate.status !== 'active' || !candidate.granted) {
+          throw new ConflictException({ code: 'owner_required', account_id: id });
+        }
+        await this.accounts.update(tx, id, before.version, { owner_user_id: principal.userId });
+        before.version += 1;
+        before.owner_user_id = principal.userId;
+        await this.audit.account(tx, id, actorOf(principal), ctx, [
+          {
+            entityKind: 'account',
+            entityId: id,
+            eventType: 'admin.account.owner_changed',
+            field: 'owner_user_id',
+            oldValue: null,
+            newValue: { user_id: candidate.id, name: candidate.display_name, reason: 'set when the account went live' },
+          },
+        ]);
+        await this.security.write(
+          {
+            type: 'admin.account.owner_changed',
+            outcome: 'success',
+            accountId: id,
+            actorKind: 'user',
+            actorId: principal.userId,
+            actorName: principal.displayName,
+            principalKind: principal.kind,
+            requestId: ctx.requestId,
+            entityKind: 'account',
+            entityId: id,
+            attrs: { from: null, to: candidate.id, at: 'activation' },
+          },
+          tx,
+        );
       }
       const after = await this.accounts.update(tx, id, before.version, { status: to });
       await this.audit.account(tx, id, actorOf(principal), ctx, [

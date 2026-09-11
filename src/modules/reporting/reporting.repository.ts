@@ -159,6 +159,17 @@ export class ReportingRepository extends RepositoryBase {
 
   // Report runs and packs ---------------------------------------------------
 
+  /**
+   * The run is authored by the account's owner (TM-23: ownership drives
+   * report authorship). The pack goes out over the owner's name, so the run
+   * carries who it is from at creation.
+   *
+   * `author_user_id` is deliberately not `reviewer_id`. That column is half
+   * of the `reviewer_id`/`reviewed_at` pair and means who actually approved
+   * the pack, written when they do; filling it at creation would claim a
+   * review that has not happened. An account still in onboarding may have no
+   * owner, and the run is then authored by nobody until it has one.
+   */
   insertRun(
     tx: Tx,
     input: { accountId: string; packType: string; periodStart: string; periodEnd: string; requestedBy: string },
@@ -166,7 +177,9 @@ export class ReportingRepository extends RepositoryBase {
     return this.one(
       tx,
       'report_run',
-      `insert into acct.report_runs (account_id, pack_type, period_start, period_end, requested_by, status) values ($1, $2, $3, $4, $5, 'generating') returning id, version`,
+      `insert into acct.report_runs (account_id, pack_type, period_start, period_end, requested_by, author_user_id, status)
+       values ($1, $2, $3, $4, $5, (select owner_user_id::text from op.accounts where id = $1), 'generating')
+       returning id, version`,
       [input.accountId, input.packType, input.periodStart, input.periodEnd, input.requestedBy],
     );
   }

@@ -219,8 +219,10 @@ describe('accounts', () => {
       .expect(200);
     const second = await api().get('/v1/admin/me').set(asAdmin(consultantToken)).expect(200);
     expect(second.body.principal.accountIds).toEqual([accountId]);
+    // Activation established the owner: the administrator who took the
+    // account live owns it until it is handed on (TM-23).
     expect(second.body.accounts).toEqual([
-      { id: accountId, key: 'BRK', name: 'Brookfield', status: 'active', owner_id: null, owner_name: null },
+      { id: accountId, key: 'BRK', name: 'Brookfield', status: 'active', owner_id: adminId, owner_name: 'Administrator' },
     ]);
   });
 

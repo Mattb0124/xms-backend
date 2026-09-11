@@ -9,6 +9,9 @@ import { BootstrapService } from './bootstrap.service.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { AccountConfigController, AdminConfigController } from './config/config.controller.js';
 import { ConfigRepository, ConfigService } from './config/config.service.js';
+import { AdminTeamsController } from './teams/teams.controller.js';
+import { TeamsRepository } from './teams/teams.repository.js';
+import { TeamsService } from './teams/teams.service.js';
 import { AdminUsersController, DirectoryController } from './users/users.controller.js';
 import { UsersRepository } from './users/users.repository.js';
 import { UsersService } from './users/users.service.js';
@@ -25,6 +28,8 @@ import { UsersService } from './users/users.service.js';
     AccountsService,
     UsersRepository,
     UsersService,
+    TeamsRepository,
+    TeamsService,
     ConfigRepository,
     ConfigService,
     { provide: ClerkAdminClient, useFactory: (): ClerkAdminClient => new ClerkAdminClient(loadEnv().CLERK_SECRET_KEY) },
@@ -34,6 +39,8 @@ import { UsersService } from './users/users.service.js';
     AccountsService,
     UsersRepository,
     UsersService,
+    TeamsRepository,
+    TeamsService,
     ConfigRepository,
     ConfigService,
     ClerkAdminClient,
@@ -50,6 +57,7 @@ export class AdminCoreModule {}
     AccountsController,
     AdminUsersController,
     DirectoryController,
+    AdminTeamsController,
     AdminConfigController,
     AccountConfigController,
   ],

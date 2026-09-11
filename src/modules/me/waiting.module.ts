@@ -106,7 +106,7 @@ export class WaitingRepository extends RepositoryBase {
       tx,
       `select count(*)::int as count from acct.tickets t
         where t.out_of_scope = 'flagged'
-          and t.account_id in (select id from op.accounts where owner_user_id = $1)`,
+          and t.account_id in (select id from op.accounts where owner_user_id = $1::uuid)`,
       [userId],
     );
   }
@@ -122,10 +122,12 @@ export class WaitingRepository extends RepositoryBase {
   }
 
   /**
-   * Report runs waiting for my review: the ones that name me as reviewer,
-   * and the unclaimed ones on an account I own. `acct.report_schedules` has
-   * no owner column, so account ownership is what "schedules I own" means
-   * here; the day a schedule gains an owner this clause follows it.
+   * Report runs waiting on me: the ones I am the author of, and the
+   * authorless ones on an account I own. The author is the account owner at
+   * creation (TM-23, migration 0052), so the second clause is the backstop
+   * for runs made before an account had an owner rather than the mechanism.
+   * It is deliberately not `reviewer_id`: that column says who approved the
+   * pack, which is only ever filled once the waiting is over.
    *
    * The newest waiting run comes back with the count, because the review
    * screen opens a run by id. Two runs written in the same statement carry
@@ -138,8 +140,9 @@ export class WaitingRepository extends RepositoryBase {
       `with waiting as (
          select r.id, r.account_id, r.created_at, r.period_start from acct.report_runs r
           where r.status = any ($2::text[])
-            and (r.reviewer_id = $1
-                 or (r.reviewer_id is null and r.account_id in (select id from op.accounts where owner_user_id = $1)))
+            and (r.author_user_id = $1
+                 or (r.author_user_id is null
+                     and r.account_id in (select id from op.accounts where owner_user_id = $1::uuid)))
        )
        select count(*)::int as count,
               count(distinct account_id)::int as accounts,

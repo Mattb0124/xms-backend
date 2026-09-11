@@ -84,7 +84,7 @@ beforeAll(async () => {
   // report reviews on it are theirs to act on.
   const current = await api().get(`/v1/admin/accounts/${accountId}`).set(bearer(adminToken)).expect(200);
   await api()
-    .patch(`/v1/admin/accounts/${accountId}`)
+    .put(`/v1/admin/accounts/${accountId}/owner`)
     .set(bearer(adminToken))
     .send({ version: current.body.version, owner_user_id: adminId })
     .expect(200);
@@ -256,19 +256,22 @@ describe('GET /v1/me/waiting', () => {
     expect((await waiting(strangerToken)).articles_in_review.count).toBe(0);
   });
 
-  it('counts report runs that name me as reviewer and the unclaimed ones on an account I own', async () => {
+  it('counts the report runs I authored and the authorless ones on an account I own', async () => {
     await withSuperuser((client) =>
       client.query(
-        `insert into acct.report_runs (account_id, pack_type, period_start, period_end, status, reviewer_id, requested_by)
+        `insert into acct.report_runs (account_id, pack_type, period_start, period_end, status, author_user_id, requested_by)
          values ($1, 'wsr', current_date - 7, current_date - 1, 'awaiting_review', $2, $2),
                 ($1, 'wsr', current_date - 14, current_date - 8, 'awaiting_review', null, $2),
-                ($3, 'wsr', current_date - 7, current_date - 1, 'awaiting_review', null, $2),
-                ($1, 'wsr', current_date - 21, current_date - 15, 'sent', null, $2)`,
-        [accountId, adminId, otherAccountId],
+                ($3, 'wsr', current_date - 7, current_date - 1, 'awaiting_review', $4, $2),
+                ($1, 'wsr', current_date - 21, current_date - 15, 'sent', $2, $2)`,
+        [accountId, adminId, otherAccountId, consultantId],
       ),
     );
-    // One naming the administrator, one unclaimed on the account they own;
-    // the unclaimed run on Austral and the sent run count for nobody.
+    // One the administrator authored, and one with no author at all on an
+    // account they own, which is the backstop for runs made before the
+    // account had an owner (TM-23). The run on Austral is Cara's even though
+    // the administrator owns that account too, so authorship wins over
+    // ownership where there is an author; the sent run counts for nobody.
     const admin = await waiting(adminToken);
     expect(admin.report_reviews.count).toBe(2);
     // Both are on Brookfield, so the row opens the newest one on the review
@@ -289,12 +292,12 @@ describe('GET /v1/me/waiting', () => {
   });
 
   it('falls back to the account Report packs tab when runs wait on more than one account', async () => {
-    // A run on Austral naming the administrator: two accounts are waiting
+    // A run on Austral the administrator authored: two accounts are waiting
     // now, so no single run is the one to open and the row names the
     // account the newest belongs to instead.
     await withSuperuser((client) =>
       client.query(
-        `insert into acct.report_runs (account_id, pack_type, period_start, period_end, status, reviewer_id, requested_by)
+        `insert into acct.report_runs (account_id, pack_type, period_start, period_end, status, author_user_id, requested_by)
          values ($1, 'wsr', current_date - 7, current_date - 1, 'ready_for_review', $2, $2)`,
         [otherAccountId, adminId],
       ),

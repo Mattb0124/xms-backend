@@ -37,6 +37,11 @@ export const SECURITY_EVENT_TYPES = [
   'admin.account.settings_changed',
   'admin.account.ai_switch_changed',
   'admin.account.isolation_tier_changed',
+  // Handing an account to a different owner is a change of who answers for
+  // the client, so it gets its own type rather than riding the generic
+  // update diff (TM-23).
+  'admin.account.owner_changed',
+  'admin.team.changed',
   'admin.connector.mode_changed',
   'admin.connector.kill_switch',
   'admin.map.activated',
@@ -121,6 +126,8 @@ export const AUDIT_EVENT_TYPES = [
   'admin.account.updated',
   'admin.account.status_changed',
   'admin.account.settings_changed',
+  'admin.account.owner_changed',
+  'admin.team.changed',
   'admin.calendar.updated',
   'admin.config.activated',
   'admin.config.override_removed',

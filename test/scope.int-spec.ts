@@ -192,7 +192,7 @@ describe('POST /v1/tickets/:key/scope', () => {
   it('counts a pending flag on the waiting rail of the account owner', async () => {
     const owned = await api().get(`/v1/admin/accounts/${accountId}`).set(bearer(adminToken)).expect(200);
     await api()
-      .patch(`/v1/admin/accounts/${accountId}`)
+      .put(`/v1/admin/accounts/${accountId}/owner`)
       .set(bearer(adminToken))
       .send({ version: owned.body.version, owner_user_id: adminId })
       .expect(200);

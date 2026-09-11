@@ -1084,6 +1084,15 @@ describe('report packs and snapshots', () => {
     expect((file.body as Buffer).length).toBeGreaterThan(10_000);
     const runs = await api().get(`/v1/accounts/${accountId}/reports`).set(bearer(consultantToken)).expect(200);
     expect(runs.body[0]).toMatchObject({ pack_type: 'wsr', status: 'ready_for_review' });
+    // Ownership drives report authorship (TM-23): the pack is from the
+    // account's owner by name. Who reviewed it stays a separate question,
+    // answered when somebody actually does.
+    const owner = await withSuperuser((client) =>
+      client.query<{ owner_user_id: string }>(`select owner_user_id from op.accounts where id = $1`, [accountId]),
+    );
+    expect(owner.rows[0].owner_user_id).not.toBeNull();
+    expect(runs.body[0].author_user_id).toBe(owner.rows[0].owner_user_id);
+    expect(runs.body[0].reviewer_id).toBeNull();
     const pack = await api()
       .get(`/v1/reports/packs/${generated.body.pack_id}`)
       .set(bearer(consultantToken))

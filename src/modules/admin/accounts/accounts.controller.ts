@@ -7,7 +7,13 @@ import {
   type RequestContext,
 } from '../../../common/auth/decorators.js';
 import type { Principal } from '../../../common/auth/principal.js';
-import { CreateAccountDto, ListQueryDto, UpdateAccountDto, UpdateAccountSettingsDto } from './accounts.dto.js';
+import {
+  ChangeAccountOwnerDto,
+  CreateAccountDto,
+  ListQueryDto,
+  UpdateAccountDto,
+  UpdateAccountSettingsDto,
+} from './accounts.dto.js';
 import { AccountsService } from './accounts.service.js';
 
 /** Thin: DTO in, one service call, result out (Accounts & Administration technical 4). */
@@ -41,6 +47,17 @@ export class AdminAccountsController {
     @Body() dto: UpdateAccountDto,
   ) {
     return this.accounts.update(principal, ctx, id, dto);
+  }
+
+  /** Hand the account to a different owner (TM-23). Audited on its own terms. */
+  @Put(':id/owner')
+  changeOwner(
+    @CurrentPrincipal() principal: Principal,
+    @RequestCtx() ctx: RequestContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeAccountOwnerDto,
+  ) {
+    return this.accounts.changeOwner(principal, ctx, id, dto);
   }
 
   @Post(':id/activate')
