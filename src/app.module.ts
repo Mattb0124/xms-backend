@@ -4,6 +4,7 @@ import { CommonModule } from './common/common.module.js';
 import { RateLimitModule } from './common/rate-limit/rate-limit.middleware.js';
 import { ConnectorsModule } from './modules/connectors/connectors.module.js';
 import { CalendarsModule } from './modules/calendars/calendars.module.js';
+import { DevModule } from './modules/dev/dev.module.js';
 import { MigrationModule } from './modules/migration/migration.module.js';
 import { RosterModule } from './modules/roster/roster.module.js';
 import { CapacityModule } from './modules/capacity/capacity.module.js';
@@ -86,6 +87,7 @@ import { ChangeWindowsModule } from './modules/tickets/change-windows.module.js'
     CalendarFeedModule,
     CalendarsModule,
     MigrationModule,
+    DevModule,
   ],
 })
 export class AppModule {}

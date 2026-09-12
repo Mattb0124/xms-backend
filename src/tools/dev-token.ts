@@ -1,5 +1,4 @@
-import { SignJWT } from 'jose';
-import { DEV_ISSUER } from '../common/auth/token-verifier.js';
+import { mintDevToken } from '../modules/dev/dev-token.js';
 import { applyDotEnv } from '../config/env.js';
 
 applyDotEnv();
@@ -8,8 +7,11 @@ applyDotEnv();
  * Mints a development token for local sign-in while the XMS Clerk
  * application is not provisioned. The API accepts it only when
  * AUTH_DEV_SECRET is set, which the environment contract refuses in
- * production. Claims mirror a Clerk session token so the guard runs the
- * same code path.
+ * production. The claims are shaped by `mintDevToken`, shared with the
+ * /v1/dev/sign-in endpoint so the two cannot drift.
+ *
+ * The sign-in page offers the seeded users directly, so this is now for
+ * scripting and for a user the seed does not create.
  *
  *   pnpm dev:token --email admin@example.test [--sub user_123] [--org hackett] [--hours 12] [--aud xms-axel]
  */
@@ -30,24 +32,15 @@ async function main(): Promise<void> {
     console.error('--email is required');
     process.exit(2);
   }
-  const sub = arg('sub', `dev_${email.replace(/[^a-z0-9]/gi, '_')}`)!;
-  const org = arg('org', 'hackett')!;
-  const hours = Number(arg('hours', '12'));
-  const audience = arg('aud');
-  const party = arg('azp', 'http://localhost:3000')!;
-  let builder = new SignJWT({
+  const token = await mintDevToken({
+    secret,
     email,
-    org_slug: org,
-    sid: `sess_${Date.now()}`,
-    azp: party,
-  })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuer(DEV_ISSUER)
-    .setSubject(sub)
-    .setIssuedAt()
-    .setExpirationTime(`${hours}h`);
-  if (audience) builder = builder.setAudience(audience);
-  const token = await builder.sign(new TextEncoder().encode(secret));
+    org: arg('org', 'hackett')!,
+    sub: arg('sub'),
+    hours: Number(arg('hours', '12')),
+    audience: arg('aud'),
+    authorizedParty: arg('azp', 'http://localhost:3000')!,
+  });
   console.log(token);
 }
 

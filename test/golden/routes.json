@@ -2010,6 +2010,26 @@
     "axel": false
   },
   {
+    "method": "POST",
+    "path": "/v1/dev/sign-in",
+    "controller": "DevAuthController",
+    "handler": "signIn",
+    "realm": "internal",
+    "permission": null,
+    "public": "Local development sign-in: mints a token for a seeded user. Refuses without AUTH_DEV_SECRET.",
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/dev/users",
+    "controller": "DevAuthController",
+    "handler": "listUsers",
+    "realm": "internal",
+    "permission": null,
+    "public": "Local development sign-in: lists the seeded users to pick from. Refuses without AUTH_DEV_SECRET.",
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/email/inbound/:id/raw",
     "controller": "EmailController",
