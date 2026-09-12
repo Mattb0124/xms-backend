@@ -26,7 +26,12 @@ import {
   type Clock,
   type ClockView,
 } from '../../domain/sla/engine.js';
-import { checkRequirements } from '../../domain/tickets/close-discipline.js';
+import {
+  checkRequirements,
+  DEFAULT_TIME_EXEMPTION_REASONS,
+  minNotesChars,
+  type CloseDisciplineBody,
+} from '../../domain/tickets/close-discipline.js';
 import { freezeAt, freezeOverlapping, insideWindow } from '../../domain/tickets/change-window.js';
 import { TicketGroupsRepository, toChangeWindow, windowSpan, type TicketGroupRow } from './change-windows.module.js';
 import { translate, type ConditionSet } from './conditions.js';
@@ -838,6 +843,8 @@ export class TicketsService {
         groupRow && groupRow.kind === 'change_window' && groupRow.status !== 'cancelled' ? groupRow : undefined;
       const span = windowRow ? windowSpan(windowRow) : null;
       const codes = await this.resolutionCodes(tx, before.account_id);
+      const discipline = await this.closeDiscipline(tx, before.account_id);
+      const loggedMinutes = await this.time.loggedMinutes(tx, before.id);
       const missing = checkRequirements(
         requirements,
         {
@@ -851,14 +858,30 @@ export class TicketsService {
           },
         },
         {
-          loggedMinutes: await this.time.loggedMinutes(tx, before.id),
+          loggedMinutes,
           inChangeWindow: span !== null,
           noSolutionCodes: codes.noSolution,
           knownCodes: codes.known,
+          allowedExemptions: discipline.allowedExemptions,
+          minNotesChars: discipline.minNotesChars,
         },
       );
       // Requirements the month does not enforce yet (approval, plans, windows, workaround) are recorded, not blocking.
-      if (missing.length > 0) throw new ConflictException({ code: 'missing_requirements', items: missing });
+      if (missing.length > 0) {
+        // The refusal carries what the gate wants, so the caller can act on
+        // it rather than guess: the bar it fell under, the reasons it would
+        // have accepted (TB-02).
+        throw new ConflictException({
+          code: 'missing_requirements',
+          items: missing,
+          ...(missing.includes('resolution_notes_too_short')
+            ? { min_resolution_notes_chars: discipline.minNotesChars }
+            : {}),
+          ...(missing.includes('unknown_exemption_reason')
+            ? { exemption_reasons: discipline.reasons.map((reason) => reason.key) }
+            : {}),
+        });
+      }
 
       const now = new Date();
       const windowNotes = this.assertChangeWindow(
@@ -1003,6 +1026,28 @@ export class TicketsService {
           assignments.solution_article_id = dto.resolution.solution_article_id ?? null;
           assignments.solution_candidate = Boolean(dto.resolution.solution_candidate);
           assignments.time_exemption_reason = dto.resolution.time_exemption_reason ?? null;
+          // A ticket resolved with nothing logged against it is its own
+          // event, not one field of a general update (TB-02, Time & Budget
+          // 5.2: "each is an audit event"). It is the row a reconciler and
+          // the contract manager look for, so it says so in its own type.
+          if (loggedMinutes <= 0 && dto.resolution.time_exemption_reason) {
+            entries.push({
+              entityKind: 'ticket',
+              entityId: before.id,
+              ticketId: before.id,
+              eventType: 'ticket.time_exempted',
+              field: 'time_exemption_reason',
+              newValue: {
+                reason: dto.resolution.time_exemption_reason,
+                resolution_code: dto.resolution.code ?? null,
+                to: dto.to,
+              },
+            });
+            outboxEvents.push({
+              type: 'ticket.time_exempted',
+              payload: { reason: dto.resolution.time_exemption_reason, to: dto.to },
+            });
+          }
         }
       }
       if (toEffects.close) assignments.closed_at = now;
@@ -1956,6 +2001,58 @@ export class TicketsService {
       known: new Set(resolved.body.items.map((item) => item.key)),
       noSolution: new Set(resolved.body.items.filter((item) => item.no_solution).map((item) => item.key)),
     };
+  }
+
+  /**
+   * The account's close discipline (TB-02): which exemptions it allows and
+   * how much resolution note counts as one. A missing catalog falls back to
+   * the built-in rule inside the domain module rather than to nothing.
+   */
+  async closeDiscipline(
+    tx: Tx,
+    accountId: string,
+  ): Promise<{ allowedExemptions: Set<string>; minNotesChars: number; reasons: { key: string; label: string }[] }> {
+    const resolved = await this.config.resolve<CloseDisciplineBody>(tx, 'close_discipline', '*', accountId);
+    const reasons = Array.isArray(resolved.body?.time_exemption_reasons)
+      ? resolved.body.time_exemption_reasons.filter((reason) => typeof reason?.key === 'string')
+      : DEFAULT_TIME_EXEMPTION_REASONS.map((key) => ({ key, label: key }));
+    return {
+      allowedExemptions: new Set(reasons.map((reason) => reason.key)),
+      minNotesChars: minNotesChars({ minNotesChars: resolved.body?.min_resolution_notes_chars }),
+      reasons,
+    };
+  }
+
+  /**
+   * What the resolve dialog needs before it asks for anything (TB-02, Time &
+   * Budget technical 4): whether the gate is satisfied now, what has been
+   * logged, and which exemptions this account accepts. Reading it changes
+   * nothing, so it is a GET under `tickets:view`.
+   */
+  async timeGate(
+    principal: Principal,
+    idOrKey: string,
+  ): Promise<{
+    ticket_key: string;
+    logged_minutes: number;
+    can_resolve: boolean;
+    min_resolution_notes_chars: number;
+    exemption_reasons: { key: string; label: string }[];
+  }> {
+    return this.uow.run(principal, async (tx) => {
+      const ticket = await this.load(tx, idOrKey);
+      const loggedMinutes = await this.time.loggedMinutes(tx, ticket.id);
+      const discipline = await this.closeDiscipline(tx, ticket.account_id);
+      return {
+        ticket_key: ticketKey(ticket.number),
+        logged_minutes: loggedMinutes,
+        // The time half alone: the rest of the gate depends on what the
+        // caller is about to submit, which this route has not seen.
+        can_resolve: loggedMinutes > 0,
+        min_resolution_notes_chars: discipline.minNotesChars,
+        exemption_reasons: discipline.reasons,
+      };
+    });
   }
 
   private async assertAcyclic(tx: Tx, fromId: string, toId: string, type: string): Promise<void> {

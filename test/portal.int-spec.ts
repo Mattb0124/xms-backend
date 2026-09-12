@@ -206,9 +206,9 @@ describe('portal requests', () => {
         to: 'resolved',
         resolution: {
           code: 'fixed',
-          notes: 'Renewed the certificate',
+          notes: 'Renewed the client certificate and revalidated the connection.',
           solution_candidate: true,
-          time_exemption_reason: 'Logged elsewhere',
+          time_exemption_reason: 'administrative_close',
         },
       })
       .expect(201);

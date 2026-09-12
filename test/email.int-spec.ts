@@ -509,9 +509,9 @@ describe('outbound', () => {
         to: 'resolved',
         resolution: {
           code: 'fixed',
-          notes: 'Certificate renewed',
+          notes: 'Renewed the client certificate and revalidated the connection.',
           solution_candidate: true,
-          time_exemption_reason: 'x',
+          time_exemption_reason: 'administrative_close',
         },
       })
       .expect(201);

@@ -114,7 +114,15 @@ beforeAll(async () => {
   await api()
     .post(`/v1/tickets/${a.body.key}/transitions`)
     .set(bearer(consultantToken))
-    .send({ version: 2, to: 'resolved', resolution: { code: 'fixed', notes: 'Renewed', solution_candidate: true } })
+    .send({
+      version: 2,
+      to: 'resolved',
+      resolution: {
+        code: 'fixed',
+        notes: 'Renewed the client certificate and revalidated it.',
+        solution_candidate: true,
+      },
+    })
     .expect(201);
   const b = await api()
     .post('/v1/tickets')

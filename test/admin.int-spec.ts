@@ -80,7 +80,11 @@ describe('bootstrap', () => {
     const defaults = await withSuperuser((client) =>
       client.query(`select kind, scope_key from op.config_defaults where status = 'active' order by 1, 2`),
     );
-    expect(defaults.rows).toHaveLength(11);
+    // Five state machines, one per ticket type, plus the seven single-scope
+    // catalogs. `close_discipline` is the seventh (TB-02), naming the bar for
+    // the resolution notes and the exemption reasons an account accepts.
+    expect(defaults.rows).toHaveLength(12);
+    expect(defaults.rows.map((row) => `${row.kind}:${row.scope_key}`)).toContain('close_discipline:*');
     const event = await withSuperuser((client) =>
       client.query(`select actor_id from sys.security_events where event_type = 'auth.bootstrap.completed'`),
     );

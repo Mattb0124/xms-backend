@@ -1,0 +1,10 @@
+{
+  "min_resolution_notes_chars": 40,
+  "time_exemption_reasons": [
+    { "key": "duplicate", "label": "Duplicate of another ticket" },
+    { "key": "cancelled_by_client", "label": "Cancelled by the client" },
+    { "key": "resolved_by_client", "label": "Resolved by the client" },
+    { "key": "administrative_close", "label": "Administrative close" },
+    { "key": "merged", "label": "Merged into another ticket" }
+  ]
+}

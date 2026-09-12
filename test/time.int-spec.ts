@@ -153,7 +153,7 @@ describe('time on tickets', () => {
       .send({
         version: 2,
         to: 'resolved',
-        resolution: { code: 'fixed', notes: 'Rebuilt the cube', solution_candidate: true },
+        resolution: { code: 'fixed', notes: 'Rebuilt the consolidation cube and reran the nightly close.', solution_candidate: true },
       })
       .expect(201);
     expect(resolved.body.resolved_at).not.toBeNull();

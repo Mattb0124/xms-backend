@@ -3201,6 +3201,16 @@
   },
   {
     "method": "GET",
+    "path": "/v1/tickets/:key/time-gate",
+    "controller": "TicketsController",
+    "handler": "timeGate",
+    "realm": "internal",
+    "permission": "tickets:view",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
     "path": "/v1/tickets/:key/timeline",
     "controller": "TicketsController",
     "handler": "timeline",

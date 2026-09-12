@@ -266,6 +266,9 @@ describe('create and read', () => {
         items: ['resolution_code', 'resolution_notes', 'solution_link', 'time_logged'],
       }),
     );
+    // TB-02: `x` used to satisfy both the notes and the time gate. It now
+    // answers for all three at once, and the refusal carries the bar and the
+    // reasons so the caller can act on it.
     const unknown = await api()
       .post(`/v1/tickets/${key}/transitions`)
       .set(bearer(consultantToken))
@@ -275,7 +278,19 @@ describe('create and read', () => {
         resolution: { code: 'magic', notes: 'x', solution_candidate: true, time_exemption_reason: 'x' },
       })
       .expect(409);
-    expect(unknown.body.items).toEqual(['unknown_resolution_code']);
+    expect(unknown.body.items).toEqual([
+      'unknown_resolution_code',
+      'resolution_notes_too_short',
+      'unknown_exemption_reason',
+    ]);
+    expect(unknown.body.min_resolution_notes_chars).toBe(40);
+    expect(unknown.body.exemption_reasons).toEqual([
+      'duplicate',
+      'cancelled_by_client',
+      'resolved_by_client',
+      'administrative_close',
+      'merged',
+    ]);
   });
 
   it('resolves with a code, notes, an article candidate and a time exemption, then closes', async () => {
@@ -287,14 +302,24 @@ describe('create and read', () => {
         to: 'resolved',
         resolution: {
           code: 'fixed',
-          notes: 'Rebuilt the cube',
+          notes: 'Rebuilt the consolidation cube and reran the close for the client.',
           solution_candidate: true,
-          time_exemption_reason: 'Fixed by vendor',
+          time_exemption_reason: 'resolved_by_client',
         },
       })
       .expect(201);
     expect(resolved.body.resolved_at).not.toBeNull();
     expect(resolved.body.resolution).toMatchObject({ code: 'fixed', solution_candidate: true });
+    // TB-02: resolving with nothing logged is its own audit event, not one
+    // field of the general update diff.
+    const exempted = await withSuperuser((client) =>
+      client.query<{ new_value: { reason: string } }>(
+        `select new_value from acct.audit_events where event_type = 'ticket.time_exempted' and ticket_id = $1`,
+        [resolved.body.id],
+      ),
+    );
+    expect(exempted.rows).toHaveLength(1);
+    expect(exempted.rows[0].new_value).toMatchObject({ reason: 'resolved_by_client', resolution_code: 'fixed' });
     expect(resolved.body.sla.resolution.met).toBe(true);
     const closed = await api()
       .post(`/v1/tickets/${key}/transitions`)
@@ -544,5 +569,179 @@ describe('usage events', () => {
       withSuperuser((client) => client.query(`delete from rpt.usage_events where actor_id = $1`, [consultantId])),
     ).rejects.toMatchObject({ code: '23001' });
     expect(app.get(DbPools)).toBeDefined();
+  });
+});
+
+/**
+ * The composite resolution gate (TB-02 under revision 3). Two holes it
+ * closes: `time_exemption_reason` was free text, so any character resolved a
+ * ticket with nothing logged against it, and any character was a resolution
+ * note.
+ */
+describe('the close discipline gate', () => {
+  let gateKey: string;
+
+  const open = async (description: string): Promise<string> => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(consultantToken))
+      .send({ account_id: accountId, type: 'incident', short_description: description, impact: 'low', urgency: 'low' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 1, to: 'assigned' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 2, to: 'in_progress' })
+      .expect(201);
+    return created.body.key;
+  };
+
+  const resolve = (key: string, resolution: Record<string, unknown>, version = 3) =>
+    api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version, to: 'resolved', resolution });
+
+  const FULL_NOTES = 'Restarted the data management service and revalidated the load.';
+
+  beforeAll(async () => {
+    gateKey = await open('Gate fixture');
+  });
+
+  it('answers what the gate wants before anything is submitted', async () => {
+    const gate = await api().get(`/v1/tickets/${gateKey}/time-gate`).set(bearer(consultantToken)).expect(200);
+    expect(gate.body).toMatchObject({
+      ticket_key: gateKey,
+      logged_minutes: 0,
+      can_resolve: false,
+      min_resolution_notes_chars: 40,
+    });
+    expect(gate.body.exemption_reasons.map((reason: { key: string }) => reason.key)).toEqual([
+      'duplicate',
+      'cancelled_by_client',
+      'resolved_by_client',
+      'administrative_close',
+      'merged',
+    ]);
+  });
+
+  it('answers 404, never the gate, for a ticket on an account the reader is not granted', async () => {
+    const foreign = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({ account_id: otherAccountId, type: 'incident', short_description: 'Not yours' })
+      .expect(201);
+    await api().get(`/v1/tickets/${foreign.body.key}/time-gate`).set(bearer(consultantToken)).expect(404);
+  });
+
+  it('refuses the free text that used to satisfy it', async () => {
+    const response = await resolve(gateKey, {
+      code: 'fixed',
+      notes: FULL_NOTES,
+      solution_candidate: true,
+      time_exemption_reason: 'no work was needed',
+    }).expect(409);
+    expect(response.body.items).toEqual(['unknown_exemption_reason']);
+    expect(response.body.exemption_reasons).toContain('administrative_close');
+  });
+
+  it('refuses a resolution note nobody could read back', async () => {
+    const response = await resolve(gateKey, {
+      code: 'fixed',
+      notes: 'Fixed',
+      solution_candidate: true,
+      time_exemption_reason: 'administrative_close',
+    }).expect(409);
+    expect(response.body.items).toEqual(['resolution_notes_too_short']);
+    expect(response.body.min_resolution_notes_chars).toBe(40);
+  });
+
+  it('accepts a reason from the list and records the exemption as its own event', async () => {
+    const key = await open('Exempted by the list');
+    const resolved = await resolve(key, {
+      code: 'fixed',
+      notes: FULL_NOTES,
+      solution_candidate: true,
+      time_exemption_reason: 'administrative_close',
+    }).expect(201);
+    expect(resolved.body.resolution.time_exemption_reason).toBe('administrative_close');
+    const events = await withSuperuser((client) =>
+      client.query<{ new_value: { reason: string; to: string } }>(
+        `select new_value from acct.audit_events where event_type = 'ticket.time_exempted' and ticket_id = $1`,
+        [resolved.body.id],
+      ),
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(events.rows[0].new_value).toMatchObject({ reason: 'administrative_close', to: 'resolved' });
+  });
+
+  it('asks for no exemption at all once time is logged, and writes no exemption event', async () => {
+    const key = await open('Worked and logged');
+    await api()
+      .post(`/v1/tickets/${key}/time`)
+      .set(bearer(consultantToken))
+      .send({ performed_on: new Date().toISOString().slice(0, 10), minutes: 45, activity_type: 'analysis' })
+      .expect(201);
+    const gate = await api().get(`/v1/tickets/${key}/time-gate`).set(bearer(consultantToken)).expect(200);
+    expect(gate.body).toMatchObject({ logged_minutes: 45, can_resolve: true });
+    const resolved = await resolve(key, { code: 'fixed', notes: FULL_NOTES, solution_candidate: true }).expect(201);
+    const events = await withSuperuser((client) =>
+      client.query(`select 1 from acct.audit_events where event_type = 'ticket.time_exempted' and ticket_id = $1`, [
+        resolved.body.id,
+      ]),
+    );
+    expect(events.rows).toHaveLength(0);
+  });
+
+  it('follows the account when it narrows the list and moves the bar', async () => {
+    await api()
+      .put(`/v1/accounts/${accountId}/config/close_discipline/override`)
+      .set(bearer(adminToken))
+      .send({
+        body: {
+          min_resolution_notes_chars: 5,
+          time_exemption_reasons: [{ key: 'goodwill', label: 'Written off as goodwill' }],
+        },
+      })
+      .expect(200);
+    const key = await open('Under the account rules');
+    const gate = await api().get(`/v1/tickets/${key}/time-gate`).set(bearer(consultantToken)).expect(200);
+    expect(gate.body.min_resolution_notes_chars).toBe(5);
+    expect(gate.body.exemption_reasons).toEqual([{ key: 'goodwill', label: 'Written off as goodwill' }]);
+
+    // The reason the default list allows is not on this account's list.
+    const refused = await resolve(key, {
+      code: 'fixed',
+      notes: 'Short',
+      solution_candidate: true,
+      time_exemption_reason: 'administrative_close',
+    }).expect(409);
+    expect(refused.body.items).toEqual(['unknown_exemption_reason']);
+
+    await resolve(key, {
+      code: 'fixed',
+      notes: 'Short',
+      solution_candidate: true,
+      time_exemption_reason: 'goodwill',
+    }).expect(201);
+  });
+
+  it('refuses a catalog that would weaken the gate by accident', async () => {
+    const empty = await api()
+      .put(`/v1/accounts/${accountId}/config/close_discipline/override`)
+      .set(bearer(adminToken))
+      .send({ body: { time_exemption_reasons: [] } })
+      .expect(400);
+    expect(empty.body.code).toBe('invalid_config');
+    const bad = await api()
+      .put(`/v1/accounts/${accountId}/config/close_discipline/override`)
+      .set(bearer(adminToken))
+      .send({ body: { min_resolution_notes_chars: -1, time_exemption_reasons: [{ key: 'Bad Key', label: '' }] } })
+      .expect(400);
+    expect(bad.body.problems.length).toBeGreaterThanOrEqual(3);
   });
 });

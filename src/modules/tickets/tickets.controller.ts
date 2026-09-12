@@ -133,6 +133,19 @@ export class TicketsController {
     return this.tickets.scopeRecord(principal, key);
   }
 
+  /**
+   * What the resolve dialog needs before it asks for anything (TB-02): the
+   * time logged so far, whether that alone satisfies the gate, the
+   * completeness bar for the notes, and the exemption reasons this account
+   * accepts. Reading it decides nothing; the gate still runs on the
+   * transition.
+   */
+  @Get(':key/time-gate')
+  @RequirePermission('tickets:view')
+  timeGate(@CurrentPrincipal() principal: Principal, @Param('key') key: string) {
+    return this.tickets.timeGate(principal, key);
+  }
+
   @Get(':key/comments')
   @RequirePermission('tickets:view')
   comments(@CurrentPrincipal() principal: Principal, @Param('key') key: string) {
