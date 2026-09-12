@@ -49,13 +49,17 @@ export type MissingItem =
  * in the seed so the rule has an answer when an account's catalog is missing
  * or malformed: the gate then falls back to these rather than to nothing,
  * which would let any string through.
+ *
+ * The labels live here too, not only the keys. A key-only fallback meant the
+ * picker offered `administrative_close` to a human whenever the catalog was
+ * unreadable, which is the sort of thing that ships.
  */
-export const DEFAULT_TIME_EXEMPTION_REASONS: readonly string[] = [
-  'duplicate',
-  'cancelled_by_client',
-  'resolved_by_client',
-  'administrative_close',
-  'merged',
+export const DEFAULT_TIME_EXEMPTION_REASONS: readonly { key: string; label: string }[] = [
+  { key: 'duplicate', label: 'Duplicate of another ticket' },
+  { key: 'cancelled_by_client', label: 'Cancelled by the client' },
+  { key: 'resolved_by_client', label: 'Resolved by the client' },
+  { key: 'administrative_close', label: 'Administrative close' },
+  { key: 'merged', label: 'Merged into another ticket' },
 ];
 
 /**
@@ -117,7 +121,9 @@ export function minNotesChars(facts: Pick<CloseDisciplineFacts, 'minNotesChars'>
 /** The exemption vocabulary in force; an empty or absent catalog falls back, never opens. */
 export function allowedExemptions(facts: Pick<CloseDisciplineFacts, 'allowedExemptions'>): ReadonlySet<string> {
   const configured = facts.allowedExemptions;
-  if (!configured || configured.size === 0) return new Set(DEFAULT_TIME_EXEMPTION_REASONS);
+  if (!configured || configured.size === 0) {
+    return new Set(DEFAULT_TIME_EXEMPTION_REASONS.map((reason) => reason.key));
+  }
   return configured;
 }
 

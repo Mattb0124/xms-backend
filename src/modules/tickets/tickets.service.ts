@@ -57,6 +57,12 @@ import type {
 } from './tickets.dto.js';
 import { TicketsRepository, ticketKey, toClock, type ClockRow, type TicketRow } from './tickets.repository.js';
 
+/** `config.resolve` answers a missing catalog with a 404, not with nothing. */
+function isConfigMissing(error: unknown): boolean {
+  const body = (error as { getResponse?: () => unknown })?.getResponse?.();
+  return (body as { code?: string })?.code === 'config_missing';
+}
+
 /**
  * The ticket service (Ticket Management technical 3.3). The only writer of
  * ticket state; every mutation locks the row, validates against the
@@ -1025,27 +1031,27 @@ export class TicketsService {
           assignments.resolution_notes = dto.resolution.notes ?? null;
           assignments.solution_article_id = dto.resolution.solution_article_id ?? null;
           assignments.solution_candidate = Boolean(dto.resolution.solution_candidate);
-          assignments.time_exemption_reason = dto.resolution.time_exemption_reason ?? null;
+          // Trimmed once, here, because the gate compared the trimmed value
+          // against the catalog: storing the raw one meant " duplicate " and
+          // "duplicate" were two reasons in every report that groups by it.
+          const exemption = dto.resolution.time_exemption_reason?.trim() || null;
+          assignments.time_exemption_reason = exemption;
           // A ticket resolved with nothing logged against it is its own
           // event, not one field of a general update (TB-02, Time & Budget
           // 5.2: "each is an audit event"). It is the row a reconciler and
           // the contract manager look for, so it says so in its own type.
-          if (loggedMinutes <= 0 && dto.resolution.time_exemption_reason) {
+          if (requirements.includes('time_logged') && loggedMinutes <= 0 && exemption) {
             entries.push({
               entityKind: 'ticket',
               entityId: before.id,
               ticketId: before.id,
               eventType: 'ticket.time_exempted',
               field: 'time_exemption_reason',
-              newValue: {
-                reason: dto.resolution.time_exemption_reason,
-                resolution_code: dto.resolution.code ?? null,
-                to: dto.to,
-              },
+              newValue: { reason: exemption, resolution_code: dto.resolution.code ?? null, to: dto.to },
             });
             outboxEvents.push({
               type: 'ticket.time_exempted',
-              payload: { reason: dto.resolution.time_exemption_reason, to: dto.to },
+              payload: { reason: exemption, to: dto.to },
             });
           }
         }
@@ -2012,13 +2018,34 @@ export class TicketsService {
     tx: Tx,
     accountId: string,
   ): Promise<{ allowedExemptions: Set<string>; minNotesChars: number; reasons: { key: string; label: string }[] }> {
-    const resolved = await this.config.resolve<CloseDisciplineBody>(tx, 'close_discipline', '*', accountId);
-    const reasons = Array.isArray(resolved.body?.time_exemption_reasons)
-      ? resolved.body.time_exemption_reasons.filter((reason) => typeof reason?.key === 'string')
-      : DEFAULT_TIME_EXEMPTION_REASONS.map((key) => ({ key, label: key }));
+    // A catalog that is not there must not stop the product working. This is
+    // called on EVERY transition, not only a resolving one, and
+    // `config.resolve` throws `config_missing` rather than returning nothing:
+    // without this catch, a database bootstrapped before TB-02 shipped, or one
+    // whose administrator retired the active version, answers 404 to every
+    // pause, triage, cancel and close on every ticket. The gate falls back to
+    // the built-in vocabulary, which is the behaviour the rest of this file
+    // already claimed and did not have.
+    let body: CloseDisciplineBody | undefined;
+    try {
+      body = (await this.config.resolve<CloseDisciplineBody>(tx, 'close_discipline', '*', accountId)).body;
+    } catch (error) {
+      if (!isConfigMissing(error)) throw error;
+    }
+    const configured = Array.isArray(body?.time_exemption_reasons)
+      ? body.time_exemption_reasons.filter(
+          (reason) => typeof reason?.key === 'string' && typeof reason?.label === 'string',
+        )
+      : [];
+    // An override replaces the default rather than merging with it, so a
+    // catalog that sets only the bar leaves no reasons at all. Falling back
+    // here keeps the list the gate enforces and the list the dialog offers
+    // the same list; they disagreeing is how a picker comes to advertise
+    // nothing while the gate accepts five.
+    const reasons = configured.length > 0 ? configured : [...DEFAULT_TIME_EXEMPTION_REASONS];
     return {
       allowedExemptions: new Set(reasons.map((reason) => reason.key)),
-      minNotesChars: minNotesChars({ minNotesChars: resolved.body?.min_resolution_notes_chars }),
+      minNotesChars: minNotesChars({ minNotesChars: body?.min_resolution_notes_chars }),
       reasons,
     };
   }

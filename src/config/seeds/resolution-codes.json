@@ -6,6 +6,7 @@
     { "key": "user_guidance", "label": "User guidance", "no_solution": false },
     { "key": "data_correction", "label": "Data correction", "no_solution": false },
     { "key": "vendor_fix", "label": "Vendor fix", "no_solution": false },
+    { "key": "delivered", "label": "Delivered as specified", "no_solution": false },
     { "key": "no_fault_found", "label": "No fault found", "no_solution": true },
     { "key": "duplicate", "label": "Duplicate", "no_solution": true },
     { "key": "cancelled_by_client", "label": "Cancelled by client", "no_solution": true },

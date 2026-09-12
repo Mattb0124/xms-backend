@@ -745,3 +745,190 @@ describe('the close discipline gate', () => {
     expect(bad.body.problems.length).toBeGreaterThanOrEqual(3);
   });
 });
+
+/**
+ * A resolved project task says what it delivered (2026-09-12). The five
+ * resolving transitions did not ask for the same things: this one asked for
+ * logged time and nothing else, so a task reached Done with no resolution
+ * code and no notes, invisible to every report that groups by code.
+ */
+describe('the project task gate', () => {
+  const NOTES = 'Migrated the reporting folder and handed the runbook to the client.';
+
+  const openTask = async (): Promise<string> => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(consultantToken))
+      .send({ account_id: accountId, type: 'project_task', short_description: 'Azure Files cutover' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 1, to: 'planned' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 2, to: 'in_progress' })
+      .expect(201);
+    return created.body.key;
+  };
+
+  it('refuses Done without a resolution code and notes', async () => {
+    const key = await openTask();
+    const response = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 3, to: 'done' })
+      .expect(409);
+    expect(response.body.items).toEqual(['resolution_code', 'resolution_notes', 'time_logged']);
+  });
+
+  it('never asks a project task for a solution link, since delivered work is not an article', async () => {
+    const key = await openTask();
+    // Time logged rather than exempted: planned work that took no time at all
+    // is a strange thing to assert, and it keeps this test independent of the
+    // exemption catalog the block above narrows on this account.
+    await api()
+      .post(`/v1/tickets/${key}/time`)
+      .set(bearer(consultantToken))
+      .send({ performed_on: new Date().toISOString().slice(0, 10), minutes: 120, activity_type: 'analysis' })
+      .expect(201);
+    const response = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 3, to: 'done', resolution: { code: 'delivered', notes: NOTES } })
+      .expect(201);
+    expect(response.body.resolution).toMatchObject({ code: 'delivered', solution_article_id: null });
+  });
+
+  it('offers Delivered as specified in the catalog, and it waives nothing', async () => {
+    const catalogs = await api().get(`/v1/catalogs?account_id=${accountId}`).set(bearer(consultantToken)).expect(200);
+    // Not a no-solution code: one catalog serves every ticket type, so
+    // marking it would waive the solution link on incidents too.
+    expect(catalogs.body.resolution_codes).toContainEqual({
+      key: 'delivered',
+      label: 'Delivered as specified',
+      no_solution: false,
+    });
+  });
+});
+
+/**
+ * Two holes the QA pass found in TB-02 itself, both of which shipped green.
+ */
+describe('the gate under configuration it did not expect', () => {
+  const NOTES = 'Restarted the data management service and revalidated the load.';
+
+  const openIncident = async (): Promise<string> => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(consultantToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'Catalog edge',
+        impact: 'low',
+        urgency: 'low',
+      })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 1, to: 'assigned' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 2, to: 'in_progress' })
+      .expect(201);
+    return created.body.key;
+  };
+
+  it('does not let the delivered code waive the solution link on an incident', async () => {
+    // There is one resolution-code catalog for every ticket type, so a code
+    // marked no-solution waives the article requirement wherever it is
+    // picked. `delivered` exists for project tasks and changes, neither of
+    // which asks for a link; marking it no-solution would have reopened the
+    // gate 0053 had just closed on incidents, requests and problems.
+    const key = await openIncident();
+    await api()
+      .post(`/v1/tickets/${key}/time`)
+      .set(bearer(consultantToken))
+      .send({ performed_on: new Date().toISOString().slice(0, 10), minutes: 30, activity_type: 'analysis' })
+      .expect(201);
+    const refused = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 3, to: 'resolved', resolution: { code: 'delivered', notes: NOTES } })
+      .expect(409);
+    expect(refused.body.items).toEqual(['solution_link']);
+  });
+
+  it('keeps working when there is no close-discipline catalog at all', async () => {
+    // `config.resolve` answers a missing catalog with a 404, and this is read
+    // on every transition, not only a resolving one. Without the fallback a
+    // database bootstrapped before TB-02 shipped answers 404 to every pause,
+    // triage and close on every ticket.
+    // A fresh account, because `config.resolve` caches per account for sixty
+    // seconds: retiring the rows under an account the tests have already
+    // touched reads the cached catalog rather than its absence.
+    const fresh = await api()
+      .post('/v1/admin/accounts')
+      .set(bearer(adminToken))
+      .send({ key: 'NOC', name: 'No catalog' })
+      .expect(201);
+    await api().post(`/v1/admin/accounts/${fresh.body.id}/activate`).set(bearer(adminToken)).expect(201);
+    await api()
+      .post(`/v1/accounts/${fresh.body.id}/contracts`)
+      .set(bearer(adminToken))
+      .send({ name: 'Retainer', model: 'retainer', period_hours: 40 })
+      .expect(201);
+    await withSuperuser((client) =>
+      client.query(`update op.config_defaults set status = 'retired' where kind = 'close_discipline'`),
+    );
+    try {
+      const created = await api()
+        .post('/v1/tickets')
+        .set(bearer(adminToken))
+        .send({
+          account_id: fresh.body.id,
+          type: 'incident',
+          short_description: 'No catalog',
+          impact: 'low',
+          urgency: 'low',
+        })
+        .expect(201);
+      const key = created.body.key;
+      await api()
+        .post(`/v1/tickets/${key}/transitions`)
+        .set(bearer(adminToken))
+        .send({ version: 1, to: 'assigned' })
+        .expect(201);
+      await api()
+        .post(`/v1/tickets/${key}/transitions`)
+        .set(bearer(adminToken))
+        .send({ version: 2, to: 'in_progress' })
+        .expect(201);
+      // A transition that is nothing to do with the gate still works.
+      const paused = await api()
+        .post(`/v1/tickets/${key}/transitions`)
+        .set(bearer(adminToken))
+        .send({ version: 3, to: 'awaiting_client', pause_reason: 'awaiting_client', note: 'Waiting on the client' })
+        .expect(201);
+      expect(paused.body.state).toBe('awaiting_client');
+      // And the gate still refuses free text rather than opening.
+      const gate = await api().get(`/v1/tickets/${key}/time-gate`).set(bearer(adminToken)).expect(200);
+      expect(gate.body.exemption_reasons.map((reason: { key: string }) => reason.key)).toContain(
+        'administrative_close',
+      );
+      // The fallback carries real labels, not raw keys, because the picker
+      // shows them to a person.
+      expect(gate.body.exemption_reasons.every((reason: { label: string }) => /[A-Z]/.test(reason.label))).toBe(true);
+    } finally {
+      await withSuperuser((client) =>
+        client.query(`update op.config_defaults set status = 'active' where kind = 'close_discipline'`),
+      );
+    }
+  });
+});

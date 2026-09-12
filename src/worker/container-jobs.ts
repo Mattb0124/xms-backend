@@ -63,8 +63,21 @@ export function containerReason(row: ContainerCandidate, thresholds: ContainerTh
   return `Container case detected: ${crossed.join('; ')}. Raised for a scope decision rather than left to accrue.`;
 }
 
-/** Open states a container case can still be caught in; a closed ticket is history. */
-const OPEN_FOR_DETECTION = ['new', 'triaged', 'in_progress', 'pending', 'on_hold'];
+/**
+ * A ticket is still open unless it has reached a resolving or terminal state.
+ *
+ * This was an allowlist of state keys, and three of the five (`triaged`,
+ * `pending`, `on_hold`) exist in no machine this product ships: the sweep
+ * silently skipped `assigned`, `triage`, `assessment`, `investigating`,
+ * `known_error`, `planned`, `blocked` and every paused state, which is most
+ * of what a container case actually looks like. An allowlist of states is the
+ * wrong shape anyway, because the machines are configurable per account and
+ * an account that renames a state would drop out of detection without anyone
+ * noticing. `resolved_at is null` and the two terminal states are what the
+ * rest of the codebase means by open (`OPEN_STATES_EXCLUDED`), and the sweep
+ * now means the same thing.
+ */
+const CLOSED_STATES = ['closed', 'cancelled'];
 
 @Injectable()
 export class ContainerJobs {
@@ -151,7 +164,7 @@ export class ContainerJobs {
     const effort = `(select coalesce(sum(e.minutes), 0)::int from acct.time_entries e where e.ticket_id = t.id)`;
     const elapsed = `extract(day from now() - t.created_at)::int`;
     const crossed: string[] = [];
-    const values: unknown[] = [OPEN_FOR_DETECTION, batch];
+    const values: unknown[] = [CLOSED_STATES, batch];
     if (thresholds.timeEntries !== null) {
       values.push(thresholds.timeEntries);
       crossed.push(`${entries} >= $${values.length}`);
@@ -175,7 +188,8 @@ export class ContainerJobs {
               ${elapsed} as elapsed_days
          from acct.tickets t
         where t.container_detected_at is null
-          and t.state = any ($1::text[])
+          and t.state <> all ($1::text[])
+          and t.resolved_at is null
           and t.out_of_scope = 'none'
           and (${crossed.join(' or ')})
         order by t.created_at

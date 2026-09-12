@@ -3,6 +3,7 @@ import type { RequestContext } from '../../../common/auth/decorators.js';
 import type { Principal } from '../../../common/auth/principal.js';
 import { actorOf, AuditService } from '../../../common/audit/audit.service.js';
 import { SecurityEventsService } from '../../../common/events/security-events.service.js';
+import { StaleVersionError } from '../../../db/repository.base.js';
 import { UnitOfWork } from '../../../db/unit-of-work.js';
 import {
   ACCOUNT_EDITABLE,
@@ -157,7 +158,15 @@ export class AccountsService {
       if (!candidate.granted) {
         throw new BadRequestException({ code: 'owner_not_granted', account_id: id });
       }
-      if (before.owner_user_id === dto.owner_user_id) return before;
+      // A handover to the owner already in place changes nothing, but it is
+      // still a write the caller made against a version they read. Refusing
+      // the stale one here keeps the answer the same as it would be for any
+      // other no-op edit, instead of reporting success to somebody whose copy
+      // of the record is behind.
+      if (before.owner_user_id === dto.owner_user_id) {
+        if (before.version !== dto.version) throw new StaleVersionError('account', id);
+        return before;
+      }
 
       const previousName = await this.accounts.ownerName(tx, before.owner_user_id);
       const after = await this.accounts.update(tx, id, dto.version, { owner_user_id: dto.owner_user_id });

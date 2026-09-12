@@ -286,6 +286,36 @@ describe('container-case detection', () => {
     expect(detail.reason).toContain('open 40 days against a threshold of 30');
   });
 
+  /**
+   * The sweep used to test an allowlist of state keys, three of which
+   * (`triaged`, `pending`, `on_hold`) exist in no machine this product
+   * ships. Every case above happens to sit in `in_progress`, so all of them
+   * passed while the detector silently ignored `assigned`, `investigating`,
+   * `planned`, `blocked` and every paused state: most of what a container
+   * case looks like. Open is now "not resolved and not terminal", and this
+   * asserts it against the states the old list missed.
+   */
+  it('catches a container case in any open state, not just the one the tests happened to use', async () => {
+    for (const state of ['assigned', 'awaiting_client', 'awaiting_third_party']) {
+      const key = await ticketWithTime(`Sitting in ${state}`, 1);
+      await rawTicketUpdate(numberOf(key), `state = '${state}', created_at = now() - interval '60 days'`);
+      expect(await containers.sweep()).toBe('flagged 1');
+      const row = await ticketRow(key);
+      expect(row.out_of_scope).toBe('flagged');
+      expect((row.detail as { reason: string }).reason).toContain('open 60 days');
+    }
+  });
+
+  it('leaves a resolved ticket alone even before it is closed', async () => {
+    const key = await ticketWithTime('Resolved, not yet closed', 1);
+    await rawTicketUpdate(
+      numberOf(key),
+      `state = 'resolved', resolved_at = now(), created_at = now() - interval '90 days'`,
+    );
+    expect(await containers.sweep()).toBe('flagged 0');
+    expect((await ticketRow(key)).out_of_scope).toBe('none');
+  });
+
   it('refuses a threshold of zero, which would mean flag everything', async () => {
     const response = await api()
       .put(`/v1/admin/accounts/${accountId}/settings`)

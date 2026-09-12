@@ -126,7 +126,6 @@ export class WorkerModule implements OnModuleInit {
     this.runner.schedule(this.sla.sweeper());
     this.runner.schedule(this.sla.atRisk());
     this.runner.schedule(this.containers.detection());
-    this.runner.schedule(this.containers.detection());
     this.runner.schedule(this.snapshots.job());
     this.runner.schedule(this.suggestions.expiryJob());
     this.runner.schedule(this.digests.digestJob());
