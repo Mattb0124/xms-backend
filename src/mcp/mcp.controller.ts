@@ -7,7 +7,8 @@ import { KnowledgeService } from '../modules/knowledge/knowledge.module.js';
 import { ReportingService } from '../modules/reporting/reporting.service.js';
 import { TicketsService } from '../modules/tickets/tickets.service.js';
 import { TimeService } from '../modules/time/time.module.js';
-import { ToolGate, ToolWithheld, type GateScope, type WithheldReason } from './gate.js';
+import { SecurityEventsService } from '../common/events/security-events.service.js';
+import { ToolGate, ToolWithheld, emptyTally, type GateScope, type WithheldReason } from './gate.js';
 import { buildTools, type McpTool } from './tools.js';
 
 /** JSON-RPC 2.0, the subset the Model Context Protocol uses over streamable HTTP. */
@@ -90,7 +91,48 @@ export class McpController {
   constructor(
     private readonly registry: ToolRegistry,
     private readonly gate: ToolGate,
+    private readonly security: SecurityEventsService,
   ) {}
+
+  /**
+   * The security stream's record of one tool call (ADR-16: every AI egress
+   * writes a security event; Audit & Analytics 4.1).
+   *
+   * The actor is `ai`, not the user whose token it is, because AI-10 asks that
+   * an AI act be distinguishable from a person's; who it acted for is on
+   * `actorId` and `actorName`, so both questions are answerable from one row.
+   *
+   * Written on a success as well as a refusal, and with a zero tally when
+   * nothing needed masking. The event type is the catalog's name for "account
+   * data went towards a model", not for "something was masked": a trail that
+   * recorded only the calls that happened to carry a credential would be a
+   * trail with holes exactly where nobody thought to look.
+   */
+  private async writeEgress(
+    principal: Principal,
+    ctx: RequestContext,
+    tool: McpTool,
+    outcome: 'success' | 'withheld' | 'failed',
+    accountIds: readonly string[],
+    attrs: Record<string, unknown>,
+  ): Promise<void> {
+    await this.security.write({
+      type: outcome === 'success' ? 'ai.egress.redacted' : 'ai.turn.failed',
+      outcome,
+      // One account names itself; a tool spanning accounts carries them in
+      // attrs rather than pretending the egress belonged to one of them.
+      accountId: accountIds.length === 1 ? accountIds[0] : null,
+      actorKind: 'ai',
+      actorId: principal.userId,
+      actorName: `Axel (for ${principal.displayName})`,
+      principalKind: principal.kind,
+      sessionId: principal.sessionId,
+      requestId: ctx.requestId,
+      entityKind: 'mcp_tool',
+      entityId: tool.name,
+      attrs: { tool: tool.name, scope: tool.scope, account_ids: [...accountIds], ...attrs },
+    });
+  }
 
   @Post()
   async rpc(
@@ -176,12 +218,13 @@ export class McpController {
       return rpcError(id, -32602, parsed.error.issues.map((issue) => issue.message).join('; '));
     }
 
+    let scope: GateScope | undefined;
     try {
       // The switch first, then the tool, then the redaction (AI-11, AI-12).
       // The switch is answered before the tool runs rather than after: reading
       // an account that turned AI off is itself the thing being refused, not
       // just the answer.
-      const scope = await this.scopeFor(principal, tool, parsed.data as Record<string, unknown>);
+      scope = await this.scopeFor(principal, tool, parsed.data as Record<string, unknown>);
       const value = await tool.run(principal, parsed.data, ctx, { accountIds: scope.accountIds });
       // Confined, then redacted, in that order: a row from an account with AI
       // off is dropped before anything is masked, so one such row carrying a
@@ -189,7 +232,20 @@ export class McpController {
       // Across accounts the strictest profile in the set is the one used, so
       // an account asking for strict redaction gets it even in a shared
       // answer. That over-redacts the others, which is the right way to fail.
-      const cleaned = this.gate.clean(this.gate.confine(value, scope.accountIds), scope.profile, scope.people);
+      const tally = emptyTally();
+      const cleaned = this.gate.clean(
+        this.gate.confine(value, scope.accountIds, tally),
+        scope.profile,
+        scope.people,
+        tally,
+      );
+      await this.writeEgress(principal, ctx, tool, 'success', scope.accountIds, {
+        profile: scope.profile,
+        // Occurrences, not distinct secrets: see EgressTally.
+        masked_matches: tally.maskedMatches,
+        confined_rows: tally.confined,
+        writes: tool.writes === true,
+      });
       return {
         jsonrpc: '2.0',
         id,
@@ -203,6 +259,14 @@ export class McpController {
       // vocabulary, so the agent can tell "AI is off for this account" from
       // "that ticket does not exist" and say so to the person.
       if (error instanceof ToolWithheld) {
+        await this.writeEgress(
+          principal,
+          ctx,
+          tool,
+          'withheld',
+          error.accountId ? [error.accountId] : (scope?.accountIds ?? []),
+          { code: error.reason },
+        );
         return {
           jsonrpc: '2.0',
           id,
@@ -214,6 +278,10 @@ export class McpController {
       // of the turn dying. The words are the service's own; nothing here
       // invents a reason or leaks one the caller should not see.
       const message = error instanceof Error ? error.message : 'The tool failed.';
+      // The domain refused or broke. Recorded too: a tool that fails on every
+      // call is a thing the security dashboard should be able to show, and the
+      // wording is the service's own, which the reader is entitled to see.
+      await this.writeEgress(principal, ctx, tool, 'failed', scope?.accountIds ?? [], { detail: message });
       return { jsonrpc: '2.0', id, result: { isError: true, content: [{ type: 'text', text: message }] } };
     }
   }

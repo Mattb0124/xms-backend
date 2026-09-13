@@ -24,11 +24,44 @@ export interface GateScope {
   readonly people: readonly Person[];
 }
 
+/**
+ * What left the boundary on one tool call, so the egress security event can say
+ * so rather than just that one happened (ADR-16, Audit & Analytics 4.1).
+ *
+ * Counted rather than sampled: `redact` already returns its matches per kind and
+ * the walk throws them away otherwise, so this is the cheapest honest record of
+ * what was masked. `confined` is the rows dropped because their account has AI
+ * off, which is the other thing that changed the answer on the way out.
+ *
+ * `maskedMatches` counts **occurrences, not distinct secrets**, and the name says
+ * so because the difference misleads exactly the reader this event is for. One
+ * credential that appears twice in a payload counts two: `get_ticket_thread`
+ * carries a work note under both `work_notes` and `timeline`, so a single
+ * `api_key=` in one note is masked twice and tallies two. Deduplicating would
+ * mean hashing the matched text, which `redact` does not return and which would
+ * put the secret's fingerprint in the security stream to save a reader one
+ * inference. Counting honestly and naming it precisely is the better trade.
+ */
+export interface EgressTally {
+  maskedMatches: Record<string, number>;
+  confined: number;
+}
+
+export const emptyTally = (): EgressTally => ({ maskedMatches: {}, confined: 0 });
+
 /** Why a tool answered nothing. The adapter's own vocabulary (AI-11, AI-12). */
 export type WithheldReason = 'switch_off' | 'residency' | 'kill_switch' | 'redaction_refused';
 
 export class ToolWithheld extends Error {
-  constructor(readonly reason: WithheldReason) {
+  /**
+   * The account the refusal was about, where one account was in question. A
+   * tool spanning accounts has none, and the security event then carries the
+   * caller's scope instead of inventing one.
+   */
+  constructor(
+    readonly reason: WithheldReason,
+    readonly accountId?: string,
+  ) {
     super(reason);
     this.name = 'ToolWithheld';
   }
@@ -108,7 +141,7 @@ export class ToolGate {
   async profileFor(principal: Principal, accountId: string): Promise<RedactionProfile> {
     return this.uow.run(principal, async (tx) => {
       const effective = await this.settings.effective(tx, accountId);
-      if (!effective.on) throw new ToolWithheld(effective.reason ?? 'switch_off');
+      if (!effective.on) throw new ToolWithheld(effective.reason ?? 'switch_off', accountId);
       return (effective.settings?.redaction_profile ?? 'standard') as RedactionProfile;
     });
   }
@@ -148,8 +181,8 @@ export class ToolGate {
    * masking is refused, which is the one case where the right answer is to
    * send nothing at all.
    */
-  clean<T>(value: T, profile: RedactionProfile, people: readonly Person[] = []): T {
-    return this.walk(value, profile, people) as T;
+  clean<T>(value: T, profile: RedactionProfile, people: readonly Person[] = [], tally?: EgressTally): T {
+    return this.walk(value, profile, people, tally) as T;
   }
 
   /**
@@ -167,7 +200,7 @@ export class ToolGate {
    * permission `reports:view-portfolio`: a total over accounts is what that
    * permission is for, and it carries no account's content.
    */
-  confine<T>(value: T, accountIds: string[]): T {
+  confine<T>(value: T, accountIds: string[], tally?: EgressTally): T {
     const allowed = new Set(accountIds);
     const ownedByOther = (item: unknown): boolean => {
       if (!item || typeof item !== 'object') return false;
@@ -175,7 +208,11 @@ export class ToolGate {
       return typeof owner === 'string' && !allowed.has(owner);
     };
     const prune = (item: unknown): unknown => {
-      if (Array.isArray(item)) return item.filter((entry) => !ownedByOther(entry)).map(prune);
+      if (Array.isArray(item)) {
+        const kept = item.filter((entry) => !ownedByOther(entry));
+        if (tally) tally.confined += item.length - kept.length;
+        return kept.map(prune);
+      }
       if (item && typeof item === 'object' && !(item instanceof Date)) {
         return Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, prune(entry)]));
       }
@@ -185,16 +222,23 @@ export class ToolGate {
     return prune(value) as T;
   }
 
-  private walk(value: unknown, profile: RedactionProfile, people: readonly Person[]): unknown {
+  private walk(value: unknown, profile: RedactionProfile, people: readonly Person[], tally?: EgressTally): unknown {
     if (typeof value === 'string') {
       const result = redact(value, profile, people);
       if (result.refused) throw new ToolWithheld('redaction_refused');
+      if (tally) {
+        for (const [kind, count] of Object.entries(result.counts)) {
+          tally.maskedMatches[kind] = (tally.maskedMatches[kind] ?? 0) + count;
+        }
+      }
       return result.text;
     }
-    if (Array.isArray(value)) return value.map((item) => this.walk(item, profile, people));
+    if (Array.isArray(value)) return value.map((item) => this.walk(item, profile, people, tally));
     if (value && typeof value === 'object') {
       if (value instanceof Date) return value;
-      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.walk(item, profile, people)]));
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, this.walk(item, profile, people, tally)]),
+      );
     }
     return value;
   }

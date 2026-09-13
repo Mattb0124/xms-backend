@@ -9,6 +9,7 @@ import type { TicketsService } from '../modules/tickets/tickets.service.js';
 import type { TimeService } from '../modules/time/time.module.js';
 import type { AiSettingsService, EffectiveSwitch } from '../modules/ai/ai-settings.service.js';
 import type { UnitOfWork } from '../db/unit-of-work.js';
+import type { SecurityEvent, SecurityEventsService } from '../common/events/security-events.service.js';
 import { ToolGate } from './gate.js';
 import { McpController, ToolRegistry } from './mcp.controller.js';
 import { buildTools } from './tools.js';
@@ -78,8 +79,19 @@ function harness(
   const settings = { effective } as unknown as AiSettingsService;
   const gate = new ToolGate(uow, settings, tickets);
 
+  // The security stream is collected rather than stubbed away: ADR-16 asks that
+  // every AI egress write an event, and an assertion on a mock that was never
+  // called would pass whether or not one was written.
+  const events: SecurityEvent[] = [];
+  const security = {
+    write: vi.fn(async (event: SecurityEvent) => {
+      events.push(event);
+    }),
+  } as unknown as SecurityEventsService;
+
   return {
-    controller: new McpController(registry, gate),
+    controller: new McpController(registry, gate, security),
+    events,
     registry,
     tickets,
     knowledge,
@@ -545,5 +557,123 @@ describe('the strict redaction profile', () => {
     };
 
     expect(reply.result.structuredContent.short_description).toBe('Jo Tan cannot reach the gateway');
+  });
+});
+
+/**
+ * ADR-16: every guard decision, admin change, export, download and AI egress
+ * writes a security event. The MCP is an AI egress and wrote none until
+ * 2026-09-13; the Axel adapter had been writing them all along, so the gap was
+ * the MCP's alone rather than a missing mechanism.
+ */
+describe('the security stream', () => {
+  it('records a successful tool call as an egress, with what was masked', async () => {
+    const { controller, events } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({
+          key: 'CS1000008',
+          account_id: 'acc-1',
+          short_description: 'Reset the sync job, api_key=sk_live_9f2b71c4ad and AKIAIOSFODNN7EXAMPLE',
+        }),
+      },
+    });
+
+    await controller.rpc(principal(['tickets:view']), CTX, call('get_ticket', { key: 'CS1000008' }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'ai.egress.redacted',
+      outcome: 'success',
+      accountId: 'acc-1',
+      // AI-10: the act is the AI's, and who it acted for is still answerable.
+      actorKind: 'ai',
+      actorId: 'u1',
+      actorName: 'Axel (for Ana Costa)',
+      principalKind: 'harness',
+      entityKind: 'mcp_tool',
+      entityId: 'get_ticket',
+    });
+    expect(events[0]?.attrs).toMatchObject({
+      tool: 'get_ticket',
+      profile: 'standard',
+      masked_matches: { credential: 1, aws_key: 1 },
+      confined_rows: 0,
+      writes: false,
+    });
+  });
+
+  it('writes the egress even when nothing needed masking, so the trail has no holes', async () => {
+    const { controller, events } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({ key: 'CS1000008', account_id: 'acc-1', short_description: 'Printer jam' }),
+      },
+    });
+
+    await controller.rpc(principal(['tickets:view']), CTX, call('get_ticket', { key: 'CS1000008' }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('ai.egress.redacted');
+    expect(events[0]?.attrs).toMatchObject({ masked_matches: {}, confined_rows: 0 });
+  });
+
+  it('records a refusal with the rule that caused it, and the account it was about', async () => {
+    const { controller, events } = harness({ ai: () => switchOff('switch_off') });
+
+    await controller.rpc(principal(['tickets:view']), CTX, call('get_ticket', { key: 'CS1000008' }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'ai.turn.failed',
+      outcome: 'withheld',
+      accountId: 'acc-1',
+      actorKind: 'ai',
+      entityId: 'get_ticket',
+    });
+    expect(events[0]?.attrs).toMatchObject({ code: 'switch_off' });
+  });
+
+  it('counts the rows a cross-account answer dropped', async () => {
+    const who = { ...principal(['tickets:view']), accountIds: ['acc-1', 'acc-2'] } as Principal;
+    const { controller, events } = harness({
+      knowledge: {
+        search: vi.fn().mockResolvedValue([
+          { key: 'KB100001', account_id: 'acc-1', title: 'Reset the VPN profile' },
+          { key: 'KB100002', account_id: 'acc-2', title: 'Rotate the gateway certificate' },
+        ]),
+      },
+      ai: (accountId) => (accountId === 'acc-2' ? switchOff('switch_off') : switchOn()),
+    });
+
+    await controller.rpc(who, CTX, call('search_solutions', { q: 'vpn' }));
+
+    expect(events[0]?.attrs).toMatchObject({ confined_rows: 1, account_ids: ['acc-1'] });
+    // One account is named on the row; a wider scope would live only in attrs.
+    expect(events[0]?.accountId).toBe('acc-1');
+  });
+
+  it('records a tool that failed in the domain, with the wording the service chose', async () => {
+    const { controller, events } = harness({
+      tickets: { get: vi.fn().mockRejectedValue(new Error('This ticket is not visible to you.')) },
+    });
+
+    await controller.rpc(principal(['tickets:view']), CTX, call('get_ticket', { key: 'CS1000008' }));
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'ai.turn.failed', outcome: 'failed' });
+    expect(events[0]?.attrs).toMatchObject({ detail: 'This ticket is not visible to you.' });
+  });
+
+  it('writes nothing when the permission guard refused, because no tool ran', async () => {
+    const { controller, events } = harness();
+
+    await expect(
+      controller.rpc(
+        principal(['tickets:work']),
+        CTX,
+        call('propose_summary', { key: 'CS1000008', summary: 'x', confidence: 0.9 }),
+      ),
+    ).rejects.toMatchObject({ response: { code: 'forbidden' } });
+
+    expect(events).toHaveLength(0);
   });
 });
