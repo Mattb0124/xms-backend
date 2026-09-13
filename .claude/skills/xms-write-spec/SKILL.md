@@ -7,7 +7,52 @@ description: 'Author a feature spec pair (FUNCTIONAL-SPEC.md + TECHNICAL-SPEC.md
 
 Every substantial XMS feature starts as a spec pair in `02-modules/<feature-slug>/`: a `FUNCTIONAL-SPEC.md` (what and why, no code) and a `TECHNICAL-SPEC.md` (how, grounded in the real codebase). After the feature ships, a third file `WHAT-WAS-DONE.md` records the as-built result (see the `xms-write-what-was-done` skill). Match this house shape exactly so specs stay scannable and cross-linked.
 
-## Where specs live
+## Where a spec lives, and where it is edited (changed 2026-09-13)
+
+**ClickUp is the system of record for specs from 2026-09-13.** A spec is edited on its
+ClickUp page, and the markdown in this repository is the frozen historical copy of how
+it read on that date. This reverses the rule that stood until 2026-09-13, when ClickUp
+was a one-way copy published from the repository; the map in
+`03-delivery/CLICKUP.md` carries the full ruling and the document and page ids.
+
+The reason for the change: the one-way copy kept going stale. On 2026-09-13 fourteen
+pages had drifted from disk, including the entire ADR-19 rename of the MCP's home, and
+two current plans (the go-live plan and its implementation plan) had never been
+published at all, so ClickUp was showing a superseded plan as though it were live. A
+copy nobody is obliged to refresh is a copy that lies.
+
+So:
+
+- **Editing an existing spec:** find its `document_id` and `page_id` in
+  `03-delivery/CLICKUP.md` and edit the ClickUp page with
+  `clickup_update_document_page`. Do not edit the repository markdown and expect anyone
+  to read it.
+- **Writing a new spec:** author it in the house shape below, then create the page with
+  `clickup_create_document_page` under the right document and **add its row to
+  `03-delivery/CLICKUP.md`** in the same change. A page that is not in the map is a page
+  the next person cannot find.
+- **Reading a spec:** read the ClickUp page. The repository copy is only safe for
+  anything dated on or before 2026-09-13.
+- The mechanics (document ids, the Specs folder, the create and update calls, the
+  markdown ClickUp rejects) are in the `aibl-clickup` skill's **Docs** section.
+
+Three things the repository still owns, because they are code rather than prose, and
+they are the reason the markdown tree is frozen rather than deleted:
+
+1. `00-overview/scripts/build_register.py` reads the requirements **workbook** and writes
+   `requirements.csv`, `requirements.json` and `REQUIREMENTS-TRACEABILITY.md`. It still
+   runs and is still never hand-edited; its markdown output now has to be published to
+   ClickUp after each regeneration, like any other spec change.
+2. `00-overview/scripts/check_links.py` validates relative links between the frozen
+   markdown files. It cannot see ClickUp pages, so cross-document links written on a
+   ClickUp page are not checked by anything: state the document and section by name
+   ("AI Integration section 4") rather than relying on a path that will not resolve.
+3. Every skill and `CLAUDE.md` that cites a spec by path and section (for example
+   "Security & Tenancy section 2.1") now points at the frozen copy. Those citations are
+   still the right way to name a section; treat the path as the name of the document,
+   not as a live link.
+
+## The house shape (unchanged)
 
 - One directory per feature: `C:/Users/matt.brown/Documents/02-modules/<feature-slug>/` (kebab-case slug, e.g. `notification-system`, `requirements-rtm`, `commentary-activity`).
 - Two files at authoring time: `FUNCTIONAL-SPEC.md`, `TECHNICAL-SPEC.md`. They cross-link each other in the header and to related specs (e.g. `[Commentary & Activity](../commentary-activity/FUNCTIONAL-SPEC.md)`).
@@ -77,7 +122,12 @@ Fixed section order. The rule that separates a good XMS technical spec from a ba
 4. Before writing the technical spec, VERIFY the current state: Grep/Read the files you will build on, confirm the paths and signatures. Correct any functional-spec "current state" claim that turns out wrong.
 5. Write `TECHNICAL-SPEC.md` (sections 1-10), grounding every claim in code and cross-linking the functional spec.
 6. Cross-link both headers to each other and to adjacent specs. Set `Status`, `Owner`, `Last updated` (absolute date), `Repos affected`.
-7. When the feature ships, use `xms-write-what-was-done` to add `WHAT-WAS-DONE.md` and flip the statuses.
+7. **Publish to ClickUp, and treat that as where the spec now lives.** For a new spec,
+   `clickup_create_document_page` under the right document, then add the row to
+   `03-delivery/CLICKUP.md`. For an edit, `clickup_update_document_page` against the
+   `document_id` and `page_id` the map gives you. A spec change is not done while the
+   ClickUp page and what you wrote disagree, because the page is the copy people read.
+8. When the feature ships, use `xms-write-what-was-done` to add `WHAT-WAS-DONE.md` and flip the statuses.
 
 ## Checkpoints
 
@@ -87,3 +137,6 @@ Fixed section order. The rule that separates a good XMS technical spec from a ba
 - Does every open question carry a default assumption so the build is unblocked?
 - Are the section headings and header block byte-for-byte in the house shape (compare against `notification-system/`)?
 - Are dates absolute and is the copy free of em-dashes?
+- **Is the ClickUp page the version you just wrote, and is it in `03-delivery/CLICKUP.md`?**
+  ClickUp is the system of record from 2026-09-13; an unpublished spec change has not
+  reached anybody.
