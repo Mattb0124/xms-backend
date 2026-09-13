@@ -770,6 +770,16 @@
     "axel": false
   },
   {
+    "method": "PUT",
+    "path": "/v1/admin/accounts/:id/owner",
+    "controller": "AdminAccountsController",
+    "handler": "changeOwner",
+    "realm": "internal",
+    "permission": "admin:accounts",
+    "public": null,
+    "axel": false
+  },
+  {
     "method": "GET",
     "path": "/v1/admin/accounts/:id/portal-users",
     "controller": "AdminUsersController",
@@ -1054,6 +1064,66 @@
     "path": "/v1/admin/roles/:id",
     "controller": "AdminUsersController",
     "handler": "updateRole",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/teams",
+    "controller": "AdminTeamsController",
+    "handler": "list",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/admin/teams",
+    "controller": "AdminTeamsController",
+    "handler": "create",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/admin/teams/:id",
+    "controller": "AdminTeamsController",
+    "handler": "get",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PATCH",
+    "path": "/v1/admin/teams/:id",
+    "controller": "AdminTeamsController",
+    "handler": "update",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/teams/:id/accounts",
+    "controller": "AdminTeamsController",
+    "handler": "setAccounts",
+    "realm": "internal",
+    "permission": "admin:users",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/admin/teams/:id/members",
+    "controller": "AdminTeamsController",
+    "handler": "setMembers",
     "realm": "internal",
     "permission": "admin:users",
     "public": null,
@@ -1937,6 +2007,26 @@
     "realm": "internal",
     "permission": "admin:connectors",
     "public": null,
+    "axel": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/dev/sign-in",
+    "controller": "DevAuthController",
+    "handler": "signIn",
+    "realm": "internal",
+    "permission": null,
+    "public": "Local development sign-in: mints a token for a seeded user. Refuses without AUTH_DEV_SECRET.",
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/dev/users",
+    "controller": "DevAuthController",
+    "handler": "listUsers",
+    "realm": "internal",
+    "permission": null,
+    "public": "Local development sign-in: lists the seeded users to pick from. Refuses without AUTH_DEV_SECRET.",
     "axel": false
   },
   {
@@ -3126,6 +3216,16 @@
     "handler": "logOnTicket",
     "realm": "internal",
     "permission": "time:log",
+    "public": null,
+    "axel": false
+  },
+  {
+    "method": "GET",
+    "path": "/v1/tickets/:key/time-gate",
+    "controller": "TicketsController",
+    "handler": "timeGate",
+    "realm": "internal",
+    "permission": "tickets:view",
     "public": null,
     "axel": false
   },

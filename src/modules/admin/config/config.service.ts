@@ -12,6 +12,7 @@ import { PriorityMatrix, validateMatrix, type PriorityMatrixBody } from '../../.
 import { StateMachine, validateMachine, type StateMachineBody } from '../../../domain/tickets/state-machine.js';
 import { validateAiDefaults } from '../../../contracts/ai.js';
 import { validateSlaPolicy } from '../../../domain/sla/policy.js';
+import { validateCloseDiscipline } from '../../../domain/tickets/close-discipline.js';
 
 /**
  * Configuration catalogs as versioned data (Accounts & Administration
@@ -27,6 +28,7 @@ export type ConfigKind =
   | 'activity_types'
   | 'billable_classes'
   | 'resolution_codes'
+  | 'close_discipline'
   | 'ai';
 export const CONFIG_KINDS: readonly ConfigKind[] = [
   'state_machine',
@@ -35,6 +37,7 @@ export const CONFIG_KINDS: readonly ConfigKind[] = [
   'activity_types',
   'billable_classes',
   'resolution_codes',
+  'close_discipline',
   'ai',
 ];
 export const TICKET_TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
@@ -211,6 +214,7 @@ export class ConfigService {
         ['activity_types', 'activity-types'],
         ['billable_classes', 'billable-classes'],
         ['resolution_codes', 'resolution-codes'],
+        ['close_discipline', 'close-discipline'],
         ['ai', 'ai'],
       ];
       for (const [kind, file] of singles) {
@@ -434,6 +438,7 @@ export class ConfigService {
       const items = (body as { items?: unknown[] })?.items;
       if (!Array.isArray(items) || items.length === 0) problems = ['items must be a non-empty array'];
     }
+    if (kind === 'close_discipline') problems = validateCloseDiscipline(body);
     if (problems.length > 0) throw new BadRequestException({ code: 'invalid_config', problems });
   }
 

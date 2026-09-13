@@ -150,7 +150,7 @@
       { "from": "planned", "to": "in_progress" },
       { "from": "planned", "to": "cancelled" },
       { "from": "in_progress", "to": "blocked", "requires": ["pause_reason"] },
-      { "from": "in_progress", "to": "done", "requires": ["time_logged"] },
+      { "from": "in_progress", "to": "done", "requires": ["resolution", "time_logged"] },
       { "from": "in_progress", "to": "planned", "label": "Back to planned" },
       { "from": "in_progress", "to": "cancelled" },
       { "from": "blocked", "to": "in_progress", "label": "Unblock" },

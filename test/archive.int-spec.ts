@@ -12,6 +12,7 @@ import { OBJECT_STORE } from '../src/common/storage/storage.module.js';
 import type { ObjectStore } from '../src/common/storage/object-store.js';
 import { resetEnvForTests } from '../src/config/env.js';
 import { ArchiveService, archiveKey, DigestService } from '../src/modules/integrity/integrity.module.js';
+import { UsageEventsService } from '../src/modules/telemetry/telemetry.module.js';
 import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
@@ -79,6 +80,13 @@ beforeAll(async () => {
     .set(bearer(adminToken))
     .send({ account_id: account.body.id, type: 'incident', short_description: 'Archive me' })
     .expect(201);
+  // Usage events buffer in memory and flush on a one-second timer, so
+  // whether the usage stream has any rows when the archive first runs was a
+  // wall-clock race: the assertions below read `archived 3` then `archived
+  // 0` if the tick had landed, and `archived 2` then `archived 1` if it had
+  // not. Flushing here settles it, so the test measures the archive being
+  // written once rather than how long the process took to start.
+  await app.get(UsageEventsService).flush();
 });
 
 afterAll(async () => {
@@ -96,9 +104,10 @@ describe('event archive (XA-04)', () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     // Digests first, so the archive rows can point at them.
     await digests.writeMissing(tomorrow);
-    // The usage stream archives only once the request telemetry has landed, so two or three streams.
+    // Three streams: audit, security and usage. The usage rows were flushed
+    // in beforeAll, so this is no longer "two or three depending on timing".
     const first = await archive.exportMissing(tomorrow);
-    expect(first).toMatch(/^archived [23]$/);
+    expect(first).toBe('archived 3');
     const archived = Number(first.slice('archived '.length));
     expect(await archive.exportMissing(tomorrow)).toBe('archived 0');
     const rows = await withSuperuser((client) =>

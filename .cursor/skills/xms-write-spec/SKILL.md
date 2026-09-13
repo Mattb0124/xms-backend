@@ -24,7 +24,7 @@ Every spec opens with a bold metadata block, then a `---` rule:
 **Owner:** Matt Brown
 **Last updated:** 2026-07-11
 **Related:** [Technical Spec](./TECHNICAL-SPEC.md), [<Adjacent spec>](../<slug>/FUNCTIONAL-SPEC.md)
-**Repos affected:** `frontend`, `backend`, `infra`, `xms_mcp` (list only the ones that change)
+**Repos affected:** `frontend`, `backend` (name the entrypoint: API, `src/worker` or `src/mcp`), `infra` (list only the ones that change)
 
 ---
 ```

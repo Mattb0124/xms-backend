@@ -247,7 +247,12 @@ describe('resolution record', () => {
       .send({
         version: 2,
         to: 'resolved',
-        resolution: { code: 'fixed', notes: 'Renewed', solution_article_id: draft.body.id, time_exemption_reason: 'x' },
+        resolution: {
+          code: 'fixed',
+          notes: 'Renewed the client certificate and revalidated the connection.',
+          solution_article_id: draft.body.id,
+          time_exemption_reason: 'administrative_close',
+        },
       })
       .expect(409);
     expect(refused.body.code).toBe('article_not_published');
@@ -259,9 +264,9 @@ describe('resolution record', () => {
         to: 'resolved',
         resolution: {
           code: 'fixed',
-          notes: 'Renewed the certificate',
+          notes: 'Renewed the client certificate and revalidated the connection.',
           solution_article_id: published.id,
-          time_exemption_reason: 'Logged elsewhere',
+          time_exemption_reason: 'administrative_close',
         },
       })
       .expect(201);

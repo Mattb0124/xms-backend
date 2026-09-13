@@ -48,7 +48,7 @@ Fixed order, numbered headings:
 6. **Deploy order (required).** The exact sequence deploys must follow and why (which code calls endpoints that do not exist on older backends). Note what is already merged to dev vs what the open PR delta is.
 7. **How to plug in (producer/extension recipes).** The reusable seams the feature left behind: "new notification type = add to enum + meta + produce"; "routines POST with an `axk_live_` key"; "agent audit screen = mount ActivityFeed on this target id". Each recipe is a short concrete recipe a future dev follows without re-reading the whole spec.
 
-Adapt sections 2/3 to the repos that actually changed (drop "Frontend delivered" for a backend-only feature; add an `infra` or `xms_mcp` section when those changed).
+Adapt sections 2/3 to the repos that actually changed (drop "Frontend delivered" for a backend-only feature; add an `infra` section when it changed, and name the backend entrypoint where it is not the API).
 
 ## What makes a good WHAT-WAS-DONE (vs a bad one)
 

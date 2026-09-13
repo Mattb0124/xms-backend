@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  IsUUID,
 } from 'class-validator';
 import { MaxJsonSize } from '../../../common/validation/max-json-size.js';
 
@@ -78,10 +79,27 @@ export class UpdateAccountDto {
   @IsObject()
   @MaxJsonSize()
   branding?: Record<string, unknown>;
+}
 
+/**
+ * Handing the account to somebody else (TM-23). Its own route and its own
+ * DTO, because the change is a change of who answers for the client and it
+ * has to be visible as that in the audit stream, not as one field of a
+ * general edit.
+ */
+export class ChangeAccountOwnerDto {
+  @IsInt()
+  @Min(1)
+  version!: number;
+
+  @IsUUID('4')
+  owner_user_id!: string;
+
+  /** Why the account moved. Read by whoever asks the question later. */
   @IsOptional()
   @IsString()
-  owner_user_id?: string | null;
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class UpdateAccountSettingsDto {
@@ -146,6 +164,29 @@ export class UpdateAccountSettingsDto {
   @IsOptional()
   @IsBoolean()
   store_search_terms?: boolean;
+
+  /**
+   * Container-case thresholds (TM-27). Null switches one off, which is what
+   * an account that has not thought about it should have; zero is refused
+   * because it would mean "flag everything".
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  container_time_entries?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  container_elapsed_days?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  container_effort_minutes?: number | null;
 }
 
 export class ListQueryDto {

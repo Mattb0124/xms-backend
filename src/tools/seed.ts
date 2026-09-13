@@ -294,15 +294,8 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
           newValue: { key: seed.key, seed: true },
         },
       ]);
-      // Every account has a CSM: the Account Owner on the roster owns the
-      // relationship, and a list names them beside the account.
-      await tx.query(
-        `update op.accounts
-            set status = 'active',
-                owner_user_id = (select id::text from op.users where email = 'erin.walsh@example.test')
-          where id = $1`,
-        [account.id],
-      );
+      // The account stays in onboarding until it has an owner, which is
+      // after the team exists. See the activation pass below.
       const contract = await tx.query<{ id: string }>(
         `insert into acct.contracts (account_id, key, name, model, period_hours, status)
          values ($1, 'CT' || lpad(nextval('acct.contract_number_seq')::text, 5, '0'), $2, $3, $4, 'active') returning id`,
@@ -397,6 +390,25 @@ export async function seedDev(app: INestApplicationContext, options: SeedOptions
         await users.replaceAssignments(tx, user.id, [{ roleId: role.id, accountId }]);
         usersCreated += 1;
       }
+    }
+  });
+
+  // Every account has a CSM, and now it really does (TM-23). The Account
+  // Owner on the roster owns the relationship, and an account cannot go live
+  // without one, so this runs after the team exists rather than in the
+  // account loop: the subselect used to run before Erin was created, quietly
+  // wrote null, and left every seeded account owned by nobody.
+  await uow.operator(async (tx) => {
+    const owner = await tx.query<{ id: string }>(
+      `select id from op.users where email = 'erin.walsh@example.test'`,
+    );
+    const ownerId = owner.rows[0]?.id;
+    if (!ownerId) throw new Error('the Account Owner must exist before an account goes live');
+    for (const accountId of allAccounts) {
+      await tx.query(`update op.accounts set owner_user_id = $2, status = 'active' where id = $1`, [
+        accountId,
+        ownerId,
+      ]);
     }
   });
 

@@ -286,7 +286,7 @@ describe('logging time with no ticket', () => {
       .send({
         version: current.version,
         to: 'resolved',
-        resolution: { code: 'fixed', notes: 'Done', solution_candidate: true },
+        resolution: { code: 'fixed', notes: 'Rebuilt the consolidation cube and reran the nightly close.', solution_candidate: true },
       })
       .expect(409);
     expect(refused.body.code).toBe('missing_requirements');
@@ -305,7 +305,7 @@ describe('logging time with no ticket', () => {
       .send({
         version: current.version,
         to: 'resolved',
-        resolution: { code: 'fixed', notes: 'Done', solution_candidate: true },
+        resolution: { code: 'fixed', notes: 'Rebuilt the consolidation cube and reran the nightly close.', solution_candidate: true },
       })
       .expect(201);
 

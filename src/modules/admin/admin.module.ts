@@ -9,6 +9,9 @@ import { BootstrapService } from './bootstrap.service.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { AccountConfigController, AdminConfigController } from './config/config.controller.js';
 import { ConfigRepository, ConfigService } from './config/config.service.js';
+import { AdminTeamsController } from './teams/teams.controller.js';
+import { TeamsRepository } from './teams/teams.repository.js';
+import { TeamsService } from './teams/teams.service.js';
 import { AdminUsersController, DirectoryController } from './users/users.controller.js';
 import { UsersRepository } from './users/users.repository.js';
 import { UsersService } from './users/users.service.js';
@@ -25,6 +28,8 @@ import { UsersService } from './users/users.service.js';
     AccountsService,
     UsersRepository,
     UsersService,
+    TeamsRepository,
+    TeamsService,
     ConfigRepository,
     ConfigService,
     { provide: ClerkAdminClient, useFactory: (): ClerkAdminClient => new ClerkAdminClient(loadEnv().CLERK_SECRET_KEY) },
@@ -34,6 +39,8 @@ import { UsersService } from './users/users.service.js';
     AccountsService,
     UsersRepository,
     UsersService,
+    TeamsRepository,
+    TeamsService,
     ConfigRepository,
     ConfigService,
     ClerkAdminClient,
@@ -50,6 +57,7 @@ export class AdminCoreModule {}
     AccountsController,
     AdminUsersController,
     DirectoryController,
+    AdminTeamsController,
     AdminConfigController,
     AccountConfigController,
   ],
@@ -62,19 +70,30 @@ export class AdminModule implements OnApplicationBootstrap {
   constructor(
     private readonly uow: UnitOfWork,
     private readonly bootstrap: BootstrapService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
-   * Reconcile the system roles every time the application starts.
+   * Reconcile the system roles and the configuration catalogs every time the
+   * application starts.
    *
    * Doing it inside the bootstrap route was no use: that route throws
    * `already_bootstrapped` on a system that has an administrator, and the
    * throw rolls the reconciliation back with it, so a permission added to a
    * bundle in code never reached anybody.
    *
-   * It is additive and idempotent, so both the API and the worker may run it
-   * and a second run finds nothing to do. A race between them shows up as a
-   * version conflict on the role row; the other process has already made the
+   * The catalogs had the same hole and it was found the same way. A new kind
+   * (`close_discipline`, TB-02) shipped with its seed, and the dev database,
+   * bootstrapped weeks earlier, never got a row: the gate fell back to its
+   * built-in vocabulary, which is safe, but no account could configure it and
+   * the picker read raw keys instead of labels. `ensureDefaults` inserts only
+   * for a (kind, scope) that has no version at all, so running it at every
+   * start cannot overwrite anyone's catalog or undo an activation; it can
+   * only fill a gap that a release opened.
+   *
+   * Both are additive and idempotent, so the API and the worker may each run
+   * them and a second run finds nothing to do. A race between them shows up
+   * as a version conflict on the row; the other process has already made the
    * change, so it is logged and left rather than retried.
    */
   async onApplicationBootstrap(): Promise<void> {
@@ -83,6 +102,12 @@ export class AdminModule implements OnApplicationBootstrap {
       if (changed.length > 0) this.logger.log(`system roles reconciled: ${changed.join('; ')}`);
     } catch (error) {
       this.logger.warn(`system roles were not reconciled: ${(error as Error).message}`);
+    }
+    try {
+      const seeded = await this.config.ensureDefaults();
+      if (seeded.length > 0) this.logger.log(`configuration defaults seeded: ${seeded.join('; ')}`);
+    } catch (error) {
+      this.logger.warn(`configuration defaults were not seeded: ${(error as Error).message}`);
     }
   }
 }

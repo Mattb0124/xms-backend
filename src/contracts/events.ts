@@ -37,6 +37,11 @@ export const SECURITY_EVENT_TYPES = [
   'admin.account.settings_changed',
   'admin.account.ai_switch_changed',
   'admin.account.isolation_tier_changed',
+  // Handing an account to a different owner is a change of who answers for
+  // the client, so it gets its own type rather than riding the generic
+  // update diff (TM-23).
+  'admin.account.owner_changed',
+  'admin.team.changed',
   'admin.connector.mode_changed',
   'admin.connector.kill_switch',
   'admin.map.activated',
@@ -103,6 +108,10 @@ export const AUDIT_EVENT_TYPES = [
   'ticket.scope_flagged',
   'ticket.scope_withdrawn',
   'ticket.scope_decided',
+  // Resolved with nothing logged against it, under one of the account's
+  // exemption reasons (TB-02). Its own type because it is the row a
+  // reconciler looks for, not a field of a general update.
+  'ticket.time_exempted',
   'ticket.participant_added',
   'ticket.participant_left',
   'ticket.participant_invited',
@@ -121,6 +130,8 @@ export const AUDIT_EVENT_TYPES = [
   'admin.account.updated',
   'admin.account.status_changed',
   'admin.account.settings_changed',
+  'admin.account.owner_changed',
+  'admin.team.changed',
   'admin.calendar.updated',
   'admin.config.activated',
   'admin.config.override_removed',

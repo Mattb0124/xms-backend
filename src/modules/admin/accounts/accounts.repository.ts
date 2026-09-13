@@ -35,9 +35,20 @@ export interface AccountSettingsRow {
   attachment_max_bytes: string;
   usage_analytics_portal: boolean;
   store_search_terms: boolean;
+  /** Container-case thresholds (TM-27); null switches a threshold off. */
+  container_time_entries: number | null;
+  container_elapsed_days: number | null;
+  container_effort_minutes: number | null;
   version: number;
 }
 
+/**
+ * What the general account PATCH may change. `owner_user_id` is deliberately
+ * absent (TM-23): ownership moves only through the owner route, which checks
+ * the candidate and writes its own audit and security events. Riding the
+ * generic diff made handing over an account indistinguishable from editing a
+ * time zone.
+ */
 export const ACCOUNT_EDITABLE = [
   'name',
   'legal_name',
@@ -45,7 +56,6 @@ export const ACCOUNT_EDITABLE = [
   'residency_region',
   'default_time_zone',
   'branding',
-  'owner_user_id',
 ] as const;
 
 export const SETTINGS_EDITABLE = [
@@ -62,7 +72,19 @@ export const SETTINGS_EDITABLE = [
   'attachment_max_bytes',
   'usage_analytics_portal',
   'store_search_terms',
+  'container_time_entries',
+  'container_elapsed_days',
+  'container_effort_minutes',
 ] as const;
+
+/** A prospective account owner, with what decides whether they may hold it. */
+export interface OwnerCandidateRow {
+  id: string;
+  kind: 'internal' | 'portal' | 'service';
+  status: 'invited' | 'active' | 'deactivated';
+  display_name: string | null;
+  granted: boolean;
+}
 
 /** An account as a picker sees it, with the person who owns the relationship. */
 export interface AccountSummaryRow {
@@ -111,7 +133,7 @@ export class AccountsRepository extends RepositoryBase {
               a.owner_user_id as owner_id,
               nullif(trim(concat_ws(' ', o.first_name, o.last_name)), '') as owner_name
          from op.accounts a
-         left join op.users o on o.id::text = a.owner_user_id
+         left join op.users o on o.id = a.owner_user_id
         where a.id = any ($1::uuid[]) and a.status <> 'system'
         order by a.name`,
       [ids],
@@ -120,6 +142,46 @@ export class AccountsRepository extends RepositoryBase {
 
   byId(tx: Tx, id: string): Promise<AccountRow> {
     return this.one<AccountRow>(tx, 'account', 'select * from op.accounts where id = $1', [id]);
+  }
+
+  /**
+   * The person an account is about to be handed to, with the facts that
+   * decide whether they may hold it: are they an active internal user, and
+   * can they actually see this account. An owner who cannot open the account
+   * is not an owner, so the service refuses rather than writing a name
+   * nobody can act on.
+   *
+   * "Can see it" is a grant or the administrator binding, not a grant alone:
+   * an `admin:accounts` holder is bound to every live account implicitly
+   * (`principal.repository.ts`, resolveAccess) and holds no row in
+   * `op.account_grants`, so checking only the grant table would refuse the
+   * very people who onboard the accounts.
+   */
+  ownerCandidate(tx: Tx, userId: string, accountId: string): Promise<OwnerCandidateRow | undefined> {
+    return this.maybeOne<OwnerCandidateRow>(
+      tx,
+      `select u.id, u.kind, u.status,
+              nullif(trim(concat_ws(' ', u.first_name, u.last_name)), '') as display_name,
+              (exists (select 1 from op.account_grants g where g.user_id = u.id and g.account_id = $2)
+               or exists (select 1 from op.role_assignments ra
+                            join op.roles r on r.id = ra.role_id
+                           where ra.user_id = u.id and ra.account_id is null
+                             and r.status = 'active' and r.catalog = 'operator'
+                             and 'admin:accounts' = any (r.permissions))) as granted
+         from op.users u
+        where u.id = $1`,
+      [userId, accountId],
+    );
+  }
+
+  /** The current owner's name, for the audit entry and the security event. */
+  ownerName(tx: Tx, userId: string | null): Promise<string | null> {
+    if (!userId) return Promise.resolve(null);
+    return this.maybeOne<{ display_name: string | null }>(
+      tx,
+      `select nullif(trim(concat_ws(' ', first_name, last_name)), '') as display_name from op.users where id = $1`,
+      [userId],
+    ).then((row) => row?.display_name ?? null);
   }
 
   async insert(

@@ -59,6 +59,14 @@ const OVERRIDES: Record<string, Record<string, OverrideValue>> = {
       Promise.resolve(new Date(Date.UTC(2020, 0, 1) + nextFixtureDay++ * 86_400_000).toISOString().slice(0, 10)),
   },
   'acct.threshold_alert_events': { percent: 50, consumed_minutes_at_fire: 0, available_minutes: 0 },
+  // `user_id` became nullable in 0049 so a group can be invited with nobody
+  // on the row yet, which took it out of the catalog's NOT NULL set. The
+  // default status is 'active', and `ck_participant_active_is_a_person` says
+  // an active participant is a person, so the generated row needs one named.
+  'acct.ticket_participants': {
+    user_id: (): Promise<unknown> => Promise.resolve(randomUUID()),
+    role: 'collaborator',
+  },
   // A ticket-close survey names its ticket; the quarterly kind names a period instead.
   'acct.csat_surveys': {
     kind: 'ticket_close',

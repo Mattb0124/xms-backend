@@ -1,6 +1,6 @@
 ---
 name: xms-security-first
-description: The security definition of done for every XMS change. Use before designing, coding, reviewing or merging anything in frontend/, backend/, infra/ or xms_mcp, when a task says "add an endpoint", "add a table", "add a screen", "add a job", "add a connector", "add a setting", when reviewing a pull request, when answering a client security questionnaire, and whenever a change touches identity, permissions, account data, files, email, external systems, AI egress, secrets, logging or configuration. XMS holds several clients' data in one product and must pass ISO 27001, SOC 2 and client security audits; this skill is how every change is made audit-ready by construction.
+description: The security definition of done for every XMS change. Use before designing, coding, reviewing or merging anything in frontend/, backend/ (API, worker and MCP) or infra/, when a task says "add an endpoint", "add a table", "add a screen", "add a job", "add a connector", "add a setting", when reviewing a pull request, when answering a client security questionnaire, and whenever a change touches identity, permissions, account data, files, email, external systems, AI egress, secrets, logging or configuration. XMS holds several clients' data in one product and must pass ISO 27001, SOC 2 and client security audits; this skill is how every change is made audit-ready by construction.
 ---
 
 # Skill: XMS security first
@@ -60,7 +60,7 @@ If the answer to any question is "maybe", the change is not done.
 - Secrets in Secrets Manager referenced by the task definition; rotation runbook.
 - Logs and traces retained per policy; alarms for the signals in `AUDIT-AND-ANALYTICS.md` section 7.3.
 
-### AI (`backend/src/axel`, `xms_mcp`)
+### AI (`backend/src/axel`, `backend/src/mcp`)
 - One egress: the adapter. Pre-flight checks the account switch, the capability opt-in and the caller's permission before any request.
 - Redaction before egress; attachments never leave as binaries.
 - MCP tools run as the caller (forwarded bearer), never as a service identity with broad grants; write tools only propose, except the two audited exceptions.
