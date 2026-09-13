@@ -1,0 +1,14 @@
+{
+  "servers": [
+    {
+      "slug": "xms",
+      "name": "XMS",
+      "description": "XMS itself: tickets, the knowledge base, contract position and the propose_* tools. Served by the xms-mcp entrypoint (ADR-19).",
+      "transport": "streamable_http",
+      "url": "https://xms-mcp.dev.example/mcp",
+      "caller_token": true,
+      "secret_ref": null
+    }
+  ],
+  "enabled": ["xms"]
+}

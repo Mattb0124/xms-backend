@@ -13,6 +13,7 @@ import { StateMachine, validateMachine, type StateMachineBody } from '../../../d
 import { validateAiDefaults } from '../../../contracts/ai.js';
 import { validateSlaPolicy } from '../../../domain/sla/policy.js';
 import { validateCloseDiscipline } from '../../../domain/tickets/close-discipline.js';
+import { validateMcpLibrary } from '../../../domain/ai/mcp-library.js';
 
 /**
  * Configuration catalogs as versioned data (Accounts & Administration
@@ -29,7 +30,8 @@ export type ConfigKind =
   | 'billable_classes'
   | 'resolution_codes'
   | 'close_discipline'
-  | 'ai';
+  | 'ai'
+  | 'mcp';
 export const CONFIG_KINDS: readonly ConfigKind[] = [
   'state_machine',
   'priority_matrix',
@@ -39,6 +41,7 @@ export const CONFIG_KINDS: readonly ConfigKind[] = [
   'resolution_codes',
   'close_discipline',
   'ai',
+  'mcp',
 ];
 export const TICKET_TYPES = ['incident', 'service_request', 'change', 'problem', 'project_task'] as const;
 
@@ -216,6 +219,7 @@ export class ConfigService {
         ['resolution_codes', 'resolution-codes'],
         ['close_discipline', 'close-discipline'],
         ['ai', 'ai'],
+        ['mcp', 'mcp'],
       ];
       for (const [kind, file] of singles) {
         if (!(await this.repo.activeDefault(tx, kind, '*'))) {
@@ -439,6 +443,7 @@ export class ConfigService {
       if (!Array.isArray(items) || items.length === 0) problems = ['items must be a non-empty array'];
     }
     if (kind === 'close_discipline') problems = validateCloseDiscipline(body);
+    if (kind === 'mcp') problems = validateMcpLibrary(body);
     if (problems.length > 0) throw new BadRequestException({ code: 'invalid_config', problems });
   }
 
