@@ -42,12 +42,29 @@ export interface McpTool<TShape extends z.ZodRawShape = z.ZodRawShape> {
    * against the data rather than against a naming convention.
    */
   readonly writes?: boolean;
+  /**
+   * Where the account comes from, so the switch and the redaction profile can
+   * be resolved before the tool answers (AI-11, AI-12).
+   *
+   * `ticket` names one account through the key the caller gave. `caller`
+   * spans the accounts the caller may see and is narrowed to those with AI on.
+   * Every tool reads an account's content, so there is no third case: a
+   * tool that read none would not need the switch at all.
+   */
+  readonly scope: 'ticket' | 'caller';
   readonly input: TShape;
   run(
     principal: Principal,
     args: z.objectOutputType<TShape, z.ZodTypeAny>,
     ctx: RequestContext,
+    scope: ResolvedScope,
   ): Promise<unknown>;
+}
+
+/** What the gate settled before the tool ran. */
+export interface ResolvedScope {
+  /** The accounts this answer may come from; exactly one for a ticket tool. */
+  readonly accountIds: readonly string[];
 }
 
 export interface ToolDeps {
@@ -104,6 +121,7 @@ function proposal(
     title,
     description: `${description} Nothing is applied: this writes a suggestion for a person to accept, edit or reject.`,
     permission: 'ai:use',
+    scope: 'ticket',
     input: { key: ticketKey, ...payload },
     run: async (principal, args, ctx) => {
       const { key, ...rest } = args as { key: string } & Record<string, unknown>;
@@ -128,6 +146,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     // ---------------------------------------------------------------- reads
     {
       name: 'get_ticket',
+      scope: 'ticket',
       title: 'Get a ticket',
       description:
         'One ticket by its key, for example CS1000008: state, priority, account, requester, assignee, contract position and service levels.',
@@ -137,6 +156,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'list_tickets',
+      scope: 'caller',
       title: 'List tickets',
       description:
         'Tickets the caller may see, newest first. Free text searches the summary and description. Use this to find a ticket when the key is not known.',
@@ -147,8 +167,12 @@ export function buildTools(deps: ToolDeps): McpTool[] {
         mine: z.boolean().optional().describe('Only tickets assigned to the caller'),
         limit: z.number().int().min(1).max(50).optional().describe('How many to return, at most 50'),
       },
-      run: (principal, args) =>
+      // Narrowed to the accounts whose switch is on, which the gate settled
+      // first: a tool spanning accounts must not answer out of one that turned
+      // AI off. The service intersects this with the principal again.
+      run: (principal, args, _ctx, scope) =>
         deps.tickets.list(principal, {
+          account_id: [...scope.accountIds],
           ...(args.q ? { q: args.q } : {}),
           ...(args.open === undefined ? {} : { open: args.open }),
           ...(args.mine === undefined ? {} : { mine: args.mine }),
@@ -157,6 +181,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'get_ticket_thread',
+      scope: 'ticket',
       title: 'Read a ticket thread',
       description:
         'Everything said on a ticket: the client-visible conversation, the internal work notes, and the activity timeline of what changed and when.',
@@ -173,6 +198,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'search_solutions',
+      scope: 'caller',
       title: 'Search the knowledge base',
       description:
         'Published solution articles matching the words given, ranked. Covers the accounts the caller may see plus the global library.',
@@ -185,6 +211,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'get_article',
+      scope: 'caller',
       title: 'Read a solution article',
       description: 'One knowledge article by its key, for example KB100001, with its sections and its visibility.',
       permission: 'tickets:view',
@@ -193,6 +220,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'find_similar_tickets',
+      scope: 'ticket',
       title: 'Find what resolved tickets like this one',
       description:
         'For one ticket: the matching solution articles, the similar tickets already resolved, and the resolutions recorded on them. Use before drafting a reply.',
@@ -202,6 +230,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'get_unlogged_time',
+      scope: 'caller',
       title: 'Find time not yet logged',
       description:
         "The caller's own working days against the time they have logged, so a nudge can name the days that are short.",
@@ -218,6 +247,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
 
     {
       name: 'get_contract_position',
+      scope: 'ticket',
       title: 'Get the contract position behind a ticket',
       description:
         'For the account and contract a ticket belongs to: hours consumed against hours available, the burn rate, the thresholds fired and the forecast. Use for burn anomalies and for a report narrative.',
@@ -230,15 +260,19 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
     {
       name: 'get_period_metrics',
+      scope: 'caller',
       title: 'Get the measures for a period',
       description:
         'The operations dashboard for the last few days: volumes, service levels, outcomes, backlog by age and the notable tickets. Portfolio-wide.',
       permission: 'reports:view-portfolio',
-      input: { days: z.number().int().min(1).max(90).optional().describe('How many days back, at most 90. Defaults to 7.') },
+      input: {
+        days: z.number().int().min(1).max(90).optional().describe('How many days back, at most 90. Defaults to 7.'),
+      },
       run: (principal, args) => deps.reporting.operations(principal, args.days ?? 7),
     },
     {
       name: 'get_account_metrics',
+      scope: 'ticket',
       title: 'Get the measures for the account a ticket belongs to',
       description:
         'The same measures as the period ones, narrowed to the account of the ticket given. Named by ticket rather than by account, because a key is what an agent has.',
@@ -259,6 +293,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     // Everything else an agent wants to change goes through a `propose_*`.
     {
       name: 'add_work_note',
+      scope: 'ticket',
       title: 'Add an internal work note',
       description:
         'Writes an internal note on a ticket. Never client-visible. The note is recorded as written by AI on behalf of the caller.',
@@ -281,6 +316,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
 
     {
       name: 'create_article_draft',
+      scope: 'ticket',
       title: 'Draft a solution article',
       description:
         'Writes a DRAFT knowledge article for the account of the ticket given, from what resolved it. A draft is not published and is not visible to a client: a person reviews and publishes it.',
@@ -289,11 +325,7 @@ export function buildTools(deps: ToolDeps): McpTool[] {
       input: {
         key: ticketKey.describe('The ticket this was learned from; its account is the one the article is filed under'),
         title: z.string().min(3).max(200).describe('What the article is called'),
-        kind: z
-          .string()
-          .max(20)
-          .optional()
-          .describe('One of solution, workaround, known_error, procedure, reference'),
+        kind: z.string().max(20).optional().describe('One of solution, workaround, known_error, procedure, reference'),
         problem_statement: z.string().max(20_000).optional().describe('What goes wrong'),
         environment: z.string().max(20_000).optional().describe('Where it happens'),
         symptoms: z.string().max(20_000).optional().describe('What the reporter sees'),
@@ -317,23 +349,44 @@ export function buildTools(deps: ToolDeps): McpTool[] {
     },
 
     // ------------------------------------------------------------ proposals
-    proposal(deps, 'propose_classification', 'classify', 'Propose a category', 'Suggests the ticket type and category.', {
-      type: z.string().max(40).describe('The ticket type'),
-      category: z.string().max(80).describe('The category'),
-      confidence,
-      reason: z.string().max(2000).describe('Why, in one or two sentences'),
-    }),
-    proposal(deps, 'propose_priority', 'prioritise', 'Propose a priority', 'Suggests impact and urgency, from which priority is derived.', {
-      impact: z.string().max(20).describe('The impact level'),
-      urgency: z.string().max(20).describe('The urgency level'),
-      confidence,
-      reason: z.string().max(2000).describe('Why, in one or two sentences'),
-    }),
-    proposal(deps, 'propose_duplicate', 'duplicate', 'Propose a duplicate', 'Suggests that this ticket duplicates another.', {
-      duplicate_of_key: ticketKey.describe('The key of the ticket this one duplicates'),
-      confidence,
-      reason: z.string().max(2000).describe('What makes them the same'),
-    }),
+    proposal(
+      deps,
+      'propose_classification',
+      'classify',
+      'Propose a category',
+      'Suggests the ticket type and category.',
+      {
+        type: z.string().max(40).describe('The ticket type'),
+        category: z.string().max(80).describe('The category'),
+        confidence,
+        reason: z.string().max(2000).describe('Why, in one or two sentences'),
+      },
+    ),
+    proposal(
+      deps,
+      'propose_priority',
+      'prioritise',
+      'Propose a priority',
+      'Suggests impact and urgency, from which priority is derived.',
+      {
+        impact: z.string().max(20).describe('The impact level'),
+        urgency: z.string().max(20).describe('The urgency level'),
+        confidence,
+        reason: z.string().max(2000).describe('Why, in one or two sentences'),
+      },
+    ),
+    proposal(
+      deps,
+      'propose_duplicate',
+      'duplicate',
+      'Propose a duplicate',
+      'Suggests that this ticket duplicates another.',
+      {
+        duplicate_of_key: ticketKey.describe('The key of the ticket this one duplicates'),
+        confidence,
+        reason: z.string().max(2000).describe('What makes them the same'),
+      },
+    ),
     proposal(deps, 'propose_summary', 'summarise', 'Propose a summary', 'Suggests a summary of the thread so far.', {
       summary: z.string().max(8000).describe('The summary'),
       confidence,
