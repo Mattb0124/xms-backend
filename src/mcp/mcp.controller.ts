@@ -1,4 +1,5 @@
-import { Body, Controller, ForbiddenException, Injectable, Post } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, Get, Injectable, Post, Req, Res } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Authenticated, CurrentPrincipal, RequestCtx, type RequestContext } from '../common/auth/decorators.js';
 import type { Principal } from '../common/auth/principal.js';
@@ -20,6 +21,18 @@ interface RpcRequest {
 }
 
 const PROTOCOL_VERSION = '2025-06-18';
+
+/**
+ * The versions this endpoint speaks. A client that names one we do not is told
+ * so rather than served a reply it may misread; a client that names none is
+ * assumed to be on the version before the header existed, which is what the
+ * specification asks for.
+ */
+const PROTOCOL_VERSIONS: readonly string[] = [PROTOCOL_VERSION, '2025-03-26'];
+
+/** Whether a client explicitly named a media type, rather than accepting anything. */
+const explicitlyAccepts = (header: string | undefined, type: string): boolean =>
+  typeof header === 'string' && header.includes(type);
 
 /** A JSON-RPC error object; the codes are the protocol's own. */
 const rpcError = (id: RpcRequest['id'], code: number, message: string) => ({
@@ -134,12 +147,113 @@ export class McpController {
     });
   }
 
+  /**
+   * Streamable HTTP, the transport the catalog row declares (AI Integration §4).
+   *
+   * **Stateless: no `Mcp-Session-Id` is issued and none is expected.** The
+   * specification makes sessions optional, and this endpoint has nothing to keep
+   * in one: the principal is resolved from the bearer on every request by the
+   * same guard a browser call uses, and the account binding is set per
+   * transaction in the data layer. A session id would add affinity to an ECS
+   * service that runs more than one task behind an ALB, so it would need sticky
+   * routing or shared state to buy something neither the auth nor the tenancy
+   * needs. The house's other MCP server (`onestream_mcp`) runs FastMCP with
+   * `stateless_http=True` for the same reason, against the same harness client.
+   *
+   * **No DNS-rebinding (Origin) check**, deliberately, and for the reason
+   * `onestream_mcp` records: that protection targets a browser attacking a
+   * localhost-bound dev server, and it 421s every request behind a reverse proxy
+   * whose Host varies per environment. Nothing in a browser reaches this route;
+   * it is server to server, gated on a bearer the guard verifies. The content
+   * type is still checked, because that is the part that matters here.
+   *
+   * A reply goes back as SSE when the caller explicitly accepts it, which is
+   * what the SDK client does and what the house's other server answers with, and
+   * as plain JSON otherwise. Both are what the specification allows; nothing
+   * here streams in pieces, because a tool call has one answer.
+   */
   @Post()
-  async rpc(
+  async post(
     @CurrentPrincipal() principal: Principal,
     @RequestCtx() ctx: RequestContext,
+    @Req() request: Request,
+    @Res() response: Response,
     @Body() body: RpcRequest,
-  ): Promise<unknown> {
+  ): Promise<void> {
+    const contentType = String(request.headers['content-type'] ?? '');
+    if (!contentType.includes('application/json')) {
+      response.status(415).json({ code: 'unsupported_media_type', detail: 'POST /mcp takes application/json.' });
+      return;
+    }
+
+    const version = request.headers['mcp-protocol-version'];
+    if (typeof version === 'string' && !PROTOCOL_VERSIONS.includes(version)) {
+      response.status(400).json({ code: 'unsupported_protocol_version', supported: PROTOCOL_VERSIONS });
+      return;
+    }
+
+    const accept = typeof request.headers.accept === 'string' ? request.headers.accept : undefined;
+    const wantsStream = explicitlyAccepts(accept, 'text/event-stream');
+    const wantsJson = explicitlyAccepts(accept, 'application/json') || explicitlyAccepts(accept, '*/*');
+    if (accept !== undefined && !wantsStream && !wantsJson) {
+      response
+        .status(406)
+        .json({ code: 'not_acceptable', detail: 'This route answers application/json or text/event-stream.' });
+      return;
+    }
+
+    const message = await this.rpc(principal, ctx, body);
+
+    // A notification carries no id and expects no reply, so it is acknowledged
+    // rather than answered. Returning a body here would be a response to
+    // something that asked for none.
+    if (message === null) {
+      response.status(202).end();
+      return;
+    }
+
+    if (wantsStream) {
+      response.status(200);
+      response.setHeader('content-type', 'text/event-stream; charset=utf-8');
+      response.setHeader('cache-control', 'no-cache, no-transform');
+      response.setHeader('x-accel-buffering', 'no');
+      response.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
+      response.end();
+      return;
+    }
+
+    response.status(200).json(message);
+  }
+
+  /**
+   * The specification allows a server that opens no server-to-server stream to
+   * refuse the GET, and this one opens none: it declares `listChanged: false`
+   * and has no request of its own to make of the agent, so a stream held open
+   * for the life of a turn would carry nothing.
+   */
+  @Get()
+  stream(@Res() response: Response): void {
+    response.setHeader('allow', 'POST');
+    response
+      .status(405)
+      .json({ code: 'method_not_allowed', detail: 'This endpoint opens no server-to-client stream; POST a request.' });
+  }
+
+  /** Nothing to end: the endpoint is stateless and issues no session. */
+  @Delete()
+  end(@Res() response: Response): void {
+    response.setHeader('allow', 'POST');
+    response
+      .status(405)
+      .json({ code: 'method_not_allowed', detail: 'This endpoint is stateless and holds no session to terminate.' });
+  }
+
+  /**
+   * The JSON-RPC half, kept apart from the transport above so the protocol and
+   * the plumbing can be read, and tested, one at a time. Answers `null` for a
+   * notification, which the transport turns into a 202.
+   */
+  async rpc(principal: Principal, ctx: RequestContext, body: RpcRequest): Promise<unknown> {
     const { id = null, method } = body ?? {};
     switch (method) {
       case 'initialize':
@@ -154,8 +268,7 @@ export class McpController {
         };
 
       case 'notifications/initialized':
-        // A notification carries no id and expects no reply.
-        return {};
+        return null;
 
       case 'ping':
         return { jsonrpc: '2.0', id, result: {} };

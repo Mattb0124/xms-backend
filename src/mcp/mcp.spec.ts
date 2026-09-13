@@ -677,3 +677,164 @@ describe('the security stream', () => {
     expect(events).toHaveLength(0);
   });
 });
+
+/**
+ * The transport, apart from the protocol. Streamable HTTP is what the catalog
+ * row declares, and the harness reaches it through the same SDK client that
+ * already talks to the house's other MCP server.
+ */
+describe('the streamable HTTP transport', () => {
+  /** Enough of an express pair to see what the transport did. */
+  function http(headers: Record<string, string> = {}) {
+    const sent = {
+      status: 0,
+      headers: {} as Record<string, string>,
+      json: undefined as unknown,
+      body: '',
+      ended: false,
+    };
+    const response = {
+      status(code: number) {
+        sent.status = code;
+        return this;
+      },
+      setHeader(name: string, value: string) {
+        sent.headers[name] = value;
+      },
+      json(payload: unknown) {
+        sent.json = payload;
+        sent.ended = true;
+        return this;
+      },
+      write(chunk: string) {
+        sent.body += chunk;
+        return true;
+      },
+      end() {
+        sent.ended = true;
+      },
+    };
+    const request = { headers: { 'content-type': 'application/json', ...headers } };
+    return { request, response, sent };
+  }
+
+  const INIT = { jsonrpc: '2.0', id: 1, method: 'initialize' };
+
+  it('answers a client that accepts SSE with one framed message, which is what the SDK asks for', async () => {
+    const { controller } = harness();
+    const { request, response, sent } = http({ accept: 'application/json, text/event-stream' });
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, INIT);
+
+    expect(sent.status).toBe(200);
+    expect(sent.headers['content-type']).toBe('text/event-stream; charset=utf-8');
+    expect(sent.body).toMatch(/^event: message\ndata: /);
+    expect(JSON.parse(sent.body.replace('event: message\ndata: ', '').trim())).toMatchObject({
+      id: 1,
+      result: { protocolVersion: '2025-06-18' },
+    });
+    expect(sent.ended).toBe(true);
+  });
+
+  it('answers a client that does not name SSE with plain JSON', async () => {
+    const { controller } = harness();
+    const { request, response, sent } = http({ accept: '*/*' });
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, INIT);
+
+    expect(sent.status).toBe(200);
+    expect(sent.headers['content-type']).toBeUndefined();
+    expect(sent.json).toMatchObject({ id: 1, result: { protocolVersion: '2025-06-18' } });
+  });
+
+  /**
+   * Stateless on purpose: the bearer carries the identity on every request and
+   * the account binding is per transaction, so a session would only add affinity
+   * to a service that runs more than one task.
+   */
+  it('issues no session id, and refuses the calls that would manage one', async () => {
+    const { controller } = harness();
+    const { request, response, sent } = http({ accept: 'text/event-stream' });
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, INIT);
+    expect(Object.keys(sent.headers).map((h) => h.toLowerCase())).not.toContain('mcp-session-id');
+
+    for (const method of ['stream', 'end'] as const) {
+      const refused = http();
+      controller[method](refused.response as never);
+      expect(refused.sent.status).toBe(405);
+      expect(refused.sent.headers.allow).toBe('POST');
+    }
+  });
+
+  it('acknowledges a notification with 202 and no body, because it asked for no reply', async () => {
+    const { controller } = harness();
+    const { request, response, sent } = http();
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, {
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+    });
+
+    expect(sent.status).toBe(202);
+    expect(sent.json).toBeUndefined();
+    expect(sent.body).toBe('');
+    expect(sent.ended).toBe(true);
+  });
+
+  it('refuses a body that is not JSON, and a protocol version it does not speak', async () => {
+    const { controller } = harness();
+
+    const wrongType = http({ 'content-type': 'text/plain' });
+    await controller.post(
+      principal(['tickets:view']),
+      CTX,
+      wrongType.request as never,
+      wrongType.response as never,
+      INIT,
+    );
+    expect(wrongType.sent.status).toBe(415);
+
+    const wrongVersion = http({ 'mcp-protocol-version': '2024-01-01' });
+    await controller.post(
+      principal(['tickets:view']),
+      CTX,
+      wrongVersion.request as never,
+      wrongVersion.response as never,
+      INIT,
+    );
+    expect(wrongVersion.sent.status).toBe(400);
+    expect(wrongVersion.sent.json).toMatchObject({ code: 'unsupported_protocol_version' });
+  });
+
+  it('accepts the version before the header existed, which a client may still send', async () => {
+    const { controller } = harness();
+    const { request, response, sent } = http({ 'mcp-protocol-version': '2025-03-26' });
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, INIT);
+
+    expect(sent.status).toBe(200);
+  });
+
+  it('carries a tool call through the transport, gate and all', async () => {
+    const { controller, events } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({ key: 'CS1000008', account_id: 'acc-1', short_description: 'Slow report' }),
+      },
+    });
+    const { request, response, sent } = http({ accept: 'text/event-stream' });
+
+    await controller.post(principal(['tickets:view']), CTX, request as never, response as never, {
+      jsonrpc: '2.0',
+      id: 7,
+      method: 'tools/call',
+      params: { name: 'get_ticket', arguments: { key: 'CS1000008' } },
+    });
+
+    const framed = JSON.parse(sent.body.replace('event: message\ndata: ', '').trim());
+    expect(framed).toMatchObject({ id: 7, result: { structuredContent: { key: 'CS1000008' } } });
+    // The transport did not skip the gate: the egress was still recorded.
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe('ai.egress.redacted');
+  });
+});
