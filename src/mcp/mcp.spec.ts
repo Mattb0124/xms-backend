@@ -7,6 +7,9 @@ import type { ReportingService } from '../modules/reporting/reporting.service.js
 import type { KnowledgeService } from '../modules/knowledge/knowledge.module.js';
 import type { TicketsService } from '../modules/tickets/tickets.service.js';
 import type { TimeService } from '../modules/time/time.module.js';
+import type { AiSettingsService, EffectiveSwitch } from '../modules/ai/ai-settings.service.js';
+import type { UnitOfWork } from '../db/unit-of-work.js';
+import { ToolGate } from './gate.js';
 import { McpController, ToolRegistry } from './mcp.controller.js';
 import { buildTools } from './tools.js';
 
@@ -25,15 +28,30 @@ function principal(permissions: Permission[]): Principal {
 
 const CTX: RequestContext = { requestId: 'req-1' };
 
+/** The switch as `AiSettingsService.effective` answers it, on or off. */
+const switchOn = (redaction: 'standard' | 'strict' = 'standard'): EffectiveSwitch =>
+  ({
+    on: true,
+    settings: { redaction_profile: redaction },
+    defaults: {},
+    capabilities: {},
+  }) as unknown as EffectiveSwitch;
+const switchOff = (reason: 'switch_off' | 'residency' | 'kill_switch'): EffectiveSwitch =>
+  ({ on: false, reason, defaults: {}, capabilities: {} }) as unknown as EffectiveSwitch;
+
 function harness(
   overrides: {
     tickets?: Partial<TicketsService>;
     knowledge?: Partial<KnowledgeService>;
     suggestions?: Partial<SuggestionService>;
+    /** The switch each account answers with. Every account is on by default. */
+    ai?: (accountId: string) => EffectiveSwitch;
   } = {},
 ) {
   const tickets = {
-    get: vi.fn(),
+    // Shaped rather than empty, because the gate reads this to learn whose AI
+    // switch governs the call before the tool runs.
+    get: vi.fn().mockResolvedValue({ id: 'tk-1', key: 'CS1000008', account_id: 'acc-1' }),
     list: vi.fn(),
     comments: vi.fn(),
     workNotes: vi.fn(),
@@ -41,12 +59,36 @@ function harness(
     addWorkNote: vi.fn(),
     ...overrides.tickets,
   } as unknown as TicketsService;
-  const knowledge = { search: vi.fn(), get: vi.fn(), rail: vi.fn(), ...overrides.knowledge } as unknown as KnowledgeService;
+  const knowledge = {
+    search: vi.fn(),
+    get: vi.fn(),
+    rail: vi.fn(),
+    ...overrides.knowledge,
+  } as unknown as KnowledgeService;
   const time = { unlogged: vi.fn() } as unknown as TimeService;
   const suggestions = { propose: vi.fn(), ...overrides.suggestions } as unknown as SuggestionService;
   const reporting = { operations: vi.fn(), account: vi.fn() } as unknown as ReportingService;
   const registry = new ToolRegistry(tickets, knowledge, time, suggestions, reporting);
-  return { controller: new McpController(registry), registry, tickets, knowledge, time, suggestions, reporting };
+
+  // The real gate over a fake unit of work, rather than a stubbed gate: the
+  // thing worth testing is that the switch is read and the answer redacted,
+  // and a stub would pass whether or not either happened.
+  const effective = vi.fn(async (_tx: unknown, accountId: string) => (overrides.ai ?? (() => switchOn()))(accountId));
+  const uow = { run: <T>(_p: unknown, fn: (tx: unknown) => Promise<T>) => fn({}) } as unknown as UnitOfWork;
+  const settings = { effective } as unknown as AiSettingsService;
+  const gate = new ToolGate(uow, settings, tickets);
+
+  return {
+    controller: new McpController(registry, gate),
+    registry,
+    tickets,
+    knowledge,
+    time,
+    suggestions,
+    reporting,
+    gate,
+    effective,
+  };
 }
 
 const call = (name: string, args: Record<string, unknown> = {}) => ({
@@ -59,7 +101,11 @@ const call = (name: string, args: Record<string, unknown> = {}) => ({
 describe('the MCP endpoint', () => {
   it('answers the handshake with a protocol version and its tool capability', async () => {
     const { controller } = harness();
-    const reply = (await controller.rpc(principal(['tickets:view']), CTX, { jsonrpc: '2.0', id: 1, method: 'initialize' })) as { result: { protocolVersion: string; capabilities: unknown } };
+    const reply = (await controller.rpc(principal(['tickets:view']), CTX, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+    })) as { result: { protocolVersion: string; capabilities: unknown } };
     expect(reply.result.protocolVersion).toBe('2025-06-18');
     expect(reply.result.capabilities).toEqual({ tools: { listChanged: false } });
   });
@@ -70,7 +116,11 @@ describe('the MCP endpoint', () => {
    */
   it('lists only the tools the caller holds the permission for', async () => {
     const { controller } = harness();
-    const withTickets = (await controller.rpc(principal(['tickets:view']), CTX, { jsonrpc: '2.0', id: 1, method: 'tools/list' })) as { result: { tools: Array<{ name: string }> } };
+    const withTickets = (await controller.rpc(principal(['tickets:view']), CTX, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    })) as { result: { tools: Array<{ name: string }> } };
     expect(withTickets.result.tools.map((tool) => tool.name)).toEqual([
       'find_similar_tickets',
       'get_account_metrics',
@@ -82,7 +132,9 @@ describe('the MCP endpoint', () => {
       'search_solutions',
     ]);
 
-    const withNothing = (await controller.rpc(principal([]), CTX, { jsonrpc: '2.0', id: 1, method: 'tools/list' })) as { result: { tools: unknown[] } };
+    const withNothing = (await controller.rpc(principal([]), CTX, { jsonrpc: '2.0', id: 1, method: 'tools/list' })) as {
+      result: { tools: unknown[] };
+    };
     expect(withNothing.result.tools).toEqual([]);
   });
 
@@ -136,7 +188,11 @@ describe('the MCP endpoint', () => {
     const { controller } = harness({
       tickets: { get: vi.fn().mockRejectedValue(new Error('This ticket is not visible to you.')) },
     });
-    const reply = (await controller.rpc(principal(['tickets:view']), CTX, call('get_ticket', { key: 'CS9999999' }))) as {
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS9999999' }),
+    )) as {
       result: { isError: boolean; content: Array<{ text: string }> };
     };
     expect(reply.result.isError).toBe(true);
@@ -173,7 +229,13 @@ describe('writing', () => {
     await controller.rpc(
       who,
       CTX,
-      call('propose_priority', { key: 'CS1000008', impact: 'high', urgency: 'high', confidence: 0.8, reason: 'Month end.' }),
+      call('propose_priority', {
+        key: 'CS1000008',
+        impact: 'high',
+        urgency: 'high',
+        confidence: 0.8,
+        reason: 'Month end.',
+      }),
     );
 
     expect(suggestions.propose).toHaveBeenCalledWith(who, CTX, {
@@ -190,7 +252,11 @@ describe('writing', () => {
   it('refuses a proposal from a caller without ai:use, and resolves no ticket', async () => {
     const { controller, suggestions, tickets } = harness();
     await expect(
-      controller.rpc(principal(['tickets:work']), CTX, call('propose_summary', { key: 'CS1000008', summary: 'x', confidence: 0.9 })),
+      controller.rpc(
+        principal(['tickets:work']),
+        CTX,
+        call('propose_summary', { key: 'CS1000008', summary: 'x', confidence: 0.9 }),
+      ),
     ).rejects.toMatchObject({ response: { code: 'forbidden', permission: 'ai:use' } });
     expect(suggestions.propose).not.toHaveBeenCalled();
     expect(tickets.get).not.toHaveBeenCalled();
@@ -250,5 +316,234 @@ describe('the tool catalog', () => {
       expect(tool.title.length).toBeGreaterThan(0);
       expect(tool.description.length).toBeGreaterThan(20);
     }
+  });
+});
+
+/**
+ * The switch and the redaction are the adapter's job, and the MCP is a second
+ * adapter (AI-11, AI-12, AI Integration section 6). Neither the guard nor the
+ * services cover this: a service answers a question it was asked by someone
+ * entitled to ask it, which is a different question from whether this
+ * account's data may travel towards a model at all.
+ */
+describe('the AI switch and the redaction on the way out', () => {
+  it('refuses a ticket tool for an account with AI off, and never reads the ticket itself', async () => {
+    const { controller, tickets } = harness({ ai: () => switchOff('switch_off') });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS1000008' }),
+    )) as {
+      result: { isError: boolean; content: { text: string }[] };
+    };
+
+    expect(reply.result.isError).toBe(true);
+    expect(reply.result.content[0].text).toMatch(/AI is switched off for that account/);
+    // Once, by the gate, to learn whose switch to read. The tool never ran, so
+    // nothing about the ticket beyond which account owns it was looked at.
+    expect(tickets.get).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * C-07. The operator kill switch arrives through the same call the account
+   * switch does, which is why the MCP needs no switch of its own: one lever
+   * already stops every account, and it stops the tools with them.
+   */
+  it('refuses every tool while the operator kill switch is on, and says which switch it was', async () => {
+    const { controller, knowledge } = harness({ ai: () => switchOff('kill_switch') });
+
+    for (const request of [call('get_ticket', { key: 'CS1000008' }), call('search_solutions', { q: 'vpn' })]) {
+      const reply = (await controller.rpc(principal(['tickets:view']), CTX, request)) as {
+        result: { isError: boolean; content: { text: string }[] };
+      };
+      expect(reply.result.isError).toBe(true);
+      expect(reply.result.content[0].text).toMatch(/switched off across the service/);
+    }
+    expect(knowledge.search).not.toHaveBeenCalled();
+  });
+
+  it('masks a credential in what a tool returns, leaving the shape an agent reads', async () => {
+    const { controller } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({
+          key: 'CS1000008',
+          account_id: 'acc-1',
+          state: 'in_progress',
+          short_description: 'Reset the sync job, api_key=sk_live_9f2b71c4ad and AKIAIOSFODNN7EXAMPLE',
+        }),
+      },
+    });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS1000008' }),
+    )) as {
+      result: { structuredContent: { key: string; state: string; short_description: string } };
+    };
+
+    const answer = reply.result.structuredContent;
+    expect(answer.short_description).toBe('Reset the sync job, api_key=[redacted:credential] and [redacted:aws_key]');
+    // Walked rather than applied to the serialised whole: the fields an agent
+    // reads as fields come through intact.
+    expect(answer.key).toBe('CS1000008');
+    expect(answer.state).toBe('in_progress');
+  });
+
+  it('withholds an answer carrying a private key rather than sending a masked one', async () => {
+    const { controller } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({
+          key: 'CS1000008',
+          account_id: 'acc-1',
+          short_description: [
+            'Key rotation',
+            '-----BEGIN RSA PRIVATE KEY-----',
+            'MIIEow==',
+            '-----END RSA PRIVATE KEY-----',
+          ].join('\n'),
+        }),
+      },
+    });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS1000008' }),
+    )) as {
+      result: { isError: boolean; content: { text: string }[] };
+    };
+
+    expect(reply.result.isError).toBe(true);
+    expect(reply.result.content[0].text).toMatch(/could not be safely redacted/);
+    expect(JSON.stringify(reply)).not.toContain('PRIVATE KEY');
+  });
+
+  it('narrows a tool that spans accounts to the ones with AI on', async () => {
+    const who = { ...principal(['tickets:view']), accountIds: ['acc-1', 'acc-2', 'acc-3'] } as Principal;
+    const { controller, tickets } = harness({
+      tickets: { list: vi.fn().mockResolvedValue({ items: [], next_cursor: null, stats: {} }) },
+      ai: (accountId) => (accountId === 'acc-2' ? switchOff('switch_off') : switchOn()),
+    });
+
+    await controller.rpc(who, CTX, call('list_tickets', { q: 'vpn' }));
+
+    expect(tickets.list).toHaveBeenCalledWith(who, expect.objectContaining({ account_id: ['acc-1', 'acc-3'] }));
+  });
+
+  /**
+   * Two tools span accounts without taking an account filter, so the switch
+   * cannot be pushed down into the query. The answer is confined on the way
+   * out instead, rather than the gap being left open.
+   */
+  it('drops a row belonging to an account with AI off from an answer it could not filter', async () => {
+    const who = { ...principal(['tickets:view']), accountIds: ['acc-1', 'acc-2'] } as Principal;
+    const { controller } = harness({
+      knowledge: {
+        search: vi.fn().mockResolvedValue([
+          { key: 'KB100001', account_id: 'acc-1', title: 'Reset the VPN profile' },
+          { key: 'KB100002', account_id: 'acc-2', title: 'Rotate the gateway certificate' },
+          { key: 'KB100003', account_id: null, title: 'The global runbook' },
+        ]),
+      },
+      ai: (accountId) => (accountId === 'acc-2' ? switchOff('switch_off') : switchOn()),
+    });
+
+    const reply = (await controller.rpc(who, CTX, call('search_solutions', { q: 'vpn' }))) as {
+      result: { structuredContent: { key: string }[] };
+    };
+
+    // The global library has no account of its own, so it is not one account's
+    // data and it stays.
+    expect(reply.result.structuredContent.map((row) => row.key)).toEqual(['KB100001', 'KB100003']);
+  });
+
+  it('refuses outright when no account the caller can see has AI on, rather than answering nothing found', async () => {
+    const { controller, knowledge } = harness({ ai: () => switchOff('residency') });
+
+    const reply = (await controller.rpc(principal(['tickets:view']), CTX, call('search_solutions', { q: 'vpn' }))) as {
+      result: { isError: boolean; content: { text: string }[] };
+    };
+
+    expect(reply.result.isError).toBe(true);
+    expect(reply.result.content[0].text).toMatch(/residency/);
+    expect(knowledge.search).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A write is gated the way a read is. An account that turned AI off must not
+   * find an AI-authored note on its ticket.
+   */
+  it('refuses a write to an account with AI off before the note is added', async () => {
+    const { controller, tickets } = harness({ ai: () => switchOff('switch_off') });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:work']),
+      CTX,
+      call('add_work_note', { key: 'CS1000008', body: 'Checked the tunnel.' }),
+    )) as { result: { isError: boolean } };
+
+    expect(reply.result.isError).toBe(true);
+    expect(tickets.addWorkNote).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The strict profile only labels names it was handed, so the gate has to hand
+ * them over or strict quietly means nothing more than standard. A ticket tool
+ * can, because the gate has already read the ticket to find the account.
+ */
+describe('the strict redaction profile', () => {
+  it('labels the requester by role everywhere the name appears, and keeps the label the same', async () => {
+    const { controller } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({
+          key: 'CS1000008',
+          account_id: 'acc-1',
+          requester: { email: 'jo.tan@client.test', display_name: 'Jo Tan' },
+          short_description: 'Jo Tan cannot reach the gateway',
+          description: 'Raised by jo.tan@client.test after the failover. Jo Tan tried twice.',
+        }),
+      },
+      ai: () => switchOn('strict'),
+    });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS1000008' }),
+    )) as {
+      result: { structuredContent: { short_description: string; description: string } };
+    };
+
+    const answer = reply.result.structuredContent;
+    expect(answer.short_description).toBe('[requester] cannot reach the gateway');
+    expect(answer.description).toBe('Raised by [requester] after the failover. [requester] tried twice.');
+    expect(JSON.stringify(answer)).not.toContain('Jo Tan');
+    expect(JSON.stringify(answer)).not.toContain('jo.tan@client.test');
+  });
+
+  it('leaves the name alone under the standard profile, which masks credentials only', async () => {
+    const { controller } = harness({
+      tickets: {
+        get: vi.fn().mockResolvedValue({
+          key: 'CS1000008',
+          account_id: 'acc-1',
+          requester: { email: 'jo.tan@client.test', display_name: 'Jo Tan' },
+          short_description: 'Jo Tan cannot reach the gateway',
+        }),
+      },
+    });
+
+    const reply = (await controller.rpc(
+      principal(['tickets:view']),
+      CTX,
+      call('get_ticket', { key: 'CS1000008' }),
+    )) as {
+      result: { structuredContent: { short_description: string } };
+    };
+
+    expect(reply.result.structuredContent.short_description).toBe('Jo Tan cannot reach the gateway');
   });
 });

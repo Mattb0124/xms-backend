@@ -8,6 +8,7 @@ import { KnowledgeCoreModule } from '../modules/knowledge/knowledge.module.js';
 import { ReportingCoreModule } from '../modules/reporting/reporting.module.js';
 import { TicketsCoreModule } from '../modules/tickets/tickets.module.js';
 import { TimeCoreModule } from '../modules/time/time.module.js';
+import { ToolGate } from './gate.js';
 import { McpController, ToolRegistry } from './mcp.controller.js';
 
 /**
@@ -39,6 +40,6 @@ import { McpController, ToolRegistry } from './mcp.controller.js';
     ReportingCoreModule,
   ],
   controllers: [McpController],
-  providers: [ToolRegistry],
+  providers: [ToolRegistry, ToolGate],
 })
 export class McpModule {}

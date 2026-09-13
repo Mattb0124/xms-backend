@@ -2,12 +2,12 @@ import { Body, Controller, ForbiddenException, Injectable, Post } from '@nestjs/
 import { z } from 'zod';
 import { Authenticated, CurrentPrincipal, RequestCtx, type RequestContext } from '../common/auth/decorators.js';
 import type { Principal } from '../common/auth/principal.js';
-
 import { SuggestionService } from '../modules/ai/suggestion.service.js';
 import { KnowledgeService } from '../modules/knowledge/knowledge.module.js';
 import { ReportingService } from '../modules/reporting/reporting.service.js';
 import { TicketsService } from '../modules/tickets/tickets.service.js';
 import { TimeService } from '../modules/time/time.module.js';
+import { ToolGate, ToolWithheld, type GateScope, type WithheldReason } from './gate.js';
 import { buildTools, type McpTool } from './tools.js';
 
 /** JSON-RPC 2.0, the subset the Model Context Protocol uses over streamable HTTP. */
@@ -38,9 +38,17 @@ export class ToolRegistry {
     suggestions: SuggestionService,
     reporting: ReportingService,
   ) {
-    this.tools = new Map(
-      buildTools({ tickets, knowledge, time, suggestions, reporting }).map((tool) => [tool.name, tool]),
-    );
+    const tools = buildTools({ tickets, knowledge, time, suggestions, reporting });
+    // The gate reads a ticket-scoped tool's account out of the `key` it was
+    // given, so a tool declaring that scope without that input would be gated
+    // on nothing. Checked at construction, the way the API checks its routes:
+    // a tool added without an account to gate on stops the entrypoint booting
+    // rather than shipping a hole.
+    const ungated = tools.filter((tool) => tool.scope === 'ticket' && !('key' in tool.input));
+    if (ungated.length > 0) {
+      throw new Error(`Ticket-scoped tools with no key to gate on: ${ungated.map((t) => t.name).join(', ')}`);
+    }
+    this.tools = new Map(tools.map((tool) => [tool.name, tool]));
   }
 
   /** Every tool, in a stable order, for the catalog and for the tests. */
@@ -79,7 +87,10 @@ export class ToolRegistry {
 @Controller('mcp')
 @Authenticated()
 export class McpController {
-  constructor(private readonly registry: ToolRegistry) {}
+  constructor(
+    private readonly registry: ToolRegistry,
+    private readonly gate: ToolGate,
+  ) {}
 
   @Post()
   async rpc(
@@ -129,6 +140,21 @@ export class McpController {
     }
   }
 
+  /**
+   * Which accounts a tool may answer from, and the profile to redact at.
+   *
+   * A ticket-scoped tool is gated on the one account behind the key it was
+   * given. A caller-scoped tool is gated on every account the caller may see
+   * that has AI on, and refused outright when none has: an empty list would
+   * read to an agent as "nothing found", which is a different answer and an
+   * untrue one.
+   */
+  private async scopeFor(principal: Principal, tool: McpTool, args: Record<string, unknown>): Promise<GateScope> {
+    return tool.scope === 'ticket'
+      ? this.gate.forTicket(principal, String(args.key ?? ''))
+      : this.gate.accountsOn(principal);
+  }
+
   private async call(
     principal: Principal,
     ctx: RequestContext,
@@ -151,16 +177,38 @@ export class McpController {
     }
 
     try {
-      const value = await tool.run(principal, parsed.data, ctx);
+      // The switch first, then the tool, then the redaction (AI-11, AI-12).
+      // The switch is answered before the tool runs rather than after: reading
+      // an account that turned AI off is itself the thing being refused, not
+      // just the answer.
+      const scope = await this.scopeFor(principal, tool, parsed.data as Record<string, unknown>);
+      const value = await tool.run(principal, parsed.data, ctx, { accountIds: scope.accountIds });
+      // Confined, then redacted, in that order: a row from an account with AI
+      // off is dropped before anything is masked, so one such row carrying a
+      // private key cannot withhold an answer the caller was entitled to.
+      // Across accounts the strictest profile in the set is the one used, so
+      // an account asking for strict redaction gets it even in a shared
+      // answer. That over-redacts the others, which is the right way to fail.
+      const cleaned = this.gate.clean(this.gate.confine(value, scope.accountIds), scope.profile, scope.people);
       return {
         jsonrpc: '2.0',
         id,
         result: {
-          content: [{ type: 'text', text: JSON.stringify(value) }],
-          structuredContent: value,
+          content: [{ type: 'text', text: JSON.stringify(cleaned) }],
+          structuredContent: cleaned,
         },
       };
     } catch (error) {
+      // A withheld turn says which rule withheld it, in the adapter's own
+      // vocabulary, so the agent can tell "AI is off for this account" from
+      // "that ticket does not exist" and say so to the person.
+      if (error instanceof ToolWithheld) {
+        return {
+          jsonrpc: '2.0',
+          id,
+          result: { isError: true, content: [{ type: 'text', text: withheldText(error.reason) }] },
+        };
+      }
       // A refusal the domain already words is returned as a tool error rather
       // than a transport failure, so the agent can say what happened instead
       // of the turn dying. The words are the service's own; nothing here
@@ -171,6 +219,20 @@ export class McpController {
   }
 }
 
+/** The reason a turn was withheld, worded so an agent can repeat it to a person. */
+function withheldText(reason: WithheldReason): string {
+  switch (reason) {
+    case 'switch_off':
+      return 'AI is switched off for that account, so there is nothing I can read there.';
+    case 'residency':
+      return "That account's data residency requirement is not met, so I cannot read it.";
+    case 'kill_switch':
+      return 'AI is switched off across the service right now.';
+    case 'redaction_refused':
+      return 'That answer could not be safely redacted, so it was withheld.';
+  }
+}
+
 /** The tool's input shape as JSON Schema, which is what the protocol asks for. */
 function schemaOf(tool: McpTool): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
@@ -178,12 +240,7 @@ function schemaOf(tool: McpTool): Record<string, unknown> {
   for (const [key, field] of Object.entries(tool.input)) {
     const type = field instanceof z.ZodOptional ? field.unwrap() : field;
     properties[key] = {
-      type:
-        type instanceof z.ZodNumber
-          ? 'number'
-          : type instanceof z.ZodBoolean
-            ? 'boolean'
-            : 'string',
+      type: type instanceof z.ZodNumber ? 'number' : type instanceof z.ZodBoolean ? 'boolean' : 'string',
       ...(type.description ? { description: type.description } : {}),
     };
     if (!(field instanceof z.ZodOptional)) required.push(key);
