@@ -887,10 +887,24 @@ export class PortalKnowledgeController {
   }
 }
 
+/**
+ * The providers without the controllers, so an entrypoint that is not the API
+ * can hold the service without also mounting its HTTP surface. Split out on
+ * 2026-09-12 for the MCP entrypoint (ADR-19): importing `KnowledgeModule`
+ * there would have published the whole knowledge API, internal and portal,
+ * on a service that serves one route.
+ */
 @Module({
   imports: [TicketsCoreModule],
-  controllers: [KnowledgeController, PortalKnowledgeController],
   providers: [KnowledgeService],
   exports: [KnowledgeService],
+})
+export class KnowledgeCoreModule {}
+
+/** Solution Knowledge Base (02-modules/knowledge-base) with its portal half. */
+@Module({
+  imports: [KnowledgeCoreModule],
+  controllers: [KnowledgeController, PortalKnowledgeController],
+  exports: [KnowledgeCoreModule],
 })
 export class KnowledgeModule {}
