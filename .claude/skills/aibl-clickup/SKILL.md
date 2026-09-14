@@ -56,7 +56,15 @@ write, and re-resolve the current sprint list every time (it changes weekly).
 - **Bugs folder:** `Bugs` folder id `901516841378`, with one list per platform:
   `AIX` `901524516178`, `XT` `901524516182`, `XDA` `901524516186`.
 
-**WHERE NEW TICKETS GO: read before creating anything.** Almost all work you
+**WHERE NEW TICKETS GO: read before creating anything.**
+
+**XMS is the exception, and it is the one you are most likely to be working on.** Every XMS
+ticket, enhancement and bug alike, goes in **ServiceNow Replacement Project**, list
+`901525427419`. Not a sprint list, not the `Bugs` folder, and never the XMS docs list
+`901525777420`, which holds the published spec pages. See `ticket-discipline` for the rule and
+why it was corrected.
+
+For **every other platform** (AIX, XT, XDA and the rest), almost all work you
 create is Development/Enhancement; those go in the **current sprint list** (under
 `X Platform Sprints`). Only a reported defect is a **Bug**, and only bugs go in
 the `Bugs` folder's platform list. NEVER create a dev/enhancement ticket in a
