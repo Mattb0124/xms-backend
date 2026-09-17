@@ -84,6 +84,12 @@ describe('addMinutes', () => {
     expect(always.minutesBetween(at('2026-04-11T23:30:00Z'), at('2026-04-12T01:00:00Z'))).toBe(90);
   });
 
+  it('treats weekdays with hours as working dates and holidays as not', () => {
+    expect(uk.isWorkingDate('2026-04-03')).toBe(true);
+    expect(uk.isWorkingDate('2026-04-04')).toBe(false);
+    expect(uk.isWorkingDate('2026-04-06')).toBe(false);
+  });
+
   it('refuses a calendar without hours and reports overlaps in the editor', () => {
     expect(() => new BusinessCalendar({ id: 'x', timeZone: 'UTC', hours: [] })).toThrow(CalendarError);
     expect(validateHours([])).toEqual(['at least one working interval is required']);

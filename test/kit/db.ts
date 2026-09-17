@@ -35,6 +35,43 @@ export async function withSuperuser<T>(fn: (client: pg.Client) => Promise<T>): P
   }
 }
 
+/**
+ * A raw ticket update for fixtures (backdating resolved_at, forcing a
+ * token). acct.tickets requires an audit row in the same transaction.
+ */
+export async function patchTicket(
+  id: string,
+  set: string,
+  values: unknown[] = [],
+): Promise<void> {
+  await withSuperuser(async (client) => {
+    await client.query('begin');
+    await client.query(`update acct.tickets set ${set} where id = $1`, [id, ...values]);
+    await client.query(
+      `insert into acct.audit_events (account_id, entity_kind, entity_id, ticket_id, event_type, actor_kind, actor_id, actor_name)
+       select account_id, 'ticket', id::text, id, 'ticket.updated', 'system', 'test-setup', 'Test setup'
+         from acct.tickets where id = $1`,
+      [id],
+    );
+    await client.query('commit');
+  });
+}
+
+/** Same as `patchTicket`, keyed on the ticket number (portal tests hold the CS key). */
+export async function patchTicketByNumber(number: string, set: string, values: unknown[] = []): Promise<void> {
+  await withSuperuser(async (client) => {
+    await client.query('begin');
+    await client.query(`update acct.tickets set ${set} where number = $1`, [number, ...values]);
+    await client.query(
+      `insert into acct.audit_events (account_id, entity_kind, entity_id, ticket_id, event_type, actor_kind, actor_id, actor_name)
+       select account_id, 'ticket', id::text, id, 'ticket.updated', 'system', 'test-setup', 'Test setup'
+         from acct.tickets where number = $1`,
+      [number],
+    );
+    await client.query('commit');
+  });
+}
+
 export async function resetDatabase(): Promise<void> {
   await withSuperuser(async (client) => {
     const tables = await client.query<{ schema: string; name: string }>(

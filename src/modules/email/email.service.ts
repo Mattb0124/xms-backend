@@ -23,6 +23,7 @@ import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
 import { scoreLoop } from '../../domain/email/loop-guard.js';
 import { stripReply } from '../../domain/email/stripper.js';
+import { spawnFollowUpComment } from '../../domain/tickets/reopen-window.js';
 import {
   matchThread,
   newEmailToken,
@@ -234,11 +235,7 @@ export class EmailService {
           byMessageId: (id) => this.email.ticketByMessageId(tx, id),
           byTicketKey: async (key) => {
             const ticket = await this.email.ticketByKey(tx, key);
-            if (!ticket) return undefined;
-            const closedTooLong = ticket.closed_at
-              ? Date.now() - new Date(ticket.closed_at).getTime() > 14 * 86_400_000
-              : false;
-            return { ticketId: ticket.id, closedTooLong };
+            return ticket?.id;
           },
         },
       );
@@ -289,7 +286,66 @@ export class EmailService {
 
       const principal = this.principalFor(sender, accountId, fromAddress, fromName);
       if (match) {
-        const ticket = await this.tickets.byId(tx, match.ticketId);
+        const matched = await this.tickets.byId(tx, match.ticketId);
+        const action = await this.ticketService.inboundMatchAction(tx, matched, receivedAt);
+        if (action.kind === 'spawn') {
+          const created = await this.createFromInbound(
+            tx,
+            principal,
+            ctx,
+            accountId,
+            alias,
+            subject,
+            bodyText,
+            fromAddress,
+            fromName,
+            parsed,
+            action.type,
+          );
+          await this.ticketService.addLink(
+            this.inboundSystemPrincipal(accountId),
+            ctx,
+            created.id,
+            matched.id,
+            'related',
+            tx,
+          );
+          await this.ticketService.recordReopenWindowDecision(
+            this.inboundSystemPrincipal(accountId),
+            ctx,
+            matched.id,
+            action.window,
+            tx,
+          );
+          const comment = (await this.ticketService.addComment(
+            principal,
+            ctx,
+            created.id,
+            { body: spawnFollowUpComment(action.oldKey, action.window, bodyText) },
+            tx,
+          )) as { id: string };
+          const row = await this.email.insertInbound(tx, {
+            ...base,
+            disposition: 'created',
+            suppression_reason: null,
+            matched_by: match.matchedBy as MatchedBy,
+            ticket_id: created.id,
+            comment_id: comment.id,
+          });
+          await this.email.finishInbox(tx, inboxId, 'applied');
+          return { disposition: 'created', accountId, ticketKey: ticketKey(created.number), inboundId: row.id };
+        }
+        if (action.kind === 'reopen') {
+          await this.ticketService.transition(
+            this.inboundSystemPrincipal(accountId),
+            ctx,
+            matched.id,
+            { version: matched.version, to: action.to },
+            tx,
+            receivedAt,
+          );
+        }
+        const ticket = action.kind === 'reopen' ? await this.tickets.byId(tx, matched.id) : matched;
         const comment = (await this.ticketService.addComment(principal, ctx, ticket.id, { body: bodyText }, tx)) as {
           id: string;
         };
@@ -354,13 +410,14 @@ export class EmailService {
     fromAddress: string,
     fromName: string,
     parsed: ParsedMail,
+    type: TicketRow['type'] = (alias.default_ticket_type as TicketRow['type']) ?? 'incident',
   ): Promise<TicketRow> {
     const view = await this.ticketService.create(
       principal,
       ctx,
       {
         account_id: accountId,
-        type: (alias.default_ticket_type as 'incident') ?? 'incident',
+        type,
         short_description: (subject || '(no subject)').replace(/^\s*(?:re|fwd?|aw|wg):\s*/i, '').slice(0, 300),
         description: body,
         requester_email: fromAddress,
@@ -522,6 +579,18 @@ export class EmailService {
       return { resolution: 'portal_user', contactId: created.id, name: created.display_name };
     }
     return { resolution: 'unknown', name: fromName || fromAddress };
+  }
+
+  private inboundSystemPrincipal(accountId: string): Principal {
+    return {
+      kind: 'internal',
+      userId: SYSTEM_ACTOR.id,
+      email: 'system@xms',
+      displayName: SYSTEM_ACTOR.name ?? 'XMS',
+      accountIds: [accountId],
+      permissions: new Set(),
+      tokenType: 'dev',
+    };
   }
 
   private principalFor(

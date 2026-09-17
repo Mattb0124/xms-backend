@@ -134,6 +134,17 @@ export class BusinessCalendar implements Calendar {
   }
 
   /**
+   * A local civil date (YYYY-MM-DD) that has any working interval after
+   * holidays. Used by the reopen window (Email Intake §5.3), which counts
+   * business days rather than SLA minutes.
+   */
+  isWorkingDate(date: string): boolean {
+    if (this.holidays.has(date)) return false;
+    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+    return (this.byWeekday.get(weekday) ?? []).length > 0;
+  }
+
+  /**
    * The after-hours class of a local date (YYYY-MM-DD in this calendar's
    * zone), or of a minute within it: a holiday, a day with no hours
    * (weekend on Saturday and Sunday, after hours on a non-working weekday),

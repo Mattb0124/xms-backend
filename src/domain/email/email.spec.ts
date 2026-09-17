@@ -22,7 +22,7 @@ describe('thread matcher', () => {
     const full = lookup({
       byPlusToken: async (token) => (token === 'abcdefghijk2' ? 't-token' : undefined),
       byMessageId: async (id) => (id === '<out-1@xms>' ? 't-reply' : id === '<out-0@xms>' ? 't-ref' : undefined),
-      byTicketKey: async () => ({ ticketId: 't-subject', closedTooLong: false }),
+      byTicketKey: async () => 't-subject',
     });
     const headers = {
       recipients: ['brk+abcdefghijk2@mail.xms.test'],
@@ -44,9 +44,12 @@ describe('thread matcher', () => {
     );
   });
 
-  it('ignores a subject key on a ticket closed too long and returns no match otherwise', async () => {
-    const stale = lookup({ byTicketKey: async () => ({ ticketId: 't', closedTooLong: true }) });
-    expect(await matchThread({ recipients: [], references: [], subject: '[CS0000001] old' }, stale)).toBeUndefined();
+  it('still matches a subject key on a closed ticket, so the window can decide', async () => {
+    const closed = lookup({ byTicketKey: async () => 't-closed' });
+    expect(await matchThread({ recipients: [], references: [], subject: '[CS0000001] old' }, closed)).toEqual({
+      ticketId: 't-closed',
+      matchedBy: 'subject_key',
+    });
     expect(await matchThread({ recipients: ['x@y'], references: [], subject: 'hello' }, lookup())).toBeUndefined();
   });
 

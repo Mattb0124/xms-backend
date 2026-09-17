@@ -8,10 +8,12 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   MinLength,
   IsUUID,
+  ValidateIf,
 } from 'class-validator';
 import { MaxJsonSize } from '../../../common/validation/max-json-size.js';
 
@@ -187,6 +189,18 @@ export class UpdateAccountSettingsDto {
   @IsInt()
   @Min(1)
   container_effort_minutes?: number | null;
+
+  /**
+   * Working days after resolved_at (else closed_at) during which a matched
+   * ticket may reopen. Zero never reopens, including the resolve day.
+   * Undefined leaves the stored value; null is refused so the column stays
+   * NOT NULL.
+   */
+  @ValidateIf((_, value) => value !== undefined)
+  @IsInt()
+  @Min(0)
+  @Max(365)
+  reopen_window_business_days?: number;
 }
 
 export class ListQueryDto {

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HttpExceptionFilter } from '../src/common/http-exception.filter.js';
 import { requestContextMiddleware } from '../src/common/request-context.middleware.js';
 import { resetEnvForTests } from '../src/config/env.js';
-import { closePools, resetDatabase, urls, withSuperuser } from './kit/db.js';
+import { closePools, resetDatabase, urls, withSuperuser, patchTicketByNumber } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 import { TicketsService } from '../src/modules/tickets/tickets.service.js';
 
@@ -226,6 +226,24 @@ describe('portal requests', () => {
       ),
     );
     expect(audit.rows[0]).toEqual({ actor_kind: 'portal_user', new_value: 'closed' });
+  });
+
+  it('offers reopen from Closed while the window is open and hides it once the window has elapsed', async () => {
+    const inside = await api().get(`/v1/portal/tickets/${key}/transitions`).set(bearer(portalToken)).expect(200);
+    expect(inside.body.transitions.map((transition: { to: string }) => transition.to)).toEqual(['in_progress']);
+    expect(inside.body.reopen_window).toMatchObject({ allowed: true, days: 5, source: 'account' });
+    await patchTicketByNumber(String(Number(key.slice(2))), `resolved_at = now() - interval '20 days', closed_at = now() - interval '20 days'`);
+    const elapsed = await api().get(`/v1/portal/tickets/${key}/transitions`).set(bearer(portalToken)).expect(200);
+    expect(elapsed.body.transitions).toEqual([]);
+    expect(elapsed.body.reopen_window.allowed).toBe(false);
+    const ticket = await api().get(`/v1/portal/tickets/${key}`).set(bearer(portalToken)).expect(200);
+    const refused = await api()
+      .post(`/v1/portal/tickets/${key}/transitions`)
+      .set(bearer(portalToken))
+      .send({ version: ticket.body.version, to: 'in_progress' })
+      .expect(409);
+    expect(refused.body.code).toBe('reopen_window_elapsed');
+    expect(refused.body.days).toBe(5);
   });
 
   it('lists requests of every type, and one unreadable row never empties the list', async () => {
