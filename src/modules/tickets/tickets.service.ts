@@ -9,7 +9,7 @@ import { toCsvRows } from '../../domain/reporting/csv.js';
 import { randomUUID } from 'node:crypto';
 import type { RequestContext } from '../../common/auth/decorators.js';
 import { actorKindOf, type Principal } from '../../common/auth/principal.js';
-import { actorOf, AuditService, type AuditEntry } from '../../common/audit/audit.service.js';
+import { actorOf, AuditService, SYSTEM_ACTOR, type AuditEntry } from '../../common/audit/audit.service.js';
 import { OutboxService } from '../../common/outbox/outbox.service.js';
 import type { Tx } from '../../db/repository.base.js';
 import { UnitOfWork } from '../../db/unit-of-work.js';
@@ -41,7 +41,18 @@ import { TimeRepository } from '../time/time.repository.js';
 import { KnowledgeRepository } from '../knowledge/knowledge.repository.js';
 import type { Level, Priority } from '../../domain/tickets/priority-matrix.js';
 import type { StateMachine } from '../../domain/tickets/state-machine.js';
+import { BusinessCalendar } from '../../domain/calendar/business-calendar.js';
+import {
+  fromBusinessCalendar,
+  mayReopen,
+  reopenSentence,
+  resolveWindowDays,
+  toWindowView,
+  weekdayCalendar,
+  type ReopenWindowView,
+} from '../../domain/tickets/reopen-window.js';
 import { ConfigService } from '../admin/config/config.service.js';
+import { AccountsRepository } from '../admin/accounts/accounts.repository.js';
 import { CalendarService } from '../calendars/calendars.module.js';
 import { UsersRepository } from '../admin/users/users.repository.js';
 import { ContractsRepository } from '../contracts/contracts.module.js';
@@ -254,6 +265,7 @@ export class TicketsService {
     private readonly calendars: CalendarService,
     private readonly routing: RoutingRepository,
     private readonly groups: TicketGroupsRepository,
+    private readonly accounts: AccountsRepository,
   ) {}
 
   // Reads ---------------------------------------------------------------------
@@ -378,20 +390,16 @@ export class TicketsService {
     principal: Principal,
     idOrKey: string,
     bound?: Tx,
-  ): Promise<{ from: string; transitions: { to: string; label: string; requires: string[]; reopen: boolean }[] }> {
+  ): Promise<{
+    from: string;
+    transitions: { to: string; label: string; requires: string[]; reopen: boolean }[];
+    reopen_window: ReopenWindowView | null;
+  }> {
     return this.inTx(principal, bound, async (tx) => {
       const row = await this.load(tx, idOrKey);
       const machine = await this.machineFor(tx, row, new Map());
       const actor = { kind: principal.kind === 'portal' ? ('portal' as const) : ('internal' as const) };
-      return {
-        from: row.state,
-        transitions: machine.available(row.state, actor).map((transition) => ({
-          to: transition.to,
-          label: transition.label ?? machine.state(transition.to)?.label ?? transition.to,
-          requires: [...(transition.requires ?? [])],
-          reopen: Boolean(transition.reopen),
-        })),
-      };
+      return this.listedTransitions(tx, row, machine, actor, new Date());
     });
   }
 
@@ -825,6 +833,7 @@ export class TicketsService {
     idOrKey: string,
     dto: TransitionDto,
     bound?: Tx,
+    at: Date = new Date(),
   ): Promise<TicketView | PortalTicketView> {
     const correlationId = ctx.requestId ?? randomUUID();
     return this.inTx(principal, bound, async (tx) => {
@@ -833,13 +842,28 @@ export class TicketsService {
         throw new ConflictException({ code: 'stale_version', version: before.version });
       const machine = await this.machineFor(tx, before, new Map());
       const actor = { kind: principal.kind === 'portal' ? ('portal' as const) : ('internal' as const) };
+      const listed = await this.listedTransitions(tx, before, machine, actor, at);
       if (!machine.canTransition(before.state, dto.to, actor)) {
         throw new ConflictException({
           code: 'invalid_transition',
           from: before.state,
           to: dto.to,
-          allowed: machine.available(before.state, actor).map((t) => t.to),
+          allowed: listed.transitions.map((transition) => transition.to),
         });
+      }
+      const transitionDef = machine.transition(before.state, dto.to)!;
+      let reopenWindow: ReopenWindowView | null = listed.reopen_window;
+      if (transitionDef.reopen) {
+        reopenWindow = listed.reopen_window ?? (await this.reopenWindow(tx, before, machine, at));
+        if (!reopenWindow.allowed) {
+          throw new ConflictException({
+            code: 'reopen_window_elapsed',
+            days: reopenWindow.days,
+            source: reopenWindow.source,
+            started_on: reopenWindow.started_on,
+            deadline: reopenWindow.deadline,
+          });
+        }
       }
       const requirements = machine.requirements(before.state, dto.to);
       // The change window the ticket belongs to, if any: the same record the
@@ -901,7 +925,6 @@ export class TicketsService {
         now,
         windowRow ? await this.conflictsFor(tx, before, windowRow, span) : [],
       );
-      const transitionDef = machine.transition(before.state, dto.to)!;
       const fromEffects = machine.effects(before.state);
       const toEffects = machine.effects(dto.to);
       const assignments: Record<string, unknown> = { state: dto.to };
@@ -916,6 +939,17 @@ export class TicketsService {
           newValue: dto.to,
         },
       ];
+      if (transitionDef.reopen && reopenWindow) {
+        const cause = principal.userId === SYSTEM_ACTOR.id ? 'reply' : 'transition';
+        entries.push({
+          entityKind: 'ticket',
+          entityId: before.id,
+          ticketId: before.id,
+          eventType: 'ticket.reopen_window_decided',
+          field: 'reopen_window',
+          newValue: { ...reopenWindow, reason: reopenSentence(reopenWindow, cause) },
+        });
+      }
       entries.push(...windowNotes.entries);
       const outboxEvents: { type: string; payload: Record<string, unknown> }[] = [
         { type: 'ticket.transitioned', payload: { from: before.state, to: dto.to } },
@@ -1808,6 +1842,123 @@ export class TicketsService {
     const { machine } = await this.config.stateMachine(tx, row.type, row.account_id);
     cache.set(key, machine);
     return machine;
+  }
+
+  /**
+   * What inbound does with a matched ticket: append if it is still open,
+   * reopen inside the window, or spawn a related ticket of the same type
+   * once the window has elapsed. Cancelled stays append-only.
+   */
+  async inboundMatchAction(
+    tx: Tx,
+    ticket: TicketRow,
+    now: Date,
+  ): Promise<
+    | { kind: 'append' }
+    | { kind: 'reopen'; to: string; window: ReopenWindowView }
+    | { kind: 'spawn'; type: TicketRow['type']; oldKey: string; window: ReopenWindowView }
+  > {
+    const machine = await this.machineFor(tx, ticket, new Map());
+    const reopen = machine.available(ticket.state, { kind: 'internal' }).find((transition) => transition.reopen);
+    if (!reopen) return { kind: 'append' };
+    const window = await this.reopenWindow(tx, ticket, machine, now);
+    if (window.allowed) return { kind: 'reopen', to: reopen.to, window };
+    return { kind: 'spawn', type: ticket.type, oldKey: ticketKey(ticket.number), window };
+  }
+
+  /**
+   * Inbound spawn writes the same window decision the reopen path writes, on
+   * the matched ticket, so Activity can name why it was not reopened.
+   */
+  async recordReopenWindowDecision(
+    principal: Principal,
+    ctx: RequestContext,
+    idOrKey: string,
+    window: ReopenWindowView,
+    bound?: Tx,
+  ): Promise<void> {
+    await this.inTx(principal, bound, async (tx) => {
+      const row = await this.load(tx, idOrKey);
+      await this.audit.account(tx, row.account_id, actorOf(principal), { requestId: ctx.requestId }, [
+        {
+          entityKind: 'ticket',
+          entityId: row.id,
+          ticketId: row.id,
+          eventType: 'ticket.reopen_window_decided',
+          field: 'reopen_window',
+          newValue: { ...window, reason: reopenSentence(window) },
+        },
+      ]);
+    });
+  }
+
+  private async listedTransitions(
+    tx: Tx,
+    row: TicketRow,
+    machine: StateMachine,
+    actor: { kind: 'internal' | 'portal' | 'system' },
+    now: Date,
+  ): Promise<{
+    from: string;
+    transitions: { to: string; label: string; requires: string[]; reopen: boolean }[];
+    reopen_window: ReopenWindowView | null;
+  }> {
+    const available = machine.available(row.state, actor);
+    const hasReopen = available.some((transition) => transition.reopen);
+    const reopen_window = hasReopen ? await this.reopenWindow(tx, row, machine, now) : null;
+    return {
+      from: row.state,
+      transitions: available
+        .filter((transition) => !transition.reopen || Boolean(reopen_window?.allowed))
+        .map((transition) => ({
+          to: transition.to,
+          label: transition.label ?? machine.state(transition.to)?.label ?? transition.to,
+          requires: [...(transition.requires ?? [])],
+          reopen: Boolean(transition.reopen),
+        })),
+      reopen_window,
+    };
+  }
+
+  private async reopenWindow(
+    tx: Tx,
+    row: TicketRow,
+    machine: StateMachine,
+    now: Date,
+  ): Promise<ReopenWindowView> {
+    const days = await this.accounts.reopenWindowDays(tx, row.account_id);
+    const calendar = await this.calendars.forAccount(tx, row.account_id);
+    const resolution = resolveWindowDays(days, machine.body.reopen_window_business_days);
+    const reopenCalendar =
+      calendar instanceof BusinessCalendar
+        ? fromBusinessCalendar(calendar)
+        : weekdayCalendar(await this.accountTimeZone(tx, row.account_id));
+    return toWindowView(
+      resolution,
+      mayReopen({
+        windowDays: resolution.days,
+        resolvedAt: row.resolved_at,
+        closedAt: row.closed_at,
+        now,
+        calendar: reopenCalendar,
+      }),
+    );
+  }
+
+  /** Account timezone for weekday fallback; UTC when the portal cannot read op.accounts. */
+  private async accountTimeZone(tx: Tx, accountId: string): Promise<string> {
+    const who = await tx.query<{ usr: string }>('select current_user as usr');
+    if (who.rows[0]?.usr === 'xms_portal') {
+      const row = await tx.query<{ time_zone: string }>(
+        `select time_zone from acct.business_calendars
+          where account_id = $1 and status = 'active'
+          order by created_at
+          limit 1`,
+        [accountId],
+      );
+      return row.rows[0]?.time_zone ?? 'UTC';
+    }
+    return (await this.accounts.byId(tx, accountId)).default_time_zone;
   }
 
   private async resolveContract(tx: Tx, accountId: string, contractId?: string) {

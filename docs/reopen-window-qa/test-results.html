@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AIBL-380 local test results</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 32px; color: #0f172a; background: #f8fafc; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p.meta { color: #475569; margin: 0 0 24px; }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr 1fr; }
+    article { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 18px; }
+    h2 { font-size: 15px; margin: 0 0 8px; }
+    .pass { color: #047857; font-weight: 700; }
+    pre { background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <h1>AIBL-380 Reopen window - local test results</h1>
+  <p class="meta">17 Sep 2026. Backend units, frontend units, and Testcontainers int-spec.</p>
+  <div class="grid">
+    <article>
+      <h2>Backend unit (reopen-related)</h2>
+      <p class="pass">4 files, 52 passed</p>
+      <pre>Test Files  4 passed (4)
+     Tests  52 passed (52)
+  Duration  161ms</pre>
+      <ul>
+        <li>src/domain/tickets/reopen-window.spec.ts</li>
+        <li>src/domain/tickets/state-machine.spec.ts</li>
+        <li>src/domain/calendar/business-calendar.spec.ts</li>
+        <li>src/domain/email/email.spec.ts</li>
+      </ul>
+    </article>
+    <article>
+      <h2>Backend unit (full suite)</h2>
+      <p class="pass">48 files, 394 passed</p>
+      <pre>Test Files  48 passed (48)
+     Tests  394 passed (394)
+  Duration  3.84s</pre>
+    </article>
+    <article>
+      <h2>Frontend unit (reopen-related)</h2>
+      <p class="pass">5 files, 18 passed</p>
+      <pre>Test Files  5 passed (5)
+     Tests  18 passed (18)
+  Duration  1.73s</pre>
+      <ul>
+        <li>lib/tickets/reopen-window.test.ts</li>
+        <li>lib/tickets/transition-errors.test.ts</li>
+        <li>components/admin/account-settings-tab.test.tsx</li>
+        <li>components/portal/request-detail.test.tsx</li>
+        <li>components/tickets/activity-tab.test.tsx</li>
+      </ul>
+    </article>
+    <article>
+      <h2>Frontend unit (full suite)</h2>
+      <p class="pass">178 files, 1297 passed</p>
+      <pre>Test Files  178 passed (178)
+     Tests  1297 passed (1297)
+    Errors  1 teardown (people-list, pre-existing)
+  Duration  16.61s</pre>
+    </article>
+    <article style="grid-column: 1 / -1">
+      <h2>Backend int-spec (admin, tickets, portal, email)</h2>
+      <p class="pass">4 files, 75 passed</p>
+      <pre>Test Files  4 passed (4)
+     Tests  75 passed (75)
+  Duration  14.04s</pre>
+      <ul>
+        <li>lists reopen inside the window, returns 409 past it, and audits a successful reopen</li>
+        <li>offers reopen from Closed while the window is open and hides it once the window has elapsed</li>
+        <li>reopens a resolved ticket matched by plus token inside the window</li>
+        <li>opens a related ticket of the same type once the window has elapsed</li>
+        <li>never reopens a Change, because the type override is zero</li>
+      </ul>
+    </article>
+  </div>
+</body>
+</html>

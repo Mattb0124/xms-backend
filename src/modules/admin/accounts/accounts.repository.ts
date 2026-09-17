@@ -39,6 +39,8 @@ export interface AccountSettingsRow {
   container_time_entries: number | null;
   container_elapsed_days: number | null;
   container_effort_minutes: number | null;
+  /** Working days after resolve during which the ticket may reopen; 0 never. */
+  reopen_window_business_days: number;
   version: number;
 }
 
@@ -75,6 +77,7 @@ export const SETTINGS_EDITABLE = [
   'container_time_entries',
   'container_elapsed_days',
   'container_effort_minutes',
+  'reopen_window_business_days',
 ] as const;
 
 /** A prospective account owner, with what decides whether they may hold it. */
@@ -231,6 +234,20 @@ export class AccountsRepository extends RepositoryBase {
       'select * from acct.account_settings where account_id = $1',
       [accountId],
     );
+  }
+
+  /**
+   * The only settings column the portal role may read. Used by the reopen
+   * window so a client can see Reopen while it is still allowed, without
+   * opening AI, aliases or retention through `select *`.
+   */
+  reopenWindowDays(tx: Tx, accountId: string): Promise<number> {
+    return this.one<{ reopen_window_business_days: number }>(
+      tx,
+      'account_settings',
+      'select reopen_window_business_days from acct.account_settings where account_id = $1',
+      [accountId],
+    ).then((row) => row.reopen_window_business_days);
   }
 
   async updateSettings(

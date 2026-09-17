@@ -17,7 +17,7 @@ import { EICAR } from '../src/modules/attachments/attachments.module.js';
 import { SesWebhookService } from '../src/modules/email/email.module.js';
 import { stringToSign, type SnsMessage } from '../src/modules/email/sns-signature.js';
 import { OutboxDispatcher } from '../src/worker/outbox-dispatcher.js';
-import { closePools, pools, resetDatabase, urls, withSuperuser } from './kit/db.js';
+import { closePools, pools, resetDatabase, urls, withSuperuser, patchTicket } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 import {
   appleMailReply,
@@ -127,11 +127,15 @@ afterAll(async () => {
 
 const api = () => request(app.getHttpServer());
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
-const ingest = (raw: Buffer) =>
+const ingest = (raw: Buffer, receivedAt?: string) =>
   api()
     .post('/v1/dev/email/inbound')
     .set(bearer(adminToken))
-    .send({ raw: raw.toString('base64'), encoding: 'base64' });
+    .send({
+      raw: raw.toString('base64'),
+      encoding: 'base64',
+      ...(receivedAt ? { received_at: receivedAt } : {}),
+    });
 
 describe('inbound', () => {
   let key: string;
@@ -600,5 +604,286 @@ describe('SES webhook', () => {
       client.query(`select count(*)::int as n from sys.security_events where attrs->>'reason' = 'unknown_topic'`),
     );
     expect(unknownTopic.rows[0].n).toBe(1);
+  });
+});
+
+describe('inbound reopen window', () => {
+  const NOTES = 'Renewed the client certificate and revalidated the connection.';
+  const OFFICE = [1, 2, 3, 4, 5].map((weekday) => ({
+    weekday,
+    start_minute: 9 * 60,
+    end_minute: 17 * 60,
+  }));
+  const RESOLVED_MONDAY = '2026-09-14T15:00:00.000Z';
+
+  async function reopenDecision(ticketId: string): Promise<{ reason?: string; allowed?: boolean; days?: number }> {
+    const audit = await withSuperuser((client) =>
+      client.query(
+        `select new_value from acct.audit_events
+          where ticket_id = $1 and event_type = 'ticket.reopen_window_decided'
+          order by created_at desc
+          limit 1`,
+        [ticketId],
+      ),
+    );
+    return (audit.rows[0]?.new_value ?? {}) as { reason?: string; allowed?: boolean; days?: number };
+  }
+
+  async function resolveIncident(shortDescription: string): Promise<{ key: string; id: string; token: string }> {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: shortDescription,
+        requester_email: contactEmail,
+        requester_name: 'Pat Client',
+        impact: 'low',
+        urgency: 'low',
+      })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(adminToken))
+      .send({ version: 1, to: 'in_progress' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(adminToken))
+      .send({
+        version: 2,
+        to: 'resolved',
+        resolution: {
+          code: 'fixed',
+          notes: NOTES,
+          solution_candidate: true,
+          time_exemption_reason: 'administrative_close',
+        },
+      })
+      .expect(201);
+    const token = created.body.id.replace(/-/g, '').replace(/[0189]/g, 'a').slice(0, 12);
+    await patchTicket(created.body.id, 'email_token = $2', [token]);
+    return { key: created.body.key, id: created.body.id, token };
+  }
+
+  it('reopens a resolved ticket matched by plus token inside the window', async () => {
+    const ticket = await resolveIncident('Plus token reopen');
+    const response = await ingest(
+      gmailNewRequest(
+        {
+          from: contactEmail,
+          to: `brk-support+${ticket.token}@mail.xms.local`,
+          subject: 'Still failing',
+        },
+        'It failed again this morning.',
+      ),
+    ).expect(201);
+    expect(response.body).toMatchObject({ disposition: 'appended', ticketKey: ticket.key });
+    const after = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.state).toBe('in_progress');
+    const comments = await api().get(`/v1/tickets/${ticket.key}/comments`).set(bearer(adminToken)).expect(200);
+    expect(comments.body.map((row: { body: string }) => row.body)).toContain('It failed again this morning.');
+    expect(String((await reopenDecision(ticket.id)).reason)).toContain('reply inside reopen window');
+  });
+
+  it('opens a related ticket of the same type once the window has elapsed', async () => {
+    const ticket = await resolveIncident('Elapsed reopen');
+    await patchTicket(ticket.id, `resolved_at = now() - interval '20 days'`);
+    const response = await ingest(
+      gmailNewRequest(
+        { from: contactEmail, to: ALIAS, subject: `Re: [${ticket.key}] Elapsed reopen` },
+        'This is still broken.',
+      ),
+    ).expect(201);
+    expect(response.body.disposition).toBe('created');
+    expect(response.body.ticketKey).not.toBe(ticket.key);
+    const spawned = await api().get(`/v1/tickets/${response.body.ticketKey}`).set(bearer(adminToken)).expect(200);
+    expect(spawned.body.type).toBe('incident');
+    const original = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(original.body.state).toBe('resolved');
+    const links = await api().get(`/v1/tickets/${response.body.ticketKey}/links`).set(bearer(adminToken)).expect(200);
+    expect(links.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'related', ticket: expect.objectContaining({ key: ticket.key }) })]),
+    );
+    const comments = await api()
+      .get(`/v1/tickets/${response.body.ticketKey}/comments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(comments.body[0].body).toContain(`Follow-up to ${ticket.key}.`);
+    expect(comments.body[0].body).toMatch(/reopen window ended on /);
+    expect(await reopenDecision(ticket.id)).toMatchObject({ allowed: false, days: 5 });
+  });
+
+  it('never reopens a Change, because the type override is zero', async () => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'change',
+        short_description: 'Change window zero',
+        requester_email: contactEmail,
+        impact: 'low',
+        urgency: 'low',
+      })
+      .expect(201);
+    await patchTicket(created.body.id, `state = 'completed', resolved_at = now()`);
+    const response = await ingest(
+      gmailNewRequest(
+        { from: contactEmail, to: ALIAS, subject: `Re: [${created.body.key}] Change window zero` },
+        'Please reopen this change.',
+      ),
+    ).expect(201);
+    expect(response.body.disposition).toBe('created');
+    expect(response.body.ticketKey).not.toBe(created.body.key);
+    const spawned = await api().get(`/v1/tickets/${response.body.ticketKey}`).set(bearer(adminToken)).expect(200);
+    expect(spawned.body.type).toBe('change');
+    const comments = await api()
+      .get(`/v1/tickets/${response.body.ticketKey}/comments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(comments.body[0].body).toContain(`Follow-up to ${created.body.key}.`);
+    expect(comments.body[0].body).toContain('The reopen window is set to never.');
+    expect(await reopenDecision(created.body.id)).toMatchObject({ allowed: false, days: 0 });
+  });
+
+  it('appends to a cancelled ticket and does not reopen it', async () => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(adminToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'Cancelled stays cancelled',
+        requester_email: contactEmail,
+        requester_name: 'Pat Client',
+        impact: 'low',
+        urgency: 'low',
+      })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${created.body.key}/transitions`)
+      .set(bearer(adminToken))
+      .send({ version: 1, to: 'cancelled' })
+      .expect(201);
+    const token = created.body.id.replace(/-/g, '').replace(/[0189]/g, 'a').slice(0, 12);
+    await patchTicket(created.body.id, 'email_token = $2', [token]);
+    const response = await ingest(
+      gmailNewRequest(
+        {
+          from: contactEmail,
+          to: `brk-support+${token}@mail.xms.local`,
+          subject: 'Please reopen the cancelled one',
+        },
+        'Can we pick this up again?',
+      ),
+    ).expect(201);
+    expect(response.body).toMatchObject({ disposition: 'appended', ticketKey: created.body.key });
+    const after = await api().get(`/v1/tickets/${created.body.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.state).toBe('cancelled');
+    const comments = await api().get(`/v1/tickets/${created.body.key}/comments`).set(bearer(adminToken)).expect(200);
+    expect(comments.body.map((row: { body: string }) => row.body)).toContain('Can we pick this up again?');
+  });
+
+  it('reopens a plus-token reply on working day 3', async () => {
+    const ticket = await resolveIncident('Day 3 reopen');
+    await patchTicket(ticket.id, `resolved_at = $2`, [RESOLVED_MONDAY]);
+    const response = await ingest(
+      gmailNewRequest(
+        {
+          from: contactEmail,
+          to: `brk-support+${ticket.token}@mail.xms.local`,
+          subject: 'Still failing on day 3',
+        },
+        'Failed again on Thursday.',
+      ),
+      '2026-09-17T12:00:00.000Z',
+    ).expect(201);
+    expect(response.body).toMatchObject({ disposition: 'appended', ticketKey: ticket.key });
+    const after = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.state).toBe('in_progress');
+    expect(String((await reopenDecision(ticket.id)).reason)).toContain('reply inside reopen window');
+  });
+
+  it('spawns a related ticket on calendar day 8', async () => {
+    const ticket = await resolveIncident('Day 8 spawn');
+    await patchTicket(ticket.id, `resolved_at = $2`, [RESOLVED_MONDAY]);
+    const response = await ingest(
+      gmailNewRequest(
+        { from: contactEmail, to: ALIAS, subject: `Re: [${ticket.key}] Day 8 spawn` },
+        'Still broken on Tuesday.',
+      ),
+      '2026-09-22T12:00:00.000Z',
+    ).expect(201);
+    expect(response.body.disposition).toBe('created');
+    expect(response.body.ticketKey).not.toBe(ticket.key);
+    const original = await api().get(`/v1/tickets/${ticket.key}`).set(bearer(adminToken)).expect(200);
+    expect(original.body.state).toBe('resolved');
+    const comments = await api()
+      .get(`/v1/tickets/${response.body.ticketKey}/comments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(comments.body[0].body).toContain(`Follow-up to ${ticket.key}.`);
+    expect(comments.body[0].body).toContain('reopen window ended on 2026-09-21');
+    expect(await reopenDecision(ticket.id)).toMatchObject({ allowed: false, days: 5 });
+  });
+
+  it('reopens on calendar day 8 when a holiday sat inside the window, and spawns the day after', async () => {
+    const library = await api()
+      .post('/v1/holiday-calendars')
+      .set(bearer(adminToken))
+      .send({
+        country: 'gb',
+        name: 'BRK reopen window holidays',
+        holidays: [{ date: '2026-09-16', label: 'Test holiday' }],
+      })
+      .expect(201);
+    await api()
+      .post(`/v1/accounts/${accountId}/calendars`)
+      .set(bearer(adminToken))
+      .send({
+        name: 'BRK office hours',
+        time_zone: 'Europe/London',
+        holiday_calendar_id: library.body.id,
+        hours: OFFICE,
+      })
+      .expect(201);
+
+    const inside = await resolveIncident('Holiday day 8 reopen');
+    await patchTicket(inside.id, `resolved_at = $2`, [RESOLVED_MONDAY]);
+    const reopened = await ingest(
+      gmailNewRequest(
+        {
+          from: contactEmail,
+          to: `brk-support+${inside.token}@mail.xms.local`,
+          subject: 'Holiday window still open',
+        },
+        'Checking after the holiday.',
+      ),
+      '2026-09-22T12:00:00.000Z',
+    ).expect(201);
+    expect(reopened.body).toMatchObject({ disposition: 'appended', ticketKey: inside.key });
+    const after = await api().get(`/v1/tickets/${inside.key}`).set(bearer(adminToken)).expect(200);
+    expect(after.body.state).toBe('in_progress');
+    expect(String((await reopenDecision(inside.id)).reason)).toContain('reply inside reopen window');
+
+    const elapsed = await resolveIncident('Holiday day 9 spawn');
+    await patchTicket(elapsed.id, `resolved_at = $2`, [RESOLVED_MONDAY]);
+    const spawned = await ingest(
+      gmailNewRequest(
+        { from: contactEmail, to: ALIAS, subject: `Re: [${elapsed.key}] Holiday day 9 spawn` },
+        'Now the holiday window has ended.',
+      ),
+      '2026-09-23T12:00:00.000Z',
+    ).expect(201);
+    expect(spawned.body.disposition).toBe('created');
+    expect(spawned.body.ticketKey).not.toBe(elapsed.key);
+    const comments = await api()
+      .get(`/v1/tickets/${spawned.body.ticketKey}/comments`)
+      .set(bearer(adminToken))
+      .expect(200);
+    expect(comments.body[0].body).toContain(`Follow-up to ${elapsed.key}.`);
+    expect(comments.body[0].body).toContain('reopen window ended on 2026-09-22');
   });
 });

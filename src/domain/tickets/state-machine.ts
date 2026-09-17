@@ -58,6 +58,11 @@ export interface StateMachineBody {
   readonly initial: string;
   readonly states: readonly StateDefinition[];
   readonly transitions: readonly TransitionDefinition[];
+  /**
+   * When set, this type uses this many working days instead of the account
+   * setting. Zero never reopens. Omitted means the account setting applies.
+   */
+  readonly reopen_window_business_days?: number;
 }
 
 export interface TransitionActor {
@@ -144,10 +149,19 @@ export function validateMachine(body: StateMachineBody): string[] {
     if (seen.has(pair)) problems.push(`duplicate transition ${pair}`);
     seen.add(pair);
   }
+  if (body.reopen_window_business_days !== undefined) {
+    const days = body.reopen_window_business_days;
+    if (!Number.isInteger(days) || days < 0 || days > 365) {
+      problems.push('reopen_window_business_days must be an integer from 0 to 365');
+    }
+  }
   const terminal = body.states.filter((state) => state.kind === 'terminal').map((state) => state.key);
   if (terminal.length === 0) problems.push('no terminal state');
   for (const state of body.states) {
-    if (state.kind === 'terminal' && transitions.some((transition) => transition.from === state.key)) {
+    if (
+      state.kind === 'terminal' &&
+      transitions.some((transition) => transition.from === state.key && transition.reopen !== true)
+    ) {
       problems.push(`terminal state ${state.key} has outgoing transitions`);
     }
     if (

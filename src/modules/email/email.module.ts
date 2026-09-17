@@ -14,7 +14,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsEmail, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsEmail, IsIn, IsISO8601, IsOptional, IsString, MaxLength } from 'class-validator';
 import { CurrentPrincipal, RequestCtx, RequirePermission, type RequestContext } from '../../common/auth/decorators.js';
 import type { Principal } from '../../common/auth/principal.js';
 import { Public } from '../../common/auth/public.decorator.js';
@@ -54,6 +54,14 @@ class IngestDto {
   @IsOptional()
   @IsIn(['utf8', 'base64'])
   encoding?: 'utf8' | 'base64';
+
+  /**
+   * Local and test clock for the reopen window. Production refuses this
+   * route entirely; SES never sends this field.
+   */
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  received_at?: string;
 }
 
 @ApiTags('email')
@@ -139,7 +147,7 @@ export class EmailController {
     if (loadEnv().NODE_ENV === 'production') throw new ForbiddenException({ code: 'not_in_production' });
     const raw = Buffer.from(dto.raw, dto.encoding === 'base64' ? 'base64' : 'utf8');
     if (raw.length > 25 * 1024 * 1024) throw new BadRequestException({ code: 'too_large' });
-    return this.email.processInbound(raw);
+    return this.email.processInbound(raw, dto.received_at ? new Date(dto.received_at) : new Date());
   }
 }
 

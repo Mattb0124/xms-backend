@@ -80,11 +80,12 @@ describe('bootstrap', () => {
     const defaults = await withSuperuser((client) =>
       client.query(`select kind, scope_key from op.config_defaults where status = 'active' order by 1, 2`),
     );
-    // Five state machines, one per ticket type, plus the seven single-scope
-    // catalogs. `close_discipline` is the seventh (TB-02), naming the bar for
-    // the resolution notes and the exemption reasons an account accepts.
-    expect(defaults.rows).toHaveLength(12);
+    // Five state machines, one per ticket type, plus the eight single-scope
+    // catalogs. `close_discipline` is the seventh (TB-02); `mcp` is the
+    // eighth (ADR-19).
+    expect(defaults.rows).toHaveLength(13);
     expect(defaults.rows.map((row) => `${row.kind}:${row.scope_key}`)).toContain('close_discipline:*');
+    expect(defaults.rows.map((row) => `${row.kind}:${row.scope_key}`)).toContain('mcp:*');
     const event = await withSuperuser((client) =>
       client.query(`select actor_id from sys.security_events where event_type = 'auth.bootstrap.completed'`),
     );
@@ -146,7 +147,12 @@ describe('accounts', () => {
 
   it('reads and edits the settings, requiring ai:configure for the AI switch and writing the switch event', async () => {
     const before = await api().get(`/v1/admin/accounts/${accountId}/settings`).set(asAdmin()).expect(200);
-    expect(before.body).toMatchObject({ ai_enabled: false, portal_enabled: false, version: 1 });
+    expect(before.body).toMatchObject({
+      ai_enabled: false,
+      portal_enabled: false,
+      reopen_window_business_days: 5,
+      version: 1,
+    });
     const after = await api()
       .put(`/v1/admin/accounts/${accountId}/settings`)
       .set(asAdmin())
@@ -175,6 +181,32 @@ describe('accounts', () => {
       { field: 'ai_enabled', old_value: false, new_value: true },
       { field: 'portal_enabled', old_value: false, new_value: true },
     ]);
+  });
+
+  it('round-trips the reopen window and audits a change to never', async () => {
+    const before = await api().get(`/v1/admin/accounts/${accountId}/settings`).set(asAdmin()).expect(200);
+    expect(before.body.reopen_window_business_days).toBe(5);
+    const after = await api()
+      .put(`/v1/admin/accounts/${accountId}/settings`)
+      .set(asAdmin())
+      .send({ version: before.body.version, reopen_window_business_days: 0 })
+      .expect(200);
+    expect(after.body.reopen_window_business_days).toBe(0);
+    const audit = await withSuperuser((client) =>
+      client.query(
+        `select field, old_value, new_value from acct.audit_events
+         where account_id = $1 and event_type = 'admin.account.settings_changed'
+           and field = 'reopen_window_business_days'`,
+        [accountId],
+      ),
+    );
+    expect(audit.rows).toEqual([{ field: 'reopen_window_business_days', old_value: 5, new_value: 0 }]);
+    const refused = await api()
+      .put(`/v1/admin/accounts/${accountId}/settings`)
+      .set(asAdmin())
+      .send({ version: after.body.version, reopen_window_business_days: 366 })
+      .expect(400);
+    expect(JSON.stringify(refused.body)).toContain('reopen_window_business_days');
   });
 
   it('returns 409 stale_version on a concurrent settings edit', async () => {

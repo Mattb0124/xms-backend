@@ -8,7 +8,7 @@ import { resetEnvForTests } from '../src/config/env.js';
 import { DbPools } from '../src/db/pool.js';
 import { UsageEventsService } from '../src/modules/telemetry/telemetry.module.js';
 import { OutboxDispatcher } from '../src/worker/outbox-dispatcher.js';
-import { closePools, pools, resetDatabase, urls, withSuperuser } from './kit/db.js';
+import { closePools, pools, resetDatabase, urls, withSuperuser, patchTicket } from './kit/db.js';
 import { DEV_SECRET, devToken } from './kit/auth.js';
 
 /**
@@ -930,5 +930,98 @@ describe('the gate under configuration it did not expect', () => {
         client.query(`update op.config_defaults set status = 'active' where kind = 'close_discipline'`),
       );
     }
+  });
+});
+
+describe('the reopen window', () => {
+  const NOTES = 'Restarted the data management service and revalidated the load.';
+
+  it('lists reopen inside the window, returns 409 past it, and audits a successful reopen', async () => {
+    const created = await api()
+      .post('/v1/tickets')
+      .set(bearer(consultantToken))
+      .send({
+        account_id: accountId,
+        type: 'incident',
+        short_description: 'Reopen window',
+        impact: 'low',
+        urgency: 'low',
+      })
+      .expect(201);
+    const key = created.body.key;
+    await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: 1, to: 'in_progress' })
+      .expect(201);
+    await api()
+      .post(`/v1/tickets/${key}/time`)
+      .set(bearer(consultantToken))
+      .send({ performed_on: new Date().toISOString().slice(0, 10), minutes: 30, activity_type: 'analysis' })
+      .expect(201);
+    const resolved = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({
+        version: 2,
+        to: 'resolved',
+        resolution: { code: 'fixed', notes: NOTES, solution_candidate: true },
+      })
+      .expect(201);
+    const inside = await api().get(`/v1/tickets/${key}/transitions`).set(bearer(consultantToken)).expect(200);
+    expect(inside.body.transitions.map((transition: { to: string }) => transition.to)).toEqual([
+      'closed',
+      'in_progress',
+    ]);
+    expect(inside.body.reopen_window).toMatchObject({ allowed: true, days: 5, source: 'account' });
+
+    await patchTicket(created.body.id, `resolved_at = now() - interval '20 days'`);
+    const elapsed = await api().get(`/v1/tickets/${key}/transitions`).set(bearer(consultantToken)).expect(200);
+    expect(elapsed.body.transitions.map((transition: { to: string }) => transition.to)).toEqual(['closed']);
+    expect(elapsed.body.reopen_window.allowed).toBe(false);
+    const refused = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: resolved.body.version, to: 'in_progress' })
+      .expect(409);
+    expect(refused.body).toMatchObject({
+      code: 'reopen_window_elapsed',
+      days: 5,
+      source: 'account',
+    });
+    expect(refused.body.deadline).toEqual(expect.any(String));
+
+    await patchTicket(created.body.id, `resolved_at = now() - interval '1 day'`);
+    const reopened = await api()
+      .post(`/v1/tickets/${key}/transitions`)
+      .set(bearer(consultantToken))
+      .send({ version: resolved.body.version, to: 'in_progress' })
+      .expect(201);
+    expect(reopened.body.state).toBe('in_progress');
+    const audit = await withSuperuser((client) =>
+      client.query(
+        `select event_type, field, new_value from acct.audit_events
+          where ticket_id = $1 and event_type in ('ticket.transition', 'ticket.reopen_window_decided')
+          order by created_at desc, event_type
+          limit 2`,
+        [created.body.id],
+      ),
+    );
+    expect(audit.rows).toEqual(
+      expect.arrayContaining([
+        { event_type: 'ticket.transition', field: 'state', new_value: 'in_progress' },
+        expect.objectContaining({
+          event_type: 'ticket.reopen_window_decided',
+          field: 'reopen_window',
+        }),
+      ]),
+    );
+    const decided = audit.rows.find((row: { event_type: string }) => row.event_type === 'ticket.reopen_window_decided');
+    expect(decided?.new_value).toMatchObject({ allowed: true, days: 5, source: 'account' });
+    expect(String((decided?.new_value as { reason?: string }).reason)).toBe(
+      'Reopened inside the 5 working-day window (deadline ' +
+        String((decided?.new_value as { deadline?: string }).deadline) +
+        ').',
+    );
   });
 });

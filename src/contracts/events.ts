@@ -108,6 +108,7 @@ export const AUDIT_EVENT_TYPES = [
   'ticket.scope_flagged',
   'ticket.scope_withdrawn',
   'ticket.scope_decided',
+  'ticket.reopen_window_decided',
   // Resolved with nothing logged against it, under one of the account's
   // exemption reasons (TB-02). Its own type because it is the row a
   // reconciler looks for, not a field of a general update.

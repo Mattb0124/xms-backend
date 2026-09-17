@@ -43,17 +43,37 @@ describe('default state machines', () => {
         'awaiting_third_party>in_progress',
         'resolved>closed',
         'resolved>in_progress',
+        'closed>in_progress',
       ].sort(),
     );
+  });
+
+  it('lets Closed reopen on every type and keeps Cancelled locked', () => {
+    for (const type of TYPES) {
+      const machine = new StateMachine(machines[type]);
+      const fromClosed = machine.body.transitions.filter((transition) => transition.from === 'closed');
+      expect(fromClosed, type).toHaveLength(1);
+      expect(fromClosed[0]?.reopen, type).toBe(true);
+      expect(
+        machine.body.transitions.filter((transition) => transition.from === 'cancelled'),
+        type,
+      ).toEqual([]);
+    }
+  });
+
+  it('overrides the Change reopen window to never', () => {
+    expect(machines.change.reopen_window_business_days).toBe(0);
+    expect(machines.incident.reopen_window_business_days).toBeUndefined();
   });
 
   it('forbids transitions that are not listed', () => {
     const machine = new StateMachine(machines.incident);
     const internal = { kind: 'internal' as const };
     expect(machine.canTransition('new', 'resolved', internal)).toBe(false);
-    expect(machine.canTransition('closed', 'in_progress', internal)).toBe(false);
+    expect(machine.canTransition('closed', 'cancelled', internal)).toBe(false);
     expect(machine.canTransition('cancelled', 'new', internal)).toBe(false);
     expect(machine.canTransition('awaiting_client', 'resolved', internal)).toBe(false);
+    expect(machine.canTransition('closed', 'in_progress', internal)).toBe(true);
   });
 
   it('lets a portal user only cancel or confirm closure or reopen', () => {
@@ -62,6 +82,7 @@ describe('default state machines', () => {
     expect(machine.canTransition('new', 'cancelled', portal)).toBe(true);
     expect(machine.canTransition('resolved', 'closed', portal)).toBe(true);
     expect(machine.canTransition('resolved', 'in_progress', portal)).toBe(true);
+    expect(machine.canTransition('closed', 'in_progress', portal)).toBe(true);
     expect(machine.canTransition('new', 'in_progress', portal)).toBe(false);
     expect(machine.canTransition('in_progress', 'resolved', portal)).toBe(false);
     expect(machine.available('in_progress', portal).map((transition) => transition.to)).toEqual(['cancelled']);
@@ -123,9 +144,22 @@ describe('validateMachine', () => {
     expect(() => new StateMachine(body)).toThrow(/limbo/);
   });
 
-  it('rejects outgoing transitions from a terminal state', () => {
+  it('rejects outgoing transitions from a terminal state unless they reopen', () => {
     const body: StateMachineBody = { ...base, transitions: [...base.transitions, { from: 'closed', to: 'new' }] };
     expect(validateMachine(body)).toContain('terminal state closed has outgoing transitions');
+  });
+
+  it('accepts a reopen-flagged exit from Closed and a zero window override', () => {
+    expect(validateMachine({ ...base, reopen_window_business_days: 0 })).toEqual([]);
+    expect(validateMachine({ ...base, reopen_window_business_days: -1 })).toContain(
+      'reopen_window_business_days must be an integer from 0 to 365',
+    );
+    expect(validateMachine({ ...base, reopen_window_business_days: 366 })).toContain(
+      'reopen_window_business_days must be an integer from 0 to 365',
+    );
+    expect(validateMachine({ ...base, reopen_window_business_days: 1.5 })).toContain(
+      'reopen_window_business_days must be an integer from 0 to 365',
+    );
   });
 
   it('rejects a paused state entered without a pause reason', () => {

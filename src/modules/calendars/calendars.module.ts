@@ -167,12 +167,25 @@ export class CalendarsRepository extends RepositoryBase {
     await tx.query('update op.accounts set default_calendar_id = $2 where id = $1', [accountId, calendarId]);
   }
 
-  accountDefault(tx: Tx, accountId: string): Promise<string | null> {
-    return this.maybeOne<{ default_calendar_id: string | null }>(
+  async accountDefault(tx: Tx, accountId: string): Promise<string | null> {
+    const who = await tx.query<{ usr: string }>('select current_user as usr');
+    if (who.rows[0]?.usr !== 'xms_portal') {
+      const row = await this.maybeOne<{ default_calendar_id: string | null }>(
+        tx,
+        'select default_calendar_id from op.accounts where id = $1',
+        [accountId],
+      );
+      if (row?.default_calendar_id) return row.default_calendar_id;
+    }
+    const fallback = await this.maybeOne<{ id: string }>(
       tx,
-      'select default_calendar_id from op.accounts where id = $1',
+      `select id from acct.business_calendars
+        where account_id = $1 and status = 'active'
+        order by created_at
+        limit 1`,
       [accountId],
-    ).then((row) => row?.default_calendar_id ?? null);
+    );
+    return fallback?.id ?? null;
   }
 }
 
@@ -259,9 +272,7 @@ export class CalendarService {
     try {
       const row = await this.repo.byId(tx, calendarId);
       const hours = await this.repo.hours(tx, calendarId);
-      const holidays = row.holiday_calendar_id
-        ? (await this.repo.holidays(tx, row.holiday_calendar_id)).map((h) => h.date)
-        : [];
+      const holidays = row.holiday_calendar_id ? await this.holidayDates(tx, row.holiday_calendar_id) : [];
       calendar = new BusinessCalendar({
         id: row.id,
         timeZone: row.time_zone,
@@ -273,6 +284,13 @@ export class CalendarService {
     }
     this.cache.set(calendarId, { at: Date.now(), calendar });
     return calendar;
+  }
+
+  /** Holiday dates for a library; empty when the caller cannot read op.holidays. */
+  private async holidayDates(tx: Tx, holidayCalendarId: string): Promise<string[]> {
+    const who = await tx.query<{ usr: string }>('select current_user as usr');
+    if (who.rows[0]?.usr === 'xms_portal') return [];
+    return (await this.repo.holidays(tx, holidayCalendarId)).map((holiday) => holiday.date);
   }
 
   /** The account's default calendar, or the wall clock. */

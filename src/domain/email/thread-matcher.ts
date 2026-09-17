@@ -16,7 +16,7 @@ export interface ThreadHeaders {
 export interface ThreadLookup {
   byPlusToken(token: string): Promise<string | undefined>;
   byMessageId(messageId: string): Promise<string | undefined>;
-  byTicketKey(key: string): Promise<{ ticketId: string; closedTooLong: boolean } | undefined>;
+  byTicketKey(key: string): Promise<string | undefined>;
 }
 
 export type MatchedBy = 'plus_token' | 'in_reply_to' | 'references' | 'subject_key';
@@ -68,8 +68,8 @@ export async function matchThread(headers: ThreadHeaders, lookup: ThreadLookup):
   }
   const key = subjectKeyOf(headers.subject);
   if (key) {
-    const found = await lookup.byTicketKey(key);
-    if (found && !found.closedTooLong) return { ticketId: found.ticketId, matchedBy: 'subject_key' };
+    const ticketId = await lookup.byTicketKey(key);
+    if (ticketId) return { ticketId, matchedBy: 'subject_key' };
   }
   return undefined;
 }
